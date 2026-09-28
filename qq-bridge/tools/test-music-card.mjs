@@ -19,7 +19,7 @@ import {
   sendMusicCardWithFallback
 } from '../src/core/media.js';
 
-// 现场线上真实发过的三个 id（来源：D:\MoonBot\resources\runtime\qq-bridge\state\tool-calls.jsonl
+// 现场线上真实发过的三个 id（来源：D:\Kizuna\resources\runtime\qq-bridge\state\tool-calls.jsonl
 // 今天 11:53 / 11:58 / 12:00 三次 qq_send_rich，模型只传了 {type:music, musicType:163, musicId}）
 const LIVE_IDS = ['1893321422', '3381504830', '3386967464'];
 const SIGN_URL = 'https://ss.xingzhige.com/music_card/card';   // NapCat musicSignUrl 为空时的默认签名服务

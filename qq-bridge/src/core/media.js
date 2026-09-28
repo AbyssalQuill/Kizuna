@@ -209,7 +209,14 @@ export async function neteaseShareLink(id, fallbackUct2 = '') {
     if (cand && /[?&]uct2=/.test(cand)) fromPage = cand;
     else if (tok) fromPage = neteaseShareUrl(sid, decodeURIComponent(tok[1]));
   } catch { /* 页面拿不到 → 静态兜底 */ }
-  if (!fromPage) return neteaseShareUrl(sid, fallbackUct2);
+  /* 2026-09-26 状态记录：卡片点开有没有「将要访问」中转页，就绑在这一串上 ——
+   * 带 uct2 的"页面现取串"与真机分享逐字段同形，QQ 不盖安全页；取不到页面退回静态拼串就会盖。
+   * 所以这里留一行日志：以后出现"又开始过中转页了"，先看这行是"页面现取"还是"静态兜底"。 */
+  if (fromPage) log(`[music-card] 网易云 jumpUrl 页面现取（带 uct2，点开不过中转页）：id=${sid}`);
+  if (!fromPage) {
+    log(`[music-card] 网易云 jumpUrl 页面取不到，退回静态拼串（点开会过 QQ 中转页）：id=${sid}`);
+    return neteaseShareUrl(sid, fallbackUct2);
+  }
   neteaseShareLinkCache.set(sid, { url: fromPage, at: Date.now() });
   return fromPage;
 }
@@ -273,7 +280,7 @@ export function neteaseRealCover(id) {
  * 做成独立导出（发送器由调用方注入）是为了能离线单测这把梯子 —— 见 tools/test-music-card.mjs。
  * 返回 { ok, card: 'primary'|'native'|'link', seg, messageId, degradedFrom? }。
  */
-export async function sendMusicCardWithFallback({ key, plan = null, seg = null, options = {}, sendRichFn, sendText }) {
+export async function sendMusicCardWithFallback({ key, plan = null, seg = null, options = {}, sendRichFn, sendText, only = false }) {
   const sendLink = async () => {
     const sent = await sendText(plan.link);
     return {
@@ -284,10 +291,21 @@ export async function sendMusicCardWithFallback({ key, plan = null, seg = null, 
     };
   };
   if (seg) {
+    /* 2026-09-26 新增 `only`（"只发真卡"模式，来自 `social.send.musicCardOnly`）：
+     * 主人私聊定案 —— 音乐分享只认真卡（签名服务签出来的 tuwen/news 图文卡，与真机分享同版式）。
+     *   · 不发 native（NapCat 原生 id 卡）—— 那不是真卡版式，主人认为等于"没发出来"；
+     *   · 不发纯链接文本 —— 同理；
+     *   · 另挡一手：buildMusicCard 内部也会在"解析不到封面"时把 primary 换成原生 id 卡，
+     *     那种卡没有 `data.image`；真卡的字段里一定有封面（手机端要画的就是它）→ 没封面就当没卡片。
+     * 失败时抛错，由调用方回执给模型（而不是悄悄降级成一条链接）。 */
+    if (only && !String(seg?.data?.image ?? '').trim()) {
+      throw new Error('只发真卡模式：卡片没有封面（原生 id 卡或空卡），按"没发出来"处理');
+    }
     try {
       const sent = await sendRichFn(key, seg, options);
       return { ok: true, card: 'primary', seg, messageId: sent?.messageId ?? null };
     } catch (primaryError) {
+      if (only) throw primaryError;
       // ① 退回 NapCat 原生 id 卡片（老行为）
       if (plan?.native) {
         try {
@@ -303,7 +321,8 @@ export async function sendMusicCardWithFallback({ key, plan = null, seg = null, 
       throw primaryError;
     }
   }
-  // 压根没有卡片段（例如 custom 卡片字段不全）：直接发链接
+  // 压根没有卡片段（例如 custom 卡片字段不全）：只发真卡模式下不发链接，直接报错
+  if (only) throw new Error('只发真卡模式：没有生成卡片段，不发链接兜底');
   if (plan?.link && typeof sendText === 'function') return sendLink();
   throw new Error('没有可发送的卡片段或兜底链接');
 }
@@ -665,6 +684,53 @@ export function createMediaDomain(cfg) {
     }
   }
 
+  /**
+   * 2026-09-26 新增：按 songmid 取**权威**歌曲信息（歌名 / 歌手 / albummid），来源是 QQ 官方接口。
+   *
+   * 为什么必须有这个：QQ 音乐这条链路上，聚合站（secapi.top）是**按歌名搜**的，返回的"最佳匹配"
+   * 经常是同一首歌的**另一个版本**。现场（主人私聊，2026-09-26）：
+   *   要的是 `songmid=0004jPDk2eB2dt`（起风了 / 买辣椒也用券），卡片却链到了周深那一版，
+   *   歌手、封面全对不上 —— 主人原话「第二张是真卡但是你写错了」「封面都没对上」。
+   *   根因是旧代码在聚合站没按 songmid 命中时，退到"歌名归一化相等 / 歌名互相包含"匹配，
+   *   然后拿那条记录的 title/singer/cover/link **覆盖**了调用方要的那首歌的字段。
+   *
+   * 现在改成分工：**"这首歌是谁"只认官方接口按 songmid 的回答**（本函数），
+   * 聚合站只用来补"能不能直接播"（而且必须 link 里带同一个 songmid 才采信，见 qqMusicResolve）。
+   *
+   * 实测（本机与线上服务器都通，200，0.23–0.54s）：
+   *   POST https://u.y.qq.com/cgi-bin/musicu.fcg
+   *     {comm:{ct:24,cv:0}, req_1:{module:'music.pf_song_detail_svr',method:'get_song_detail',param:{song_mid}}}
+   *   → data.track_info.{name, singer[].name, album.mid}
+   *   0004jPDk2eB2dt → 起风了 / 买辣椒也用券 / 003j3NMw1ZBpsv   （与被请求的那首歌一致）
+   *   0039MnYb0qxYhV → 晴天   / 周杰伦       / 000MkMni19ClKG
+   */
+  async function qqSongDetailByMid(songmid) {
+    const mid = String(songmid ?? '').trim();
+    if (!mid) return null;
+    try {
+      const res = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+        method: 'POST',
+        headers: { ...COVER_HEADERS, 'content-type': 'application/json' },
+        body: JSON.stringify({ comm: { ct: 24, cv: 0 }, req_1: { module: 'music.pf_song_detail_svr', method: 'get_song_detail', param: { song_mid: mid } } }),
+        signal: AbortSignal.timeout(8000)
+      });
+      const body = await res.json().catch(() => null);
+      const track = body?.req_1?.data?.track_info;
+      if (!track) {
+        log(`[qqmusic] 官方接口没给出这首歌的信息（songmid=${mid}），只能退回调用方给的歌名/歌手`);
+        return null;
+      }
+      const title = String(track?.name ?? '').trim();
+      const artist = (track?.singer ?? []).map((s) => String(s?.name ?? '').trim()).filter(Boolean).join('/');
+      const albumMid = String(track?.album?.mid ?? '').trim();
+      log(`[qqmusic] 官方接口锚定 songmid=${mid} → ${title}${artist ? ' / ' + artist : ''}${albumMid ? '（albummid=' + albumMid + '）' : '（无 albummid）'}`);
+      return { title, artist, albumMid };
+    } catch (error) {
+      log(`[qqmusic] 官方接口取歌曲信息失败（songmid=${mid}）：${error?.message ?? error}`);
+      return null;
+    }
+  }
+
   /** 外部图 → QQ 图床 URL（失败就原样返回，绝不让卡片因此发不出去）。
    *  2026-09-24 实测记录：把封面先发到 QQ 图床再进卡里，签名服务会把图**转存成**
    *  `https://qq.ugcimg.cn/v1/<超长串>` —— 正是历史上"手机端不显示封面"的那个形态，
@@ -854,9 +920,19 @@ export function createMediaDomain(cfg) {
       url: fallbackUrl,
       via: ''
     };
+    /* 2026-09-26：先按 songmid 向 QQ 官方接口要"这首歌是谁"，它才是卡片字段的唯一来源。 */
+    const detail = await qqSongDetailByMid(mid);
+    if (detail) {
+      if (detail.title) out.title = detail.title;
+      if (detail.artist) out.artist = detail.artist;
+      if (detail.albumMid && detail.albumMid !== mid) {
+        out.cover = normalizeCoverUrl(`https://y.gtimg.cn/music/photo_new/T002R300x300M000${detail.albumMid}.jpg`);
+      }
+      out.via = 'official';
+    }
     const q = [givenTitle, givenArtist].filter(Boolean).join(' ').trim();
     if (!q) {
-      log('[qqmusic] 没有歌名/歌手，无法解析可播放直链（模型应先调 qq_music_search 拿到 title/artist）');
+      log(`[qqmusic] 调用方没给歌名/歌手，跳过"可播放直链"这一步（卡片照旧按 songmid 锚定的信息发；songmid=${mid}）`);
       return out;
     }
     /* 关键词要先只用歌名：实测 `msg=晴天 周杰伦` 会被服务端回 404「歌曲信息获取失败」，
@@ -865,7 +941,6 @@ export function createMediaDomain(cfg) {
     const headers = { 'user-agent': 'Mozilla/5.0' };
     const secapiKey = String(cfg?.social?.secapiKey ?? process.env.QQBRIDGE_SECAPI_KEY ?? '').trim();
     if (secapiKey) headers.authorization = `Bearer ${secapiKey}`;
-    const norm = (s) => String(s ?? '').toLowerCase().replace(/[\s（）()【】\[\]·\-—_·,，.。!！?？]/g, '');
     for (const query of queries) {
       let pick = null;
       // 这个聚合接口偶发返回 404「歌曲信息获取失败」（同一句话隔几秒再问就正常），所以重试一次。
@@ -877,16 +952,13 @@ export function createMediaDomain(cfg) {
           // 接口可能返回单个对象，也可能返回数组 —— 两种形状都吃
           const raw = Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data : (body ? [body] : []));
           const ok = raw.filter((s) => Number(s?.code ?? 200) === 200 && s?.music_url);
-          // ① 按 songmid 精确回检（最可靠）② 歌名归一化后相等 ③ 歌名互相包含且歌手对得上
+          // ①②…… 2026-09-26 起只剩一档：按 songmid 精确回检（见下方注释）
           pick = ok.find((s) => String(s?.link ?? '').includes(mid))
-            || ok.find((s) => norm(s?.title) === norm(givenTitle))
-            || ok.find((s) => {
-              const t = norm(s?.title); const g = norm(givenTitle);
-              if (!t || !g || !(t.includes(g) || g.includes(t))) return false;
-              if (!givenArtist) return true;
-              const a1 = norm(s?.singer); const a2 = norm(givenArtist);
-              return a1.includes(a2) || a2.includes(a1);
-            });
+            /* 2026-09-26：只认 `link` 里带同一个 songmid 的记录。
+             * 以前这里还有"歌名归一化相等 / 歌名互相包含且歌手对得上"两档模糊匹配，
+             * 那正是"卡片链到周深那一版"的来源（聚合站按歌名搜，命中同歌异版是常态）。
+             * 配错歌的直链比没有直链糟得多 —— 默认 `share` 版式本来也不需要 audio。 */
+            || null;
           if (!pick) log(`[qqmusic] 查询「${query}」返回 ${raw.length} 条，没有一条对得上 mid=${mid}/${givenTitle}`);
         } catch (error) {
           log(`[qqmusic] secapi 请求失败（query=${query}）：${error?.message ?? error}`);
@@ -894,29 +966,31 @@ export function createMediaDomain(cfg) {
         if (!pick && attempt === 0) await sleep(1200);
       }
       if (pick) {
-        out.title = String(pick.title || givenTitle);
-        out.artist = String(pick.singer || givenArtist);
-        /* 2026-09-19 修「QQ音乐卡又不带封面」：调用方传了封面就别用聚合站返回的那个顶掉它。
-         * 需求定的硬规则是"封面以传入的 image 为准"（实测传了才有封面），但这里原来无条件用
-         * `pick.cover` 覆盖，而聚合站给的是 `y.gtimg.cn/music/photo_new/T002R300x300M000<albummid>.jpg`
-         * —— 这个模板实测会 404（同一模板的 URL 取不到图），一旦它替换掉调用方那张好图，
-         * 卡片的 preview 就指向一张不存在的图 → 没封面。
-         * 所以：只有调用方没给封面时，才用聚合站的那张。 */
-        if (!out.cover) out.cover = normalizeCoverUrl(pick.cover) || out.cover;
-        out.url = String(pick.link || fallbackUrl);
-        out.audio = normalizeMediaUrl(pick.music_url);
-        out.via = `secapi/${String(pick.quality || '').trim()}`;
+        /* 2026-09-26 关键修正：这里**不再**用聚合站的记录覆盖 title/artist/url/cover。
+         *
+         * 现场（主人私聊 2026-09-26 05:28-05:31）：「第二张是真卡但是你写错了」「封面都没对上」
+         * ——要的是 `songmid=0004jPDk2eB2dt`（起风了 / 买辣椒也用券），卡片却写成了周深那一版。
+         * 原因是聚合站按**歌名**搜，命中"同歌异版"是常态，旧代码在没按 songmid 命中时退到
+         * 歌名相等/互相包含匹配，然后拿那条记录的四个字段把要发的歌**整条顶掉**。
+         *
+         * 现在的分工：
+         *   · "这首歌是谁"（歌名/歌手/封面）→ 只认官方接口按 songmid 的回答（qqSongDetailByMid）；
+         *   · 聚合站只用来补"能不能直接播"（audio），而且**必须 link 里带同一个 songmid** 才采信。
+         * 于是：`share` 版式（默认、真卡版式）不再依赖聚合站是否靠谱，配错歌这条路被堵死。 */
+        if (!out.audio) out.audio = normalizeMediaUrl(pick.music_url);
+        if (out.via && !out.via.includes('secapi')) out.via += `+secapi/${String(pick.quality || '').trim()}`;
+        else if (!out.via) out.via = `secapi/${String(pick.quality || '').trim()}`;
         return out;
       }
     }
-    log(`[qqmusic] 试了 ${queries.length} 个关键词都解析不到可播放直链（id=${mid}），退回官方分享链接`);
+    log(`[qqmusic] 试了 ${queries.length} 个关键词都没拿到"与 songmid 对得上"的可播放直链（id=${mid}），卡片照发（不带 audio）`);
     return out;
   }
 
   /**
    * 音乐卡片：桥内拼好，模型只给 musicType + musicId（不许模型手写卡片 JSON / 封面 URL）。
    *
-   * 现场故障与实测结论（2026-09-16，D:\MoonBot 线上日志 + 真机请求）：
+   * 现场故障与实测结论（2026-09-16，D:\Kizuna 线上日志 + 真机请求）：
    *   · 线上模型三次都只传 {type:music, musicType:163, musicId:<id>}，桥发的是 NapCat 原生 music 段
    *     {type:'163', id}；NapCat 把这段 POST 给 musicSignUrl（线上为默认的 ss.xingzhige.com）换取整张卡片。
    *   · 带 id 时签名服务自己解析封面，给的是未缩尺寸的原图（实测其中一张 4.4MB，content-type
@@ -948,6 +1022,30 @@ export function createMediaDomain(cfg) {
      *   结论：**绕不过去**。既然 music 版式既不省中转页、又丢掉手机端封面，
      *   默认回到 `share`（与真机分享卡同版式、有封面、点开行为也"和真卡一样"）。
      *   （真正"点开不被拦"的只有 QQ 自家域名：QQ 音乐的 `i.y.qq.com` 播放页 —— 见 qq 分支。）
+     * ── 2026-09-26 现状记录（主人："现在点开没有将要访问的中转页，是最完美的状态还是真卡格式？记录这个状态留以后维护备用"）──
+     * 线上实测状态（config.json：social.send.musicCardStyle="share"、musicCardOnly=true、
+     * social.send.neteaseUct2 有值且是 24 位令牌）：**封面 + 不过中转页同时成立**，是目前最好的一档。
+     * 它不是"另一种卡"——版式就是真卡那种，差别只在 jumpUrl 里带没带 `uct2`：
+     *   · 版式 share：不带 audio → 签名服务签成 com.tencent.tuwen.lua / view=news，手机端画封面
+     *     （"带不带 audio 决定版式"的实测见下面 data.audio 那段）；
+     *   · 封面第一优先"真卡封面"（state/incoming-cards.jsonl 抄来的 QQ 图床 URL，见 neteaseRealCover），
+     *     其次网易云原图（归一化成 https + 300×300 + type=jpg），最后才是调用方给的 image；
+     *   · jumpUrl 带 `uct2` = 与真机分享同形，QQ 认它是 App 自己分享的链接，于是不套「将要访问」；
+     *     不带 uct2 的裸串一定套 —— 2026-09-24 那句"连真卡都被拦"说的就是裸串。
+     *   · 2026-09-26 实测：**网易云手机页已经不吐那串带访客 uct2 的"在 App 中打开"链接了**
+     *     （VPS 直连 https://y.music.163.com/m/song?id=<id> 返回 200 / 89KB，但整页 grep 不到 `uct2=`，
+     *     只剩裸 `…/m/song?id=<id>`）→ neteaseShareLink() 的"页面现取"这条路**现在实际走不通**，
+     *     卡片里的 uct2 来自静态兜底拼串 + `social.send.neteaseUct2`。页面恢复吐串时它会自动用回页面那份。
+     *   · 那个配置项只在**私聊发给主人自己**时才注入（console-server：key === `private:<ownerQQ>` 才带），
+     *     发给别人/群里一律不带 → 群里的卡大概率仍会被「将要访问」挡住（推断，未经真机实测）。
+     *   · music 版式（带 audio）同样没有中转页，但手机端不画封面 → 不是更好的一档，别为它换回去。
+     * 维护要点（坏了怎么查）：
+     *   ① 又出现「将要访问」→ 先看日志 `[music-card] 网易云 jumpUrl …`（本条注释同批加的）：
+     *      "页面现取"=这一串自带 uct2；"静态兜底"=靠 social.send.neteaseUct2 补 —— 私聊里两种都带 uct2，
+     *      所以私聊照旧不过中转页。若连私聊也被拦，先确认 social.send.neteaseUct2 还在、且仍是 24 位令牌；
+     *   ② 手机端空白 → 查封面三档与 ensureQqHostedImage，跟 jumpUrl 是两件不相干的事；
+     *   ③ 两条已死的弯路别再走：手写 tuwen Ark（token 随机 → QQ 拒收，real_seq 不前进）、
+     *      music.lua 带可播放直链（一样进浏览器被拦，还丢手机端封面）。
      * 想按次改仍然可以：`musicStyle` 参数 / `social.send.musicCardStyle` / `QQBRIDGE_MUSIC_CARD_STYLE`。 */
     const styleOverride = String(opts?.style ?? '').trim().toLowerCase();
     const cardStyle = ['share', 'music', 'native'].includes(styleOverride)
