@@ -56,12 +56,12 @@ async function main() {
 
   // 用与假安装树同盘的解释器来跑管理器，才能复现产品的硬链接条件
   // （产品里 execPath 就是安装树里的 qbm-node.exe，和链接目标必然同盘）。
-  const qbmNode = path.join(DRIVE + '\\', 'MoonBot', 'resources', 'runtime', 'qbm-node.exe');
+  const qbmNode = path.join(DRIVE + '\\', 'Kizuna', 'resources', 'runtime', 'qbm-node.exe');
   const interp = fs.existsSync(qbmNode) ? qbmNode : process.execPath;
   const expectHardlink = interp.toLowerCase().startsWith(DRIVE.toLowerCase());
   console.log(`解释器: ${interp}${expectHardlink ? '（与测试树同盘 → 应能建硬链接）' : '（与测试树不同盘 → 硬链接会被系统拒，跳过该项断言）'}`);
 
-  // 一个"活得久"的父进程，模拟 MoonBot.exe（用 QBM_NAPCAT_GUARDIAN=1 显式武装，不依赖进程名）
+  // 一个"活得久"的父进程，模拟 Kizuna.exe（用 QBM_NAPCAT_GUARDIAN=1 显式武装，不依赖进程名）
   dummyParent = spawn(interp, ['-e', 'setTimeout(() => {}, 600000)'], { stdio: 'ignore', windowsHide: true });
   await sleep(500);
 

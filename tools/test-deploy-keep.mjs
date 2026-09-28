@@ -39,7 +39,7 @@ function makeTarget(dir) {
   fs.writeFileSync(path.join(br, 'config.json'), JSON.stringify({
     ownerQQ: '1122334455',
     allow: { groups: ['1073589775'], private: [] },
-    pixiv: { base: 'https://x.pixigraph.xyz', cookie: 'PHPSESSID=server-side-login' },
+    pixiv: { base: 'https://pixigraph.online', cookie: 'PHPSESSID=server-side-login' },
     social: {
       slimTools: { enabled: true, level: 'low' },              // 目标机上用户调过的档位
       send: { linearPerCharMs: 150, linearCapMs: 4000 },        // 目标机上用户调过的节拍
@@ -63,7 +63,7 @@ function makeSource(dir) {
   fs.writeFileSync(path.join(br, 'config.json'), JSON.stringify({
     ownerQQ: '',                                    // 出厂/本机的空值 —— 覆盖过去就等于丢了机主身份
     allow: { groups: [], private: [] },
-    pixiv: { base: 'https://x.pixigraph.xyz', cookie: '' },
+    pixiv: { base: 'https://pixigraph.online', cookie: '' },
     social: {
       slimTools: { enabled: false, level: 'off' },
       send: { linearPerCharMs: 650, linearCapMs: 15000 },   // 本机被自调慢过的那组值

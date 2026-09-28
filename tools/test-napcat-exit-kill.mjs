@@ -8,7 +8,7 @@
  *     （~/.qq-bridge-manager/config.json）、托管目录（~/Downloads/NapCat.Shell.Windows.OneKey）全在临时目录里；
  *   · 假运行时根目录：把 server/index.js 与 server/deploy.js 复制到临时目录再导入 →
  *     `RUNTIME_ROOT`（= index.js 的上级目录）也指向临时目录，于是 `findNapcatOneKeyAll()` 里
- *     "仓库里的 napcat-onekey / 本机已安装的 MoonBot"那些真实候选目录一个都不会被扫到。
+ *     "仓库里的 napcat-onekey / 本机已安装的 Kizuna"那些真实候选目录一个都不会被扫到。
  *     这一层是必须的：第二档兜底是按"托管目录前缀"直接 Stop-Process 的，若托管目录里混进真 OneKey 目录，
  *     而用户恰好正跑着 NapCat，跑一次测试就会把真进程收掉（第一版测试就写出了这个隐患，现已堵死）。
  *   再加上 `QBM_NO_LISTEN=1`：不监听端口、不自动武装守卫、不自动拉起任何实例，

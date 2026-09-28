@@ -1,4 +1,4 @@
-# Restart the MoonBot manager (server/index.js) so freshly synced server code goes live.
+# Restart the Kizuna manager (server/index.js) so freshly synced server code goes live.
 # ASCII-only: Windows PowerShell 5.1 reads .ps1 as GBK and CJK literals break parsing.
 # Safe shutdown model: the Electron shell's stopBackend() also kills every qbm-node.exe whose path
 # is <runtime>\qbm-node.exe, so a replacement we start here is still cleaned up when the window closes.
@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Continue'
 if (-not $Runtime) {
   # No hardcoded install path: point us at your runtime folder explicitly.
   Write-Host 'QBM_LIVE_RUNTIME is not set. Pass it once, e.g.:'
-  Write-Host '  $env:QBM_LIVE_RUNTIME = "C:\MoonBot\resources\runtime"'
+  Write-Host '  $env:QBM_LIVE_RUNTIME = "C:\Kizuna\resources\runtime"'
   Write-Host '  powershell -File tools\restart-manager.ps1'
   exit 2
 }

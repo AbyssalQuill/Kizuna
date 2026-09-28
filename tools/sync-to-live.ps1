@@ -7,7 +7,7 @@
 #   live      : $env:QBM_LIVE_RUNTIME                 (the running install; unset = skip it)
 #
 #   powershell -File tools\sync-to-live.ps1
-#   $env:QBM_LIVE_RUNTIME = 'C:\MoonBot\resources\runtime'    # optional
+#   $env:QBM_LIVE_RUNTIME = 'C:\Kizuna\resources\runtime'    # optional
 $ErrorActionPreference = 'Stop'
 
 $repoRoot  = Split-Path $PSScriptRoot -Parent
@@ -31,12 +31,12 @@ $bridgeDirs = @('src', 'tools', 'dsh', 'scripts', 'plugins', 'characters')
 # Packaging payloads (relative to the packaging project). runtime-src is the manager-only variant,
 # so it carries no qq-bridge and is filtered out of the bridge list below.
 $payloadDirs = @(
-  'moonbot-app\runtime-full',
-  'moonbot-app\runtime-src',
+  'kizuna-app\runtime-full',
+  'kizuna-app\runtime-src',
   'full\app',
   # electron-builder intermediate output (win-unpacked): the installer is packed from it, so
   # editing it here is the same as editing the files inside the installer.
-  'moonbot-app\dist-eb\win-unpacked\resources\runtime'
+  'kizuna-app\dist-eb\win-unpacked\resources\runtime'
 )
 
 $mgrDests = @()

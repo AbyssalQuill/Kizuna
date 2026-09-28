@@ -162,7 +162,7 @@ console.log('\n== ⑩ 用 DSH 装的那个真 yaml 库解析改写结果（最�
   const yamlPaths = [
     'yaml',
     'C:/Users/17367/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/yaml/dist/index.js',
-    'D:/MoonBot/resources/runtime/node_modules/yaml/dist/index.js',
+    'D:/Kizuna/resources/runtime/node_modules/yaml/dist/index.js',
   ];
   let YAML = null;
   let used = '';

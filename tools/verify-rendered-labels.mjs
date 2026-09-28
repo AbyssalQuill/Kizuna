@@ -279,7 +279,7 @@ const bundleSpot = sampleKeys.map((p) => {
   return { key: p, last, count: occ.length, labels: occ.map((m) => m[1]).filter((v) => v && /[\u4e00-\u9fff]/.test(v)).slice(0, 4), total: all.length, otherUse: [...new Set(otherUse)].slice(0, 2) };
 });
 
-console.log('MoonBot 管理端「渲染成中文」验证（react-dom/server 真渲染 + 构建产物抽查，不用浏览器）');
+console.log('Kizuna 管理端「渲染成中文」验证（react-dom/server 真渲染 + 构建产物抽查，不用浏览器）');
 console.log('─'.repeat(72));
 console.log(`渲染数据      : ${configs.map((c) => c.file).join('、')}（本页渲染用 config.json）`);
 console.log(`渲染组件      : CommonTab / ToolsTab / SlimToolsCard / Field×${flatKeys.length}（配置树全部键）`);

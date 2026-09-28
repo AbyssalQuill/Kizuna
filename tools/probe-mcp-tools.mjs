@@ -1,6 +1,6 @@
 /* 探测 MCP server 实际注册了哪些工具（走 stdio 协议 tools/list），用来验证 slimTools 裁剪是否真的生效。
    用法：node tools/probe-mcp-tools.mjs <qq-bridge 目录> [server文件]
-   例：  node tools/probe-mcp-tools.mjs "D:\MoonBot\resources\runtime\qq-bridge"
+   例：  node tools/probe-mcp-tools.mjs "D:\Kizuna\resources\runtime\qq-bridge"
    说明：必须在**目标 qq-bridge 目录**里跑（MCP server 从自己的目录读 config.json）。 */
 import { spawn } from 'node:child_process';
 import path from 'node:path';

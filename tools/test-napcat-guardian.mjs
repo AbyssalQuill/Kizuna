@@ -185,7 +185,7 @@ async function runGuardian({ guardPidMode, parentPid, grace = 1500, waitMs = 900
     } else {
       // 测试进程的 execPath 是 Program Files 下的 node.exe：那里的硬链接会被系统拒（EPERM）
       // → 属于环境限制，不算产品缺陷（产品侧 execPath 是安装树里的 qbm-node.exe，实测硬链接成功）。
-      console.log(`SKIP  ⑥ 本环境无法给守卫换 exe 路径（${spawned.exe}，系统拒绝建立硬链接）—— 产品侧见 D:\\MoonBot\\resources\\runtime\\guard-node.exe`);
+      console.log(`SKIP  ⑥ 本环境无法给守卫换 exe 路径（${spawned.exe}，系统拒绝建立硬链接）—— 产品侧见 D:\\Kizuna\\resources\\runtime\\guard-node.exe`);
     }
     fs.writeFileSync(guardFile, JSON.stringify({ pid: guardPid, parentPid: backend.pid }), 'utf8');
     await sleep(1500);

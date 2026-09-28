@@ -15,7 +15,7 @@ const ROOT = path.resolve(HERE, '..');
 
 // 优先用活体运行时里的 deploy.js（依赖 ssh2 一定装好了）；退回源码树
 const candidates = [
-  'D:/MoonBot/resources/runtime/server/deploy.js',
+  'D:/Kizuna/resources/runtime/server/deploy.js',
   path.join(ROOT, 'server', 'deploy.js'),
 ];
 let mod = null;
@@ -31,7 +31,7 @@ const check = (name, ok, extra = '') => { if (!ok) fails += 1; console.log(`${ok
 
 // 本机三份数据的真实位置（与 index.js 的 localCloneSource() 同一套推导）
 const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.qq-bridge-manager', 'config.json'), 'utf8'));
-const bridgeDir = 'D:\\MoonBot\\resources\\runtime\\qq-bridge';
+const bridgeDir = 'D:\\Kizuna\\resources\\runtime\\qq-bridge';
 const dshHome = String(cfg.instances?.dshIsolated?.isolatedHome || '');
 const napcatCfgCandidates = [
   path.join(os.homedir(), 'Downloads', 'NapCat.Shell.Windows.Node', 'napcat', 'config'),

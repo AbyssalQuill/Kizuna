@@ -259,12 +259,12 @@ const IDENT = /\b[a-z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)+\b|\b[a-z][a-z0-9]*(?:_[
 const LABELISH_ATTRS = new Set(['label', 'title', 'placeholder', 'aria-label', 'alt']);
 /* 纯英文标签的判定：先把单位 / 产品名 / 协议名 / 数字 / 链接这些"翻掉反而看不懂"的部分去掉，
    剩下的字符里还有英文字母才算未翻译。这样做的好处：'API Key' 会被抓出来（Key 不认识），
-   而 '5MB'、'26.9k tokens'、'PID：'、'GitHub: AbyssalQuill/MoonBot'、'tok' 不会误报。 */
+   而 '5MB'、'26.9k tokens'、'PID：'、'GitHub: AbyssalQuill/Kizuna'、'tok' 不会误报。 */
 /* 长的词必须排在前面（否则 'G' 会先把 'GitHub' 咬掉一半）；单字母单位加边界，
-   免得把 "GitHub" 里的 G、"MoonBot" 里的 M 当成单位。 */
+   免得把 "GitHub" 里的 G、"Kizuna" 里的 M 当成单位。 */
 const KNOWN_TOKENS = new RegExp([
   'https?://\\S+', '\\d+(?:[.,]\\d+)*',
-  'AbyssalQuill', 'MoonBot', 'NapCat', 'DeepSeek', 'Harness', 'GitHub', 'truefriend', 'OneKey', 'DSH',
+  'AbyssalQuill', 'Kizuna', 'NapCat', 'DeepSeek', 'Harness', 'GitHub', 'truefriend', 'OneKey', 'DSH',
   'WebUI', 'HTTPS', 'tokens', 'token', 'Token', 'tok', 'Bridge', 'MCP', 'JSON', 'JPEG', 'WSS',
   'MP3', 'WAV', 'PNG', 'GIF', 'VBS', 'API', 'SDK', 'CLI', 'MD5', 'URL', 'URI', 'PID', 'Esc',
   'HTTP', 'Agent', 'QQ', 'WS', 'ID', 'MB', 'KB', 'GB', 'TB', 'ms',
@@ -312,7 +312,7 @@ const uniq = new Map();
 for (const m of misses) uniq.set(`${m.kind}\u0000${m.key}`, m);
 const list = [...uniq.values()].sort((a, b) => kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind) || a.key.localeCompare(b.key));
 
-console.log('MoonBot 管理端界面标签审计（裸露英文键检查）');
+console.log('Kizuna 管理端界面标签审计（裸露英文键检查）');
 console.log('─'.repeat(64));
 console.log(`配置文件      : ${configs.map((c) => `${rel(path.join(ROOT, c.file))}（${c.keys.length} 键 / ${c.branches.length} 分组）`).join('、')}`);
 console.log(`页面          : src/pages/BridgeConfig.tsx（标签表 LABEL ${LABEL.size} 条、TOOL_LABEL ${TOOL_LABEL.size} 条、MCP_LABEL ${MCP_LABEL.size} 条）`);

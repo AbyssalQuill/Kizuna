@@ -1,4 +1,4 @@
-' Launch the MoonBot manager with a hidden window.
+' Launch the Kizuna manager with a hidden window.
 ' wscript is a GUI host, so no console is created; Run arg 2 = 0 hides the window,
 ' arg 3 = False means do not wait.
 ' Usage: wscript.exe start-manager-hidden.vbs

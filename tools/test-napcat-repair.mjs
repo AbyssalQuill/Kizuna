@@ -87,7 +87,7 @@ try {
     // 7z.exe：从真 payload 里借一个（打包仓库/运行时都有）；借不到就跳过
     const sevenZipSrc = [
       'C:/Users/17367/Desktop/QQ-Bridge-packaging/full/app/napcat-onekey/7z.exe',
-      'D:/MoonBot/resources/runtime/napcat-onekey/7z.exe',
+      'D:/Kizuna/resources/runtime/napcat-onekey/7z.exe',
     ].find((p) => fs.existsSync(p));
     if (!sevenZipSrc) {
       console.log('  SKIP  找不到 7z.exe');
