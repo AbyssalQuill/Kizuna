@@ -324,12 +324,25 @@ DSH 事件流（api.events.mux）→ pumpMux()
 
 `mcp-web-search-safe.js`：
 
-表 14：只读联网工具（口径：两者均为只读）
+表 14：只读联网工具（口径：两者均为只读，且都带 SSRF 校验）
 
 | 工具 | 说明 |
 | --- | --- |
 | `web_search(query)` | 只读搜索 |
 | `web_fetch(url)` | 只读抓取 HTTP(S) 网页正文，带内网与本机地址的 SSRF 拦截 |
+
+表 14 补充（2026-09-28 起只剩一套）——**模型可见的联网工具面就是下面这两条，别把名字看串**：
+
+| 工具名（模型侧） | 谁提供 | 何时可用 |
+| --- | --- | --- |
+| `mcp__web-search-safe__web_search` | 桥（`mcp-web-search-safe.js`，内核 `lib/web-search.js` 的 `searchAll()`） | 恒可用。22 个平台并发聚合 + 相关度闸门 + 5 分钟缓存，CORE 平台落定即早返回 |
+| `mcp__web-search-safe__web_fetch` | 桥（`mcp-web-search-safe.js`） | 恒可用；**唯一的 SSRF 加固抓取通道**（`tool-web.fetch` 恒为 false） |
+
+宿主那个 `web_search`（`@deepseek-ai/dsh-tool-web`）**不注册**：preset 里 `tool-web.search` 恒为 false，由 `lib/dsh-side.js` 的 `syncPresetToolWeb` 每次启动钉住（幂等）。
+
+历史（2026-09-28 同日先集成、后按要求去掉）：此前这里还有一套 DSH 插件 `@liustack/modsearch`（ModSearch）——它的 patch 把宿主 `web` seam 的 `searchProvider` 换成自己的引擎链，模型侧多出宿主的 `web_search` 与它自带的 `read_page` / `x_search`，`tool-web.search` 则跟着它的装配结果改写。去掉 ModSearch 的代价是零：模型侧的搜索仍由 `mcp__web-search-safe__web_search` 提供，而它的内核（`lib/web-search.js`）与 pixiv 第 ④ 条来源"名字 → pixiv 画师号"用的是**同一个** `searchAll()`。升级安全：老 home 里可能留着 `search: true`（被 `syncPresetToolWeb` 改回）与 `# === modsearch overlay …` 覆盖行（被 `stripLegacyModsearchOverlay` 摘掉），两者都幂等。
+
+执行期配合：`qq-tool-restrict.mjs` 的 `SAFE_EXACT` 只放行 `ask_user_question` / `todo_write`（`web_search` 那一行 2026-09-28 随 ModSearch 一起去掉了）；`mcp__web-search-safe__*` 走 `mcp__` 命名空间那套放行判据（判据见 §7 的 G9 一行与 `RULES.md` 第 2/3 条）。
 
 ---
 
@@ -385,7 +398,7 @@ DSH 事件流（api.events.mux）→ pumpMux()
 | G6 | 进程控制 | `start_napcat` / `stop_napcat` 默认禁用；启用后也仅在 `closed-agent` 模式下可调用 |
 | G7 | 配置 fail-closed | `config.json` 损坏时直接退出；白名单默不放行 |
 | G8 | 控制台鉴权 | 可配 `consoleToken`；未配置时自动生成强令牌 |
-| G9 | 只读联网 | `mcp-web-search-safe.js` 只暴露 `web_search` 与 `web_fetch`，带 SSRF 防护 |
+| G9 | 只读联网 | 抓取只经 `mcp-web-search-safe.js`（`mcp__web-search-safe__web_fetch`），带 SSRF 防护；搜索按装配结果在两条只读通道间切换（宿主 `web_search` ↔ `mcp__web-search-safe__web_search`）。`tool-web.search`、profile patch 的 `readPage/xSearch=false` 覆盖行与放行名单由同一判据同步（见 §5 表 14 补充与 `RULES.md` 第 2/3 条） |
 | G10 | 黑话人工确认 | 自动提取与联网研究的黑话默认为 candidate，仅控制台确认后注入聊天上下文 |
 | G11 | 日志脱敏 | 日志统一经过 `redactSensitiveText`，不记录路径与凭据等敏感原文 |
 | G12 | 会话隔离 | 每个聊天会话生成独立 agent token；MCP 状态与发送工具必须携带该 token |
@@ -464,6 +477,7 @@ restart.bat
 | 默认值 | §6 的默认值取自实现记录，未在运行环境中逐一验证 | 【据仓库记载】 |
 | 脚本清单 | §9 的脚本用途取自文件名与既有说明，未逐个执行 | 【未核验】 |
 | 控制台入口文件 | §3 目录树中的 `public/console.html` 在当前仓库树中不存在（已检索仓库内全部 `.html`）；控制台服务的实现位于 `src/bridge.js` 的 `startConsoleServer`。原目录树条目按“不删改技术信息”的要求保留，未改写 | 【未核验】 |
+| ModSearch 集成 | 已于 2026-09-28 按要求从本项目整体去掉（§5 表 14 补充留了历史与理由）。删除时用 `tools/test-modsearch-bundle.mjs` 断言过的三处联动（`tool-web.search` 门控、profile patch 的 `readPage/xSearch=false` 覆盖行、`SAFE_EXACT` 放行 `web_search`）随之下线：前两者由保留的 `syncPresetToolWeb`（改成恒 false）+ `stripLegacyModsearchOverlay`（清老 home 的残留覆盖行）接管，后者直接删行；断言改由新套件 `tools/test-dsh-side-gate.mjs`（本机 26 项 / 服务器 25 项）与 `tools/test-pixiv-filters.mjs` 第十三节承担 | 【已核验】代码 / 配置 / 测试 / 文档四处检索后只剩说明历史的注释，`npm run check` 全绿 |
 
 ---
 
@@ -479,4 +493,4 @@ restart.bat
 | A2 | 部分消息没有回复 | 普通闲聊可能被 `skipProbability` 判为沉默，但内容会进入 `silentContext`，下次投递时模型可见 | 直接提问、被 @ 与私聊不参与沉默判定 |
 | A3 | 拆条有时不拆 | 分句权在模型侧：模型未使用空格分隔时不拆条 | 单条超过 `maxReplyChars`（默认 500）时安全硬拆 |
 | A4 | MCP 工具修改后不生效 | MCP 由 DSH 拉起，工具实现由 DSH 进程加载 | 修改 `src/mcp-*.js` 后须重启 DSH 进程本身（而非仅重启 `qq-bridge`），或使 DSH 重连 MCP；修改 DSH preset 或 `cordis.patch.yml` 后同样须重启 DSH |
-| A5 | 黑话提取与联网研究未生效 | 提取以滚动窗口内的消息条数为触发条件；联网研究需要学习会话可用 `web_search` | 判定条件为 `slang.enabled` 为 true、DSH 在线、某会话消息已达到 `extractMinMessages` 条；黑话候选不自动转正，须在控制台「黑话管理」人工确认 |
+| A5 | 黑话提取与联网研究未生效 | 提取以滚动窗口内的消息条数为触发条件；联网研究需要学习会话能搜到东西 —— 学习会话用的也是 `qq-chat` 预设（`slang.learnerPreset || agentPreset`），所以它有没有宿主 `web_search` 同样取决于 §5 表 14 补充里那套门控；门控关着时仍可用 `mcp__web-search-safe__web_search` | 判定条件为 `slang.enabled` 为 true、DSH 在线、某会话消息已达到 `extractMinMessages` 条；黑话候选不自动转正，须在控制台「黑话管理」人工确认 |

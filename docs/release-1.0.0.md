@@ -1,6 +1,6 @@
-# MoonBot Pro 1.0.0 版本说明
+# Kizuna Pro 1.0.0 版本说明
 
-本文界定 MoonBot Pro 1.0.0 的构成、版本变更、缺陷修复与已知限制。文中所有命令、路径、端口、常量与版本号均为
+本文界定 Kizuna Pro 1.0.0 的构成、版本变更、缺陷修复与已知限制。文中所有命令、路径、端口、常量与版本号均为
 可执行原值；能力描述为构成性描述，不含评价性表述。
 
 ## 目录
@@ -29,7 +29,7 @@
 
 | 术语 | 代码标识符 / 原文 | 界定 |
 | --- | --- | --- |
-| 管理端 | `MoonBot Pro Manager Setup.exe` 所安装的程序 | Electron 壳与后端组成的图形界面程序，负责拉起、探活、记录日志与停止各子进程 |
+| 管理端 | `Kizuna Pro Manager Setup.exe` 所安装的程序 | Electron 壳与后端组成的图形界面程序，负责拉起、探活、记录日志与停止各子进程 |
 | 桥接层 | `qq-bridge/src/bridge.js` | 独立 Node.js 进程，负责 QQ 消息接入、社交状态机与 DSH 投递 |
 | 隔离 DSH | 隔离实例 | 由管理端拉起的 DeepSeek Harness 实例，与用户自己的 DSH 会话隔离 |
 | 原生部署 | `installNapcatNative()` | 以官方 Linux QQ 与 systemd 服务承载 NapCat 的部署形态 |
@@ -45,14 +45,14 @@
 | 项 | 值 |
 | --- | --- |
 | 版本号 | `1.0.0` |
-| 产品名 | MoonBot Pro |
+| 产品名 | Kizuna Pro |
 | 发布日期 | 2026-09-18 |
-| 主安装包 | `MoonBot Pro Setup.exe` |
-| 管理端安装包 | `MoonBot Pro Manager Setup.exe`（仅含管理端，用于远程连接服务器） |
-| 默认安装目录 | `%LOCALAPPDATA%\Programs\MoonBot` |
+| 主安装包 | `Kizuna Pro Setup.exe` |
+| 管理端安装包 | `Kizuna Pro Manager Setup.exe`（仅含管理端，用于远程连接服务器） |
+| 默认安装目录 | `%LOCALAPPDATA%\Programs\Kizuna` |
 
 安装包文件名不带版本号后缀，由出包脚本以 `artifactName` 固定（出包脚本位于同级打包工程的
-`tools/build-moonbot-app.mjs`）。
+`tools/build-kizuna-app.mjs`）。
 
 集成构成：NapCat、QQ 桥接层、DeepSeek Harness 与模型服务商被整合为单一可安装的 Windows 程序。安装完成后的
 必填交互只有两项：扫码登录 QQ，以及填写一次模型密钥。
@@ -89,9 +89,9 @@
 
 ### 3.1 版本号与产物名统一
 
-版本号定为 `1.0.0`，产品名统一为 MoonBot Pro，对外安装包固定为 `MoonBot Pro Setup.exe`，另有仅含管理端的
-`MoonBot Pro Manager Setup.exe`，用于远程连接服务器。安装包文件名不带版本号后缀，由出包脚本以 `artifactName`
-固定（`tools/build-moonbot-app.mjs`）；安装目录仍按用户安装路径 `%LOCALAPPDATA%\Programs\MoonBot`。
+版本号定为 `1.0.0`，产品名统一为 Kizuna Pro，对外安装包固定为 `Kizuna Pro Setup.exe`，另有仅含管理端的
+`Kizuna Pro Manager Setup.exe`，用于远程连接服务器。安装包文件名不带版本号后缀，由出包脚本以 `artifactName`
+固定（`tools/build-kizuna-app.mjs`）；安装目录仍按用户安装路径 `%LOCALAPPDATA%\Programs\Kizuna`。
 
 ### 3.2 部署形态由容器改为原生优先
 
@@ -194,7 +194,7 @@
 | L1 | Pixiv 镜像站搜索不支持服务端排序与筛选 | 只能按投稿时间排序；“按人气/热度排序”回落为时间倒序并在 `warnings` 写明原因 | 实测镜像站只接受 `keyword` 与 `page`，`mode`、`s_mode`、`order`、`p`、`bl`、`type` 等参数全部被忽略；返回体不含收藏数。镜像站 `lastPage` 恒为 10，越界页仍返回 60 条后备数据，因此自动翻页限制在 `lastPage` 之内 |
 | L2 | 多项能力依赖外部服务 | 外部服务不可用时直接失败或退化；失败在桥接日志与工具返回值中体现，程序不做离线降级 | 模型推理依赖所配置的服务商 API；联网搜索与网页抓取依赖 `web_search` / `web_fetch` 的上游；语音依赖小米 MiMo；音乐卡片依赖音乐聚合站与签名服务；Pixiv 搜图依赖镜像站；QQ 空间互动依赖腾讯侧接口 |
 | L3 | NapCat 需要扫码登录，登录态不随安装包分发 | 镜像服务器、迁移服务器或重建容器都可能使 QQ 判定为新设备并要求重新扫码 | `qq-bridge/tools/pin-napcat-device.sh` 只能降低概率，不能保证免扫码；固定身份时修改 hostname 本身会触发一次设备变更 |
-| L4 | 安装目录必须可写，且不能位于同步盘或网络盘 | 装在 `C:\Program Files` 会被 UAC 虚拟化导致写入不落盘；装在 OneDrive / Dropbox / 坚果云等同步盘或 UNC 路径上可能因 WAL 与文件锁失效而损坏记忆库 | 聊天记忆库（SQLite）、会话状态、人设与日志全部写入安装目录；安装包默认装到 `%LOCALAPPDATA%\Programs\MoonBot`，首页在检测到风险位置时给出警告 |
+| L4 | 安装目录必须可写，且不能位于同步盘或网络盘 | 装在 `C:\Program Files` 会被 UAC 虚拟化导致写入不落盘；装在 OneDrive / Dropbox / 坚果云等同步盘或 UNC 路径上可能因 WAL 与文件锁失效而损坏记忆库 | 聊天记忆库（SQLite）、会话状态、人设与日志全部写入安装目录；安装包默认装到 `%LOCALAPPDATA%\Programs\Kizuna`，首页在检测到风险位置时给出警告 |
 | L5 | 音乐卡的版式取决于 QQ 客户端 | 手机端封面能否显示取决于签名服务能否取得腾讯 CDN 的图像；部分版式（如 `music.lua`）在手机端本身不绘制封面 | 该部分不受本程序控制 |
 | L6 | 管理端只提供 Windows 10/11 版本 | 其他客户端平台无交付物 | 远程部署的目标机假定为 Debian / Ubuntu 系 Linux，脚本使用 apt 与 systemd；其他发行版未验证 |
 | L7 | 工具精简存在两种语义 | 两者容易混淆：前者减少每次请求体积，后者不减少 | `social.slimTools` 在注册期排除工具，需要重启隔离 DSH 才重新计算；`social.tools` 只在调用期拒绝 |

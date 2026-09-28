@@ -30,9 +30,12 @@
 ## QQ 会话 agent 的硬边界
 
 1. **无本地工具**：qq-chat / default 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。
-2. **QQ 动作安全子集**：只允许 `mcp__napcat__*`、`mcp__napcat-host__*`、`mcp__web-search-safe__*` 三个命名空间下的工具，以及 `ask_user_question` / `todo_write`；其他工具（含 `dev_*` 开发/管理工具）在执行期会被 `qq-tool-restrict.mjs` 拒绝。QQ 动作无禁言、踢人、文件上传下载等管理操作。
-3. **只读联网搜索**：`qq-chat` / `default` 预设已关闭 DSH 内置 `tool-web` 的 `search` / `fetch`，联网统一走 `src/mcp-web-search-safe.js` 提供的 `mcp__web-search-safe__web_search/web_fetch`。不暴露本地文件、命令执行、写操作。
-   - ✅ `mcp__web-search-safe__web_fetch` 已做 SSRF 加固：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。
+2. **QQ 动作安全子集**：只允许 `mcp__napcat__*`、`mcp__napcat-host__*`、`mcp__web-search-safe__*` 三个命名空间下的工具，以及 `ask_user_question` / `todo_write`；其他工具（含 `dev_*` 开发/管理工具）在执行期会被 `qq-tool-restrict.mjs` 拒绝。QQ 动作无禁言、踢人、文件上传下载等管理操作。（`web_search` 2026-09-28 已从 `SAFE_EXACT` 里去掉：宿主那个工具现在压根不注册，见第 3 条。）
+3. **只读联网：搜索与抓取都走桥自己的引擎**（2026-09-28 起）。`qq-chat` 预设里 `- id: tool-web` 的 `search` 与 `fetch` **恒为 false** —— 桥每次启动都用 `lib/dsh-side.js` 的 `syncPresetToolWeb` 把它钉住（幂等：值对了就一个字节都不写），所以宿主的 `web_search` 不注册，模型侧只有一条搜索路径：`src/mcp-web-search-safe.js` 的 `mcp__web-search-safe__web_search`。
+   - 这个引擎的内核在 `src/lib/web-search.js`（`searchAll()`）：Firecrawl / Bing / 必应新闻 / DuckDuckGo / 百度 / 360 / 萌娘百科 / 中英日维基 / bilibili 等 22 个平台并发抓取 → 交错合并 → 相关度闸门 → 去重 → 5 分钟内存缓存，CORE 平台全部落定即早返回（硬上限 7.4 s）。MCP 那一层只负责工具注册与抓取，桥进程（含 pixiv 的第 ④ 条来源"名字 → pixiv 画师号"）直接 `import` 这个内核调用，不再 spawn 子进程。
+   - 抓取仍是 `mcp__web-search-safe__web_fetch`，**带 SSRF 加固**：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。
+   - 历史（留档，便于排查老机器）：2.0.4 之前这里的 `search` 会跟着 DSH 插件 `@liustack/modsearch`（ModSearch）的装配结果改写，装到位才写 `true`。**ModSearch 已于 2026-09-28 按要求从本项目整体去掉**（装配代码、配置开关 `dsh.modsearch`、`SAFE_EXACT` 里的 `web_search`、测试 `tools/test-modsearch-bundle.mjs`、文档全部清除），它自带的 `read_page` / `x_search` 也随之不存在了。
+   - 升级安全（两条都在 `installPresets` 里，都幂等）：升上来的隔离 home 若还留着 `search: true`，启动时被 `syncPresetToolWeb` 改回 `false`；若 `profiles/<profile>/cordis.patch.yml` 里还留着 `# === modsearch overlay …` 那段指向已不存在插件的覆盖行，被 `stripLegacyModsearchOverlay` 摘掉（留着会让 profile 起不来）。
 4. **发送强制白名单**：所有发送类工具（`qq_send_group_message` / `qq_send_private_message` / `qq_send_message` / `qq_reply` / `qq_send_poke` / `qq_send_sticker` 等）的目标必须命中 `config.json` 的 `allow.groups` / `allow.private`，否则拒绝执行。
 5. **发送禁令（模型层）**：persona 明确规定只有「管理端明确指示」或「【管理员】标记的明确要求」才可使用发送工具；禁止写"我已回复/消息已发送（message_id）"类汇报。
 6. **回复审计（桥接层硬拦截）**：agent 回复文本若包含本机路径（`C:\`、`/home/` 等）或凭据特征（token/password/secret/api key 等）→ **整条拦截不发送**，并告知"被安全策略拦截"。

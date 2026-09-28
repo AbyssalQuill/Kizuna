@@ -1,4 +1,4 @@
-# MoonBot Pro 技术文档
+# Kizuna Pro 技术文档
 
 全文分三部分：体系结构与运行期装配、能力构成与实现约束、上下文压缩的数学建模与标定；文末附录为 MCP 工具全表、管理端路由全表、核验清单与术语对照。
 
@@ -43,7 +43,7 @@
 - [35. 验证方法与实验口径](#35-验证方法与实验口径)
 - [36. 标定边界、适用条件与未核验项](#36-标定边界适用条件与未核验项)
 - [37. 速查与复现命令](#37-速查与复现命令)
-- [附录 A MCP 工具全表（napcat，91 条）](#附录-A-mcp-工具全表napcat91-条)
+- [附录 A MCP 工具全表（napcat，94 条）](#附录-A-mcp-工具全表napcat94-条)
 - [附录 B MCP 宿主服务与联网检索工具表（7 条）](#附录-B-mcp-宿主服务与联网检索工具表7-条)
 - [附录 C 管理端路由表（93 条）](#附录-C-管理端路由表93-条)
 - [附录 D 核验范围、缺陷与未核验清单](#附录-D-核验范围缺陷与未核验清单)
@@ -82,7 +82,7 @@
 
 路径相对仓库根，统一使用正斜杠；代码位置写作 `path/to/file.js:123`，区块写作 `path:lineA-lineB`；行号对应本轮工作树、为取证时刻的读取器行号，重构后可能平移，函数名与文件名是稳定锚点；常量、SQL、JSON 与协议字段均自源文件逐字转录。
 
-范围限于仓库当前提交状态下的桥、隔离 DSH、随包 NapCat、管理器与页面；不覆盖安装副本（`D:\MoonBot\resources\runtime\*`）与仓库源的差异，不做效果评价。压缩算法的数学表述见「上下文压缩数学建模」章。
+范围限于仓库当前提交状态下的桥、隔离 DSH、随包 NapCat、管理器与页面；不覆盖安装副本（`D:\Kizuna\resources\runtime\*`）与仓库源的差异，不做效果评价。压缩算法的数学表述见「上下文压缩数学建模」章。
 
 ## 2. 安装布局与路径解析
 
@@ -90,7 +90,7 @@
 
 ```text
 <RUNTIME_ROOT>/                       ← 安装根（可位于任意盘、任意目录名）
-├─ MoonBot.exe                        ← Electron 壳（由仓库外打包工程产出）
+├─ Kizuna.exe                        ← Electron 壳（由仓库外打包工程产出）
 ├─ resources/runtime/                 ← 运行时可写树（源码树中即仓库根）
 │   ├─ server/                        ← 管理端后端（index.js / deploy.js / *.mjs / *.js）
 │   ├─ qq-bridge/                     ← 桥（src/ plugins/ characters/ roles/ state/ config.json）
@@ -192,8 +192,8 @@ QQ 群 / 私聊 ──QQ 协议──▶ NapCat  WebUI :6099  OneBot HTTP :3000 
 
 | 进程 | 可执行文件 | 启动方 / 父进程 | 关键启动参数 / 环境 | 日志 |
 | --- | --- | --- | --- | --- |
-| 应用壳 | `MoonBot.exe` | 用户 / `explorer.exe` | Electron 壳；源码不在本仓库 | 无 |
-| 管理端后端 | `qbm-node.exe`（随包 Node 运行时） | 应用壳 / `MoonBot.exe` | `server\index.js`；`windowsHide` | `%USERPROFILE%\.qq-bridge-manager\logs\manager.log`（`mlog()`） |
+| 应用壳 | `Kizuna.exe` | 用户 / `explorer.exe` | Electron 壳；源码不在本仓库 | 无 |
+| 管理端后端 | `qbm-node.exe`（随包 Node 运行时） | 应用壳 / `Kizuna.exe` | `server\index.js`；`windowsHide` | `%USERPROFILE%\.qq-bridge-manager\logs\manager.log`（`mlog()`） |
 | 隔离 DSH | `qbm-node.exe` | 管理端后端 | `<dshBin> --profile web --port 10721 --no-open --trusted-host 127.0.0.1:10721 --trusted-host localhost:10721`；`DSH_HOME=<isolatedHome>`；另注入 `.credentials.yaml` 派生的环境变量；直接运行 `bin.js` 时附加 `--expose-internals` | `instanceLogPath('dsh-isolated')` |
 | 桥 | `qbm-node.exe` | 管理端后端 | `node src/bridge.js`；`cwd =` 桥目录；`DSH_ISOLATED_LOG_FILE=<隔离 DSH 实例日志>` | 实例日志 + `qq-bridge/state/bridge.log` |
 | NapCat 启动器 → NapCat / QQ | `WindowsPowerShell\v1.0\powershell.exe` → `NapCatWinBootMain.exe` → `QQ.exe` | 管理端后端；启动器通常毫秒级退出，QQ 被重新挂到系统进程下 | `-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Start-Process -FilePath NapCatWinBootMain.exe -WorkingDirectory <onekey.dir> [-ArgumentList <QQ号>] -WindowStyle Hidden"`；仅托管目录内的实例 | 实例日志 |
@@ -229,7 +229,7 @@ NapCat 的隐藏启动路径为单一实现：PowerShell `Start-Process -WindowS
 
 第 4 级的清理判据为精确匹配：托管目录前缀（`--dirs`）、桥的绝对路径（`--bridge-script`）、DSH 端口（`--dsh-port`），并排除自身（`NOT_SELF`）；缺少参数时跳过对应清理，取舍为宁可漏收不可误杀。【据仓库记载】
 
-关窗守卫的武装条件（复查由启动时一次与每 60 秒一次的 `setInterval` 共同驱动）：`QBM_NAPCAT_GUARDIAN=0` 时整体关闭（`ensureGuardianArmed()`）；guard 文件记载的守卫进程存活时不执行任何操作；本后端父进程名为 `MoonBot` 时以该进程为监护目标（`parentProcessName()`）；否则存在运行中的 `MoonBot.exe` 时以该进程为监护目标（`findMoonBotPid()`），应用复用已在运行的后端时该条件在 60 秒内补齐守卫；应用未运行则静默等待、不武装，不使用来源不明的 PID 作为应用标识；`POST /api/guardian/arm` 手工武装时取 `body.parentPid`，或自动选取首个 `MoonBot` 进程，进程名非 `MoonBot` 一律拒绝（`server/index.js:2999`）【已核验】。
+关窗守卫的武装条件（复查由启动时一次与每 60 秒一次的 `setInterval` 共同驱动）：`QBM_NAPCAT_GUARDIAN=0` 时整体关闭（`ensureGuardianArmed()`）；guard 文件记载的守卫进程存活时不执行任何操作；本后端父进程名为 `Kizuna` 时以该进程为监护目标（`parentProcessName()`）；否则存在运行中的 `Kizuna.exe` 时以该进程为监护目标（`findKizunaPid()`），应用复用已在运行的后端时该条件在 60 秒内补齐守卫；应用未运行则静默等待、不武装，不使用来源不明的 PID 作为应用标识；`POST /api/guardian/arm` 手工武装时取 `body.parentPid`，或自动选取首个 `Kizuna` 进程，进程名非 `Kizuna` 一律拒绝（`server/index.js:2999`）【已核验】。
 
 单点登录互斥：同一 QQ 号不能同时在本机与服务端两个端点登录，平台判定为「已在另一台终端登录」并互相下线，表现为该号不再产生回复；管理端后端因此在 `startDispatcher()` 内设置与该前端无关的硬闸门，探测复用既有 `remoteStatusCache`，缓存未命中时增加一次 SSH 往返。服务端 NapCat 在线时启动本机 NapCat 会被拒绝并返回可读原因（`DUAL_LOGIN_HINT`，`server/index.js:3189`）【已核验】；启动或重启服务端 NapCat 前先停止本机 NapCat（服务端为生产端点，`stopLocalNapcatBeforeRemote()`，`server/index.js:3177`）【已核验】；状态不可获取时按 `known:false` 处理，不阻断操作。
 
@@ -245,7 +245,7 @@ NapCat 的隐藏启动路径为单一实现：PowerShell `Start-Process -WindowS
 - OneBot HTTP：`POST <httpUrl>/<action>`，头 `authorization: Bearer <accessToken>`（`qq-bridge/src/core/qq-send.js`、`qq-bridge/src/core/console-server.js:3986` 等）。
 - DSH RPC：`POST /api/<ns>/<m>`，体 `{type:'client-request', rpcId, method, payload:{args}}`（`qq-bridge/src/dsh-client.js:225-245`）。
 - DSH 事件：WebSocket（`remote.mux`），逐会话 `session/follow`，`maxMessages: 200`（`qq-bridge/src/dsh-client.js:399`）。
-- MCP：stdio，三个 server `mcp-napcat`、`mcp-napcat-host`、`mcp-web-search-safe`（`qq-bridge/src/lib/dsh-side.js:252-299`）。
+- MCP：stdio，三个 server `mcp-napcat`、`mcp-napcat-host`、`mcp-web-search-safe`（`qq-bridge/src/lib/dsh-side.js:452` 起）。
 - 桥控制台 REST：`/api/social/*`、`/api/send/*`、`/api/images/*` 等分组（`qq-bridge/src/core/console-server.js`）；SSE `GET /api/napcat/login-stream`，事件名 `napcat-login`（`:5594-5605`、`:6108-6189`）【据仓库记载】。
 - 进程内状态文件：JSON / JSONL / SQLite，写入使用临时文件加原子重命名（`qq-bridge/src/core/config.js:448-452`）。
 
@@ -253,7 +253,7 @@ NapCat 的隐藏启动路径为单一实现：PowerShell `Start-Process -WindowS
 
 ### MCP 服务器规模
 
-`mcp-napcat`（`qq-bridge/src/mcp-napcat-safe.js`）注册 91 个工具，`^\s*registerTool\(` 调用点共 91 处、名字互不重复，含 1 个 `get_time`；`mcp-napcat-host`（`qq-bridge/src/mcp-host-server.js`）5 个（`server.tool(` 位于 `:142/198/247/264/314`）；`mcp-web-search-safe`（`qq-bridge/src/mcp-web-search-safe.js`）2 个，`web_search` 注册于 `:943`（名字 `:944`）、`web_fetch` 注册于 `:979`（名字 `:980`）【已核验】。运行时实际注册数还受档位闸门 `toolAllowedByTier`（`qq-bridge/src/mcp-napcat-safe.js:741`）与各工具的 `cfg.social.*` 开关分支影响【已核验】。
+`mcp-napcat`（`qq-bridge/src/mcp-napcat-safe.js`）注册 94 个工具，`^\s*registerTool\(` 调用点共 94 处、名字互不重复，含 1 个 `get_time`；`mcp-napcat-host`（`qq-bridge/src/mcp-host-server.js`）5 个（`server.tool(` 位于 `:142/198/247/264/314`）；`mcp-web-search-safe`（`qq-bridge/src/mcp-web-search-safe.js`，359 行）2 个，`web_search` 注册于 `:279`（名字 `:280`）、`web_fetch` 注册于 `:315`（名字 `:316`）；搜索内核已抽到平铺模块 `qq-bridge/src/lib/web-search.js`（865 行，导出 `searchAll` / `SEARCH_PLATFORMS` / `CORE_PLATFORMS` / `cleanQuery` / `queryGrams` / `parseRssItems` / `unwrapBingNewsLink`），本文件只留工具注册、`sanitizeQuery`（`:31`）与带 SSRF 加固的 `web_fetch`【已核验】。运行时实际注册数还受档位闸门 `toolAllowedByTier`（`qq-bridge/src/mcp-napcat-safe.js:741`）与各工具的 `cfg.social.*` 开关分支影响【已核验】。
 
 ## 4. 通信面
 
@@ -295,7 +295,7 @@ node -e "const s=require('fs').readFileSync('qq-bridge/src/core/console-server.j
 
 桥侧使用的 DSH 调用：`sessions.prompt({sessionId, mode, content})` 用于提示词投递（`qq-bridge/src/core/prompt-deliver.js`）；`session/selectModel`、`session/modelCatalog` 用于模型选择与目录读取；`workspace/archiveSession` 用于空闲会话归档；`events.mux` + `session/follow` 为事件泵与回合订阅（`qq-bridge/src/core/mux.js:766`）【已核验】。
 
-管理端与浏览器前端：生产模式下前端产物由 `127.0.0.1:1921` 静态托管、`/api/*` 同源直取，开发模式下 Vite 运行于 5173 并把 `/api` 代理到 1921（`vite.config.ts`）；`src/App.tsx` 对 `/api/state` 轮询，过渡期 1 200 ms、稳态 4 000 ms，预热窗 20 秒，ESC 返回首页；`src/config-cache.ts` 为两级缓存（模块内存 + `localStorage`，键 `moonbot.cfgcache.v1.<scope>::<key>`），页面挂载先用真实缓存渲染，无缓存时不使用出厂默认值替代（渲染空值并禁用，等待回包）；`src/pages/WebView.tsx` 以内嵌窗口打开 NapCat WebUI、DSH Web、桥控制台，`iframeBlocked` / `iframeBlockReason` 由后端在 `/api/open` 给出。
+管理端与浏览器前端：生产模式下前端产物由 `127.0.0.1:1921` 静态托管、`/api/*` 同源直取，开发模式下 Vite 运行于 5173 并把 `/api` 代理到 1921（`vite.config.ts`）；`src/App.tsx` 对 `/api/state` 轮询，过渡期 1 200 ms、稳态 4 000 ms，预热窗 20 秒，ESC 返回首页；`src/config-cache.ts` 为两级缓存（模块内存 + `localStorage`，键 `kizuna.cfgcache.v1.<scope>::<key>`），页面挂载先用真实缓存渲染，无缓存时不使用出厂默认值替代（渲染空值并禁用，等待回包）；`src/pages/WebView.tsx` 以内嵌窗口打开 NapCat WebUI、DSH Web、桥控制台，`iframeBlocked` / `iframeBlockReason` 由后端在 `/api/open` 给出。
 
 管理端与目标机（隧道映射由 `tunnelMapFor()` 生成）：`ssh2` 命令执行用于探测、安装、systemd 操作与自检；本地监听隧道为 13000 → NapCat WebUI、13001 → OneBot HTTP、13080 → DSH Web、13100 → 桥控制台；流式转发使打包产物不落目标机中间文件，直接写入解包命令的标准输入（`streamPipe`）；`ensureTunnels()` 每次检查四条隧道是否处于监听，缺失即重建。【据仓库记载】原稿记录时点曾出现「SSH 连接返回 `connected=true` 而四条隧道均未监听」的状态，对端转发不可用，实现因而改为每次检查后重建缺失隧道；本轮未复现该状态。
 
@@ -435,7 +435,7 @@ else echo none; fi
 
 装配流程：`qq-bridge/src/bridge.js` 启动时以异步、幂等、非阻塞方式执行三项装配，三项均每次启动执行、不依赖安装标记：（1）`installPresets(target)` 每次启动刷新 preset——preset 是桥自带的代码资产（persona、`[WAKE TYPES]`、`[RULES]`），不属所有者数据，早期实现「装过一次即由标记全跳过」导致修改 `agent.cordis.yml` 后重启桥不会装入新 preset；（2）`watchOverrideFiles()` 监视 `persona.md` 与 `speech-rules.md`，变更后重新合成进已安装的 preset（`qq-bridge/src/lib/preset-compose.js:123`）【已核验】；（3）`ensureBuiltinPlugins(target)` 每次启动幂等装配（link + profile 注册 + settings 的 memory 段），该步骤不能只放在被安装标记拦截的 `installToIsolatedDsh()` 内，否则既有安装无法升级。
 
-两份 `cordis.patch.yml`（配置层顺序为 bundles → profile 级 → home 级 → `--patch`）：`<home>/profiles/<profile>/cordis.patch.yml` 承载 agent-presets overlay 与三组 MCP server（含压缩代理参数），由 `lib/dsh-side.js` 的 `patchProfileCordis()` 维护（`qq-bridge/src/lib/dsh-side.js:302`）【已核验】；`<home>/cordis.patch.yml`（home 级）承载上下文压缩与工具结果剪枝策略，由 `lib/dsh-compaction.js` 的 `syncDshCompactionPatch()` 维护（`qq-bridge/src/lib/dsh-compaction.js:198`）【已核验】。写入 home 级文件不影响承载 MCP 挂载的 profile 级文件；profile 的 `patchReload: live` 同时监视 home 级 patch 文件，因此写入后不必重启 DSH。home 级内容以 `# === qq-bridge compaction BEGIN/END ===` 标记包裹，只替换标记之间的段落，用户自有 overlay 原样保留；profile 级以 `# === qq-bridge MCP BEGIN/END ===` 包裹，三组 MCP server 的 `env` / `command` / `args` 全部位于其中，`toolCallTimeoutMs: 725000` 只加在 `mcp-napcat` 上。【据仓库记载】
+两份 `cordis.patch.yml`（配置层顺序为 bundles → profile 级 → home 级 → `--patch`）：`<home>/profiles/<profile>/cordis.patch.yml` 承载 agent-presets overlay 与三组 MCP server（含压缩代理参数），由 `lib/dsh-side.js` 的 `patchProfileCordis()` 维护（`qq-bridge/src/lib/dsh-side.js:502` 起）【已核验】；`<home>/cordis.patch.yml`（home 级）承载上下文压缩与工具结果剪枝策略，由 `lib/dsh-compaction.js` 的 `syncDshCompactionPatch()` 维护（`qq-bridge/src/lib/dsh-compaction.js:198`）【已核验】。写入 home 级文件不影响承载 MCP 挂载的 profile 级文件；profile 的 `patchReload: live` 同时监视 home 级 patch 文件，因此写入后不必重启 DSH。home 级内容以 `# === qq-bridge compaction BEGIN/END ===` 标记包裹，只替换标记之间的段落，用户自有 overlay 原样保留；profile 级以 `# === qq-bridge MCP BEGIN/END ===` 包裹，三组 MCP server 的 `env` / `command` / `args` 全部位于其中，`toolCallTimeoutMs: 725000` 只加在 `mcp-napcat` 上。【据仓库记载】
 
 会话日志的写入边界：桥不直接改写 DSH 的会话日志，依据写于 `lib/dsh-compaction.js:4-9`，来自对 DSH 0.1.2-rc.1 源码的阅读——`dsh-session` 的模型历史由内存日志经 `deriveMessages()` 派生、文件仅在冷恢复时读取，改文件对运行中会话无影响；`dsh-session-persistence-jsonl` 的日志为 seq 连续的仅追加记录，删行触发 `corrupt session log: seq gap`，默认 zstd 帧带校验和、正文改动导致校验失败；实现注明「每个会话一个活动写入方」，外部同时写入会相互冲突；受支持的裁剪路径仅一条，即由 DSH 自身通过 surface `replace` 改写历史（`dsh-compaction-tool-result-pruner` 剪枝与 `dsh-compaction-basic` 摘要）。
 
@@ -455,7 +455,7 @@ else echo none; fi
 
 投递模式的选择依据（`prompt-deliver.js:137-157`）来自 DSH 的 inbox 队列结构：`queue` 走 `agent.followup()` → inbox 的 `next-turn` 队列，仅在回合循环的下一次迭代被 claim，当前回合不结束时（模型处于长轮询，或进程重启后停留在 running）该消息永久停留于 `next-turn`，模型不可见且桥不接收任何事件；`steer` 走 `agent.steer()` → inbox 的 `next-step` 队列，`inbox.claim()` 总是先取走全部 `next-step`，回合进行中则在下一个 step 边界交付、agent 空闲则立即开回合并取走，该模式为全定义，不存在搁浅状态。投递队列（`prompt-deliver.js:17` 起）【已核验】为 `QUEUE_MAX = 50`、同 key 去重、退避 `min(3000·2^(n-1), 60000)`（`prompt-deliver.js:97`）【已核验】，连续失败 5 次后降为每 60 秒一次；DSH 未就绪时消息入队不丢弃，就绪后按序补投（`flushQueue`）。【据仓库记载】
 
-注入正文构成：唤醒正文只携带数据行，行为规则全部位于预设的系统提示词（`[WAKE TYPES]`），正文骨架由 `buildWakePrompt()` 组装（`wake-send.js:400-550`）。行为：`[Token] <令牌>`（本会话当前有效令牌，发送类工具需要，`wake-send.js:415`）；`[Session] <key>`（确切的会话键，工具层不推断 key，缺失时以该行为准，`wake-send.js:344`、`415`）；`[Style] …`（每轮一句语感提示，文本取自 `config.json` 的 `prompt.styleLine`，默认 `[Style] 说人话：短、有态度，别讲课别列举`，`wake-send.js:360-374`）；`[OWNER]` / `[NOT-OWNER]`（所有者私聊带前者，非所有者私聊显式写后者，修正所有者识别错误，`wake-send.js:404-411`）；`[Status]`（`N unread; waiting on …; last from …; said Nmin ago`；不包含时间行——原 `[Now]` 表示组装时刻、模型执行时已过期，时刻查询改由 MCP 工具 `get_time` 现取，`wake-send.js:484-485`，工具见 `qq-bridge/src/mcp-napcat-safe.js`）；`[Wake]` / `[WakeRef]`（当前模式、时长、触发器，以及配置的插话概率、当前生效值与来源，`wake-send.js:326-336`、`496`）；`[Recall]` / `[Profile]` / 联系人行（长期记忆摘要，永久层上限约 700 字符、14 条，与会话对象档案，`wake-send.js:436-454`）；`[Unread n]` / `[Mid-turn]` / `[Note]`（未读与在途注入块）；`[PERSONA]` / `[SPEECH RULES]`（按需注入）。
+注入正文构成：唤醒正文只携带数据行，行为规则全部位于预设的系统提示词（`[WAKE TYPES]`），正文骨架由 `buildWakePrompt()` 组装（`wake-send.js:400-550`）。行为：`[Token] <令牌>`（本会话当前有效令牌，发送类工具需要，`wake-send.js:415`）；`[Session] <key>`（确切的会话键，工具层不推断 key，缺失时以该行为准，`wake-send.js:344`、`415`）；`[Style] …`（每轮一句语感提示，文本取自 `config.json` 的 `prompt.styleLine`，默认 `[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.`，`wake-send.js:360-374`）；`[OWNER]` / `[NOT-OWNER]`（所有者私聊带前者，非所有者私聊显式写后者，修正所有者识别错误，`wake-send.js:404-411`）；`[Status]`（`N unread; waiting on …; last from …; said Nmin ago`；不包含时间行——原 `[Now]` 表示组装时刻、模型执行时已过期，时刻查询改由 MCP 工具 `get_time` 现取，`wake-send.js:484-485`，工具见 `qq-bridge/src/mcp-napcat-safe.js`）；`[Wake]` / `[WakeRef]`（当前模式、时长、触发器，以及配置的插话概率、当前生效值与来源，`wake-send.js:326-336`、`496`）；`[Recall]` / `[Profile]` / 联系人行（长期记忆摘要，永久层上限约 700 字符、14 条，与会话对象档案，`wake-send.js:436-454`）；`[Unread n]` / `[Mid-turn]` / `[Note]`（未读与在途注入块）；`[PERSONA]` / `[SPEECH RULES]`（按需注入）。
 
 人设与发言规则由 `lib/preset-compose.js` 合成进系统提示词，唤醒正文默认不重复注入；判据为 `shouldInjectPersonaBlock()`（`wake-send.js:306`）【已核验】——preset 内的版本为当前版本（`getComposedPersonaStamp() === runtimeOverrideStamp()`）且该会话无「需要补注入」标记时不注入，否则注入一次。注入上限以字符计（`wake-send.js:248-250`）【已核验】：`persona.md` 16 000 字符、`speech-rules.md` 12 000 字符，策略均为保留头部与尾部、尾部 2 500 字符必定保留，截断范围写入日志（`wake-send.js:260-271`）。早期实现仅保留头部并整体丢弃尾部，导致「在文件末尾追加规则」不产生效果；文件变更后由 `watchOverrideFiles()`（`lib/preset-compose.js`，由 `bridge.js:288` 装配）重新合成进预设，运行中的既有会话由 `markStalePersonaReinjects()` 在启动时标记一次补注入。【据仓库记载】
 
@@ -505,9 +505,9 @@ runningTurn = agentRunningSessions.has(sessionId)   // DSH 权威状态
 
 ### 工具面
 
-三组 MCP server 由 `lib/dsh-side.js` 的 `mcpBlock()`（`qq-bridge/src/lib/dsh-side.js:252`）【已核验】写入 profile 的 `cordis.patch.yml`：`mcp-napcat`（serverName `napcat`，脚本 `qq-bridge/src/mcp-napcat-safe.js`）承载 QQ 与 NapCat 能力主体；`mcp-napcat-host`（`napcat-host`，`qq-bridge/src/mcp-host-server.js`）承载 `qq_learning_corpus`、`qq_learning_submit`、`napcat_status`，进程控制在显式开启前不注册；`mcp-web-search-safe`（`web-search-safe`，`qq-bridge/src/mcp-web-search-safe.js`）承载 `web_search`、`web_fetch`。
+三组 MCP server 由 `lib/dsh-side.js` 的 `mcpBlock()`（`qq-bridge/src/lib/dsh-side.js:392` 起）【已核验】写入 profile 的 `cordis.patch.yml`：`mcp-napcat`（serverName `napcat`，脚本 `qq-bridge/src/mcp-napcat-safe.js`）承载 QQ 与 NapCat 能力主体；`mcp-napcat-host`（`napcat-host`，`qq-bridge/src/mcp-host-server.js`）承载 `qq_learning_corpus`、`qq_learning_submit`、`napcat_status`，进程控制在显式开启前不注册；`mcp-web-search-safe`（`web-search-safe`，`qq-bridge/src/mcp-web-search-safe.js`）承载 `web_search`、`web_fetch`（搜索内核 `qq-bridge/src/lib/web-search.js` 同时被桥进程内的 pixiv「名字 → 画师号」直接 import，不再 spawn 子进程）。
 
-工具注册数按源码文本计数（`registerTool(` 为本地包装函数，其中一次出现为函数定义，`mcp-napcat-safe.js:734`）【已核验】：`mcp-napcat-safe.js` 中 `registerTool(` 出现 92 次（含 1 处函数定义，调用 91 次）、`server.tool(` 1 次（由包装函数内部调用），注册 91 个工具，含 `qq_send_message`、`qq_reply`、`qq_get_unread_messages`、`qq_mark_read`、`qq_wait_for_messages`、`qq_memory_*`、`qq_slang_*`、`qq_character_*`、`qq_qzone_*`、`qq_pixiv_search`、`qq_send_voice`、`qq_transcribe_voice`、`qq_video_parse`、`qq_meme_search`、`qq_schedule_*`、`qq_crosschat_*` 等，若干工具受 `cfg.social.tools.*` 开关包裹、运行时不注册；`mcp-host-server.js` 中 `server.tool(` 5 次，注册 5 个（`qq_learning_corpus`、`qq_learning_submit`、`napcat_status`、`start_napcat`、`stop_napcat`，后两项仅在 `napcat.allowProcessControl === true` 时注册）；`mcp-web-search-safe.js` 中 `server.tool(` 2 次，注册 `web_search`、`web_fetch`。`mcp-host-server.js` 与 MCP 客户端的约定写于该文件头注释——由 DSH 的 MCP 客户端 spawn；`qq_learning_submit` 不放入 napcat 组，因为学习会话只加载 `mcp__napcat-host__` 组，写作 `mcp__napcat__qq_learning_submit` 会成为未知工具。【据仓库记载】
+工具注册数按源码文本计数（`registerTool(` 为本地包装函数，其中一次出现为函数定义，`mcp-napcat-safe.js:734`）【已核验】：`mcp-napcat-safe.js` 中 `registerTool(` 出现 95 次（含 1 处函数定义，调用 94 次）、`server.tool(` 1 次（由包装函数内部调用），注册 94 个工具，含 `qq_send_message`、`qq_reply`、`qq_get_unread_messages`、`qq_mark_read`、`qq_wait_for_messages`、`qq_memory_*`、`qq_slang_*`、`qq_character_*`、`qq_qzone_*`、`qq_pixiv_search`、`qq_send_voice`、`qq_transcribe_voice`、`qq_video_parse`、`qq_meme_search`、`qq_schedule_*`、`qq_crosschat_*` 等，若干工具受 `cfg.social.tools.*` 开关包裹、运行时不注册；`mcp-host-server.js` 中 `server.tool(` 5 次，注册 5 个（`qq_learning_corpus`、`qq_learning_submit`、`napcat_status`、`start_napcat`、`stop_napcat`，后两项仅在 `napcat.allowProcessControl === true` 时注册）；`mcp-web-search-safe.js` 中 `server.tool(` 2 次，注册 `web_search`、`web_fetch`。`mcp-host-server.js` 与 MCP 客户端的约定写于该文件头注释——由 DSH 的 MCP 客户端 spawn；`qq_learning_submit` 不放入 napcat 组，因为学习会话只加载 `mcp__napcat-host__` 组，写作 `mcp__napcat__qq_learning_submit` 会成为未知工具。【据仓库记载】
 
 工具 schema 体积实测快照（测量批次 2026-09-24，工具表不含 `qq_send_burst`，数据源 `qq-bridge/state/tool-schema-stats.json`）：`totalChars` 95 595 字符；`registered` / `available` 均为 91；`approxTokensPerStep` 31 675；`tier off` 91 个 / 95 595 字符（份额 1.0000）、`tier low` 68 个 / 79 162 字符（0.8281）、`tier medium` 42 个 / 40 047 字符（0.4189）、`tier high` 33 个 / 33 344 字符（0.3488）、`tier extreme` 9 个 / 6 497 字符（0.0680）。
 
@@ -515,9 +515,9 @@ runningTurn = agentRunningSessions.has(sessionId)   // DSH 权威状态
 
 描述压缩档（`lib/tool-schema-compress.js`）：`SCHEMA_LEVELS = ['off','medium','high']`（`tool-schema-compress.js:33`）【已核验】，配置键 `social.slimTools.schemaLevel`，压缩对象为描述文本、工具与参数数量不变；`off` 为描述原样下发，`medium` 为工具与参数的描述均只保留第一句，`high` 为不发送描述、只保留工具名、参数名、类型、枚举与必填。该模块不提供 mcp-compressor 的 `low` 档，因为重建 union 容器会把描述复制进每个分支而导致体积增加；重建容器后必须回填容器自身的描述（`withOwnDesc`，`tool-schema-compress.js:76`）【已核验】，否则 `z.union([...]).optional().describe('Group id')` 一类参数描述丢失。`social.slimTools` 在注册期排除工具、可减少请求体积，`social.tools.*` 只在调用期拒绝、不减少体积。【据仓库记载】
 
-MCP 压缩代理的配置位于 `config.json` 的 `social.toolCompressor`，装配位于 `lib/dsh-side.js:171-296`；默认恒定开启（`tc.enabled !== false`），仅显式 `enabled: false` 时回到直连。进程形态为代理进程：DSH 不直连 `mcp-napcat` 而连接代理，代理将工具压缩为两个包装工具（`<server>_invoke_tool` / `<server>_get_tool_schema`），工具清单嵌入包装工具的描述；档位语义为 `low` 去冗余、`medium` 每条描述只留第一句、`high` 不发送描述、`max` 不发送工具清单并改用包装工具；适用范围仅 `mcp-napcat` 一路（工具最多、体积最大），另两组保持直连；后备路径要求压缩机未安装或无法启动时不得使工具表消失，先执行廉价探测，探测失败则直连并把原因写入日志（`dsh-side.js:179-181`、`221-247`）。桥侧配套为 `core/mux.js` 的 `unwrapCompressedToolName(name, rawArgs)`（`mux.js:129`）【已核验】，把包装工具还原为后端真实工具名；代理模式下真实目标位于 `args.tool_name`，而桥下游逻辑（发送类判定、引号补全、幂等账本、抽签登记、回合收尾，共 49 处）均按真实工具名判定，未解包时该批逻辑全部失效（`mux.js:802-811`）。【据仓库记载】
+MCP 压缩代理的配置位于 `config.json` 的 `social.toolCompressor`，装配位于 `lib/dsh-side.js` 的压缩代理函数（`normalizeCompressorLevel` `:386` 起、`compressorCandidates` `:398` 起、`resolveToolCompressor` `:424` 起、`mcpBlock` `:452` 起）；默认恒定开启（`tc.enabled !== false`），仅显式 `enabled: false` 时回到直连。进程形态为代理进程：DSH 不直连 `mcp-napcat` 而连接代理，代理将工具压缩为两个包装工具（`<server>_invoke_tool` / `<server>_get_tool_schema`），工具清单嵌入包装工具的描述；档位语义为 `low` 去冗余、`medium` 每条描述只留第一句、`high` 不发送描述、`max` 不发送工具清单并改用包装工具；适用范围仅 `mcp-napcat` 一路（工具最多、体积最大），另两组保持直连；后备路径要求压缩机未安装或无法启动时不得使工具表消失，先执行廉价探测，探测失败则直连并把原因写入日志（`dsh-side.js` 的 `resolveToolCompressor` 探测分支与 `mcpBlock`，`:424` 起 / `:452` 起）。桥侧配套为 `core/mux.js` 的 `unwrapCompressedToolName(name, rawArgs)`（`mux.js:129`）【已核验】，把包装工具还原为后端真实工具名；代理模式下真实目标位于 `args.tool_name`，而桥下游逻辑（发送类判定、引号补全、幂等账本、抽签登记、回合收尾，共 49 处）均按真实工具名判定，未解包时该批逻辑全部失效（`mux.js:802-811`）。【据仓库记载】
 
-体积测量（测量批次为原稿记录时点，样本 90 个工具）：MCP 压缩代理相对完整工具表（`dsh-side.js:174-176`）的体积为 `low` 38.8%、`medium` 14.0%、`high` 6.2%、`max` 3.6%，同一窗口内 `napcat_get_tool_schema` 调用次数为 0；描述压缩档以 wire 格式（真实传输格式）测得 `off` 89 603 字符（基准 1.0）、`medium` 61 587 字符（68.7%）、`high` 27 109 字符（30.2%）。工具名归一化由 `bareToolName()`（`mcp-napcat-safe.js` 的 `registerTool` 附近、`tool-tiers.js:130`）去除 `mcp__server__` 前缀，名单中的工具名允许带或不带该前缀（写 `mcp__napcat__qq_x` 与写 `qq_x` 等价），缺少该归一化时精简名单整体不命中。
+体积测量（测量批次为原稿记录时点，样本 90 个工具）：MCP 压缩代理相对完整工具表（`dsh-side.js` 的 `COMPRESSOR_LEVELS`，`:385`）的体积为 `low` 38.8%、`medium` 14.0%、`high` 6.2%、`max` 3.6%，同一窗口内 `napcat_get_tool_schema` 调用次数为 0；描述压缩档以 wire 格式（真实传输格式）测得 `off` 89 603 字符（基准 1.0）、`medium` 61 587 字符（68.7%）、`high` 27 109 字符（30.2%）。工具名归一化由 `bareToolName()`（`mcp-napcat-safe.js` 的 `registerTool` 附近、`tool-tiers.js:130`）去除 `mcp__server__` 前缀，名单中的工具名允许带或不带该前缀（写 `mcp__napcat__qq_x` 与写 `qq_x` 等价），缺少该归一化时精简名单整体不命中。
 
 ### 会话、预设、热加载与计量
 
@@ -539,7 +539,7 @@ $$\text{cost} = \frac{\text{命中} \times p_{\text{Hit}} + \text{未命中} \ti
 
 ### 隔离实例的解析与安装
 
-`qq-bridge/src/lib/dsh-side.js`（613 行）负责定位并安装隔离 DSH：目标解析 `resolveDshTarget`（`:57-74`）；管理器隔离目录 `readManagerIsolatedHome`（`:77-87`）；预设安装 `installPresets`（`:150`，只安装 `qq-chat` 一个预设）；预设覆盖同步 `syncPresetOverrides`（`:157-166`，调用点 `:162`）；内置插件 `ensureBuiltinPlugins`；安装版本 `INSTALL_VERSION = 1`（`:25`）；MCP 挂载块 `mcpBlock()`（`:252-299`，三个 server 与压缩代理）；覆盖层 `:311-316` 为 `{default: 'standard', includeUserRoot: true}`。安装流程在桥启动时以异步非阻塞方式执行（`void (async () => { … })()`，`qq-bridge/src/bridge.js:274-309`），顺序为 `resolveDshTarget()` → `installPresets(target)` → `watchOverrideFiles(...)` → `ensureBuiltinPlugins(target)` → `isInstalled(target)` → `installToIsolatedDsh()`【已核验】。预设覆盖文件变更时监听后重新同步（`qq-bridge/src/lib/dsh-side.js:157-166`）。
+`qq-bridge/src/lib/dsh-side.js`（2026-09-28 复核：765 行 / 45 173 字节；本卡行号为该次复核值）负责定位并安装隔离 DSH：目标解析 `resolveDshTarget`（`:58` 起）；管理器隔离目录 `readManagerIsolatedHome`（`:78` 起）；预设安装 `installPresets`（`:283`，只安装 `qq-chat` 一个预设）；预设同步为 `syncPresetToolWeb`（`:186` 起，把 preset 的 `tool-web.search` 钉成 `false` —— 宿主 `web_search` 恒不注册，搜索只走桥自己的 `mcp__web-search-safe__web_search`）与 `stripLegacyModsearchOverlay`（`:242` 起，幂等摘掉老版本写下的 `# === modsearch overlay …` 覆盖行；两者的来由见该文件头部注释）；内置插件 `ensureBuiltinPlugins`（`:717` 起，只剩 qq-mode-console + 记忆插件）；安装版本 `INSTALL_VERSION = 1`（`:26`）；MCP 挂载块 `mcpBlock()`（`:403` 起，三个 server 与压缩代理）；覆盖层 `:462-467` 为 `{default: 'standard', includeUserRoot: true}`。安装流程在桥启动时以异步非阻塞方式执行（`void (async () => { … })()`，`qq-bridge/src/bridge.js:274-309`），顺序为 `resolveDshTarget()` → `installPresets(target)` → `watchOverrideFiles(...)` → `ensureBuiltinPlugins(target)` → `isInstalled(target)` → `installToIsolatedDsh()`【已核验】。预设覆盖文件变更时监听后重新同步（`qq-bridge/src/lib/dsh-side.js:283` 起）。
 
 ### 会话创建与视觉模型
 
@@ -572,9 +572,9 @@ $$\text{cost} = \frac{\text{命中} \times p_{\text{Hit}} + \text{未命中} \ti
 
 ### 预设与工具白名单
 
-预设目录为 `qq-bridge/dsh/agent-presets/qq-chat/`：`agent.cordis.yml` 43,952 字节 / 215 行（预设主体，工具结果剪枝子插件参数 `thresholdChars: 25000`、`headChars: 22800`、`tailChars: 2000` 位于 `:212-215`）；`preset.yml` 235 字节 / 3 行（`name: QQ 聊天角色`、`order: 10`）；`qq-tool-restrict.mjs` 4,905 字节 / 94 行（工具白名单插件）。
+预设目录为 `qq-bridge/dsh/agent-presets/qq-chat/`：`agent.cordis.yml` 44,976 字节 / 225 行（2026-09-28 复核）（预设主体，工具结果剪枝子插件参数 `thresholdChars: 25000`、`headChars: 22800`、`tailChars: 2000` 位于 `:221-224`）；`preset.yml` 235 字节 / 3 行（`name: QQ 聊天角色`、`order: 10`）；`qq-tool-restrict.mjs` 5,724 字节 / 103 行（2026-09-28 复核）（工具白名单插件）。
 
-`qq-tool-restrict.mjs` 的白名单常量 `SAFE_PREFIXES` 位于 `:39-43`，`SAFE_EXACT` 位于 `:56-59`；`apply(ctx)` 分两步（`:66-84`、`:87-93`），其中日志截断为 `slice(0, 160)`（`:82`）；被显式排除的开发类工具名共 23 个（`:12-34`）【已核验】。该预设未挂载 `dsh-tool-ask-user` 与 `dsh-tool-todo`，相关说明以注释形式存在（`:187-195`）【已核验】。工具注册受三道限制：档位裁剪 `toolAllowedByTier`（`qq-bridge/src/mcp-napcat-safe.js:741`）、配置开关（35 处 `if (cfg.social.tools.* / sticker / meme)` 分支）、预设白名单（`SAFE_PREFIXES` 与 `SAFE_EXACT` 之外的工具被拒绝）。
+`qq-tool-restrict.mjs` 的白名单常量 `SAFE_PREFIXES` 位于 `:39-43`，`SAFE_EXACT` 位于 `:56-67`（2026-09-28 先增补 `web_search`、同日随 ModSearch 移除又删掉，现只剩 `ask_user_question` / `todo_write`）；`apply(ctx)` 分两步（`:69-92`、`:95-101`），其中日志截断为 `slice(0, 160)`（`:90`）；被显式排除的开发类工具名共 23 个（`:12-34`）【已核验】。该预设未挂载 `dsh-tool-ask-user` 与 `dsh-tool-todo`，相关说明以注释形式存在（`:196-204`）【已核验】。工具注册受三道限制：档位裁剪 `toolAllowedByTier`（`qq-bridge/src/mcp-napcat-safe.js:741`）、配置开关（35 处 `if (cfg.social.tools.* / sticker / meme)` 分支）、预设白名单（`SAFE_PREFIXES` 与 `SAFE_EXACT` 之外的工具被拒绝）。
 
 ### 宿主服务工具
 
@@ -597,13 +597,13 @@ $$\text{cost} = \frac{\text{命中} \times p_{\text{Hit}} + \text{未命中} \ti
 
 ## 9. 打包与分发
 
-安装包与 Electron 壳由仓库外的打包工程产出；本机安装链路与 SSH 克隆部署链路互不依赖。`C:\Users\17367\Desktop\QQ-Bridge-packaging` 为打包工程根（NSIS 脚本、壳源码、装配产物），不在本仓库，其中 `build-installer-full.nsi` 为 NSIS 安装包脚本（输出 `MoonBot Pro Setup.exe`）、`moonbot-app\main.js` 为 Electron 壳主进程、`full\app\` 为被装配的运行树（`server/`、`dist/`、`qq-bridge/`、`dsh/`、`napcat-onekey/`、`qbm-node.exe`）；`C:\Users\17367\Desktop\MoonBot Public` 为源码仓库（运行时代码来源），在本仓库；`D:\MoonBot\resources\runtime` 为本机已安装副本（一份运行树拷贝，内容可能与源码树不同），不在本仓库。
+安装包与 Electron 壳由仓库外的打包工程产出；本机安装链路与 SSH 克隆部署链路互不依赖。`C:\Users\17367\Desktop\QQ-Bridge-packaging` 为打包工程根（NSIS 脚本、壳源码、装配产物），不在本仓库，其中 `build-installer-full.nsi` 为 NSIS 安装包脚本（输出 `Kizuna Pro Setup.exe`）、`kizuna-app\main.js` 为 Electron 壳主进程、`full\app\` 为被装配的运行树（`server/`、`dist/`、`qq-bridge/`、`dsh/`、`napcat-onekey/`、`qbm-node.exe`）；`C:\Users\17367\Desktop\Kizuna Public` 为源码仓库（运行时代码来源），在本仓库；`D:\Kizuna\resources\runtime` 为本机已安装副本（一份运行树拷贝，内容可能与源码树不同），不在本仓库。
 
-打包侧已核对的事实（依据 `build-installer-full.nsi` 与 `moonbot-app/main.js`）：安装包由 NSIS 3 构建，输出 `MoonBot Pro Setup.exe`，默认安装到 `%LOCALAPPDATA%\Programs\MoonBot`，`RequestExecutionLevel user`；安装包分为三个 Section——核心管理端（必需）、运行时层（桥 + DSH + NapCat，整块可选）、桌面快捷方式（可选）；核心管理端安装 `server/`、`dist/`、`node_modules/`、`qbm-node.exe`、`start-manager.vbs`、`start-debug.cmd`、`app.ico`；运行时层安装到 `$INSTDIR\qq-bridge`、`$INSTDIR\dsh`、`$INSTDIR\napcat-onekey`；卸载脚本只终止路径位于本安装目录下的 `qbm-node` / `NapCatWinBootMain` / `QQ` 进程（`$_.Path -like '$INSTDIR*'`）；壳主进程以随包 `qbm-node.exe` 隐藏启动后端（`server/index.js`，`127.0.0.1:1921`），轮询后端就绪后以独立 `BrowserWindow` 加载本地界面（`main.js` 头部注释与 `loadURL(urlFor(backendPort))`）；端口可退避——`QBM_API_PORT` 环境变量传入，1921 被无关程序占用时改用备用端口，不抢占其它进程的端口，只复用可确认属于自身的后端；关窗顺序为先 `POST /api/shutdown`（8~12 秒超时）请求收尾、再 `taskkill /pid <后端> /T /F`、最后由后端自带的守卫进程承担后备清理（`main.js` 的 `requestGracefulShutdown()` / `shutdownEverything()`）；壳文件名必须为 `MoonBot`（`win.executableName`），因为 `server/index.js` 的守卫按进程名 `/^MoonBot$/i` 识别应用本体；应用单实例由 `app.requestSingleInstanceLock()` 保证。
+打包侧已核对的事实（依据 `build-installer-full.nsi` 与 `kizuna-app/main.js`）：安装包由 NSIS 3 构建，输出 `Kizuna Pro Setup.exe`，默认安装到 `%LOCALAPPDATA%\Programs\Kizuna`，`RequestExecutionLevel user`；安装包分为三个 Section——核心管理端（必需）、运行时层（桥 + DSH + NapCat，整块可选）、桌面快捷方式（可选）；核心管理端安装 `server/`、`dist/`、`node_modules/`、`qbm-node.exe`、`start-manager.vbs`、`start-debug.cmd`、`app.ico`；运行时层安装到 `$INSTDIR\qq-bridge`、`$INSTDIR\dsh`、`$INSTDIR\napcat-onekey`；卸载脚本只终止路径位于本安装目录下的 `qbm-node` / `NapCatWinBootMain` / `QQ` 进程（`$_.Path -like '$INSTDIR*'`）；壳主进程以随包 `qbm-node.exe` 隐藏启动后端（`server/index.js`，`127.0.0.1:1921`），轮询后端就绪后以独立 `BrowserWindow` 加载本地界面（`main.js` 头部注释与 `loadURL(urlFor(backendPort))`）；端口可退避——`QBM_API_PORT` 环境变量传入，1921 被无关程序占用时改用备用端口，不抢占其它进程的端口，只复用可确认属于自身的后端；关窗顺序为先 `POST /api/shutdown`（8~12 秒超时）请求收尾、再 `taskkill /pid <后端> /T /F`、最后由后端自带的守卫进程承担后备清理（`main.js` 的 `requestGracefulShutdown()` / `shutdownEverything()`）；壳文件名必须为 `Kizuna`（`win.executableName`），因为 `server/index.js` 的守卫按进程名 `/^Kizuna$/i` 识别应用本体；应用单实例由 `app.requestSingleInstanceLock()` 保证。
 
-运行时侧对应实现：`qbm-node.exe`（随包 Node 运行时）对应「全部子进程以 `process.execPath` 启动」（DSH、桥、守卫、隐藏器），`process.execPath` 自身为 node 时 `--expose-internals` 一类命令行标志才可用；`$INSTDIR\server` 对应 `RUNTIME_ROOT` 为 `server/index.js` 的上两级目录（NSIS 布局下即 `$INSTDIR`，electron-builder 布局下为 `resources\runtime`，本机 `D:\MoonBot\resources\runtime` 即该形态）；`$INSTDIR\dsh` 对应随包 DSH CLI，管理端配置项 `instances.dshIsolated.dshCli` 指向它（本机实测值形如 `D:\MoonBot\resources\runtime\dsh\node_modules\.bin\dsh.cmd`）；`$INSTDIR\napcat-onekey` 对应 `findNapcatOneKeyAll()` 的首个候选根；`start-manager.vbs` 隐藏启动壳与后端以避免产生控制台窗口（仓库内另有 `tools/start-manager-hidden.vbs`、`tools/restart-manager.ps1` 供开发使用）；「卸载时按路径终止进程」与「不处理用户本机已安装的 QQ」同源，只匹配安装目录前缀。目录命名差异：仓库内 `dsh-runtime/` 在安装树内为 `dsh/`。【未核验】映射规则位于打包工程内部，本文不做推断。
+运行时侧对应实现：`qbm-node.exe`（随包 Node 运行时）对应「全部子进程以 `process.execPath` 启动」（DSH、桥、守卫、隐藏器），`process.execPath` 自身为 node 时 `--expose-internals` 一类命令行标志才可用；`$INSTDIR\server` 对应 `RUNTIME_ROOT` 为 `server/index.js` 的上两级目录（NSIS 布局下即 `$INSTDIR`，electron-builder 布局下为 `resources\runtime`，本机 `D:\Kizuna\resources\runtime` 即该形态）；`$INSTDIR\dsh` 对应随包 DSH CLI，管理端配置项 `instances.dshIsolated.dshCli` 指向它（本机实测值形如 `D:\Kizuna\resources\runtime\dsh\node_modules\.bin\dsh.cmd`）；`$INSTDIR\napcat-onekey` 对应 `findNapcatOneKeyAll()` 的首个候选根；`start-manager.vbs` 隐藏启动壳与后端以避免产生控制台窗口（仓库内另有 `tools/start-manager-hidden.vbs`、`tools/restart-manager.ps1` 供开发使用）；「卸载时按路径终止进程」与「不处理用户本机已安装的 QQ」同源，只匹配安装目录前缀。目录命名差异：仓库内 `dsh-runtime/` 在安装树内为 `dsh/`。【未核验】映射规则位于打包工程内部，本文不做推断。
 
-分发链：源码仓库 → 打包工程装配 `full\app\`（`server/` + `dist/` + `qq-bridge/` + `dsh/` + `napcat-onekey/` + `qbm-node.exe`）→ 打包工程产出 `MoonBot Pro Setup.exe` → 安装到 `%LOCALAPPDATA%\Programs\MoonBot` 或自定义目录 → 首次启动（壳启动后端 → 前端引导）；另有独立的 SSH 克隆部署链，把已运行的主机复制到另一台 Linux 主机。
+分发链：源码仓库 → 打包工程装配 `full\app\`（`server/` + `dist/` + `qq-bridge/` + `dsh/` + `napcat-onekey/` + `qbm-node.exe`）→ 打包工程产出 `Kizuna Pro Setup.exe` → 安装到 `%LOCALAPPDATA%\Programs\Kizuna` 或自定义目录 → 首次启动（壳启动后端 → 前端引导）；另有独立的 SSH 克隆部署链，把已运行的主机复制到另一台 Linux 主机。
 
 ## 10. 可靠性与可观测性
 
@@ -623,6 +623,24 @@ $$\text{cost} = \frac{\text{命中} \times p_{\text{Hit}} + \text{未命中} \ti
 | NapCat 文件缺失 / 应用退出但 NapCat 残留 | `napcat-repair.js` 从 `NapCat.Shell.zip` 补齐；关窗守卫清理 |
 | SSH 隧道静默失效 / 配置热加载失效 / token 计量缺口 | `ensureTunnels()` 每次重建缺失隧道；目录监听与 2 000 ms 轮询双路并用；DSH 权威计数对账补记 |
 | 配置被半截写入 / 标准输出断裂 | 全部配置写入走临时文件 + 备份 + rename，状态 JSON 走 `atomicWriteJson`（`qq-bridge/src/lib/json-fs.js:21`）【已核验】；实例日志直写与桥侧 EPIPE 守卫 |
+| 管理端 1921 被没退干净的后端占着（bind `EADDRINUSE`） | 显式接管 `app.listen` 的 `error`：占用者能说话 → 本进程 `exit(0)` 让壳复用；确认是本运行目录的 `qbm-node.exe` 且不响应 HTTP → 清掉它再 bind 一次；其它占用者写清 PID/路径后 `exit(4)`（2026-09-28，见下） |
+| 后端进程在会话中途消失（被外部结束 / 塌掉 / 按上面的逻辑让位退出） | 关窗守卫新增「后端看护」：`--manager` / `--manager-exe` / `--runtime` 三个参数由 `armNapcatGuardian()` 传入；主循环在"应用还在"的分支里每 2 秒检查一次后端 PID，没了就按壳的同一姿势重新拉起（10 分钟窗口内最多 3 次，刚拉起的后端 15 秒内又死则停手）（2026-09-28，见下） |
+
+「后端启动失败」这一条的完整链条（2026-09-28 使用方反馈，四种场景实测）：
+
+- 桌面壳 `ensureBackend()`（打包进 `app.asar` 的 `main.js`）先做一次只给 **800 ms** 的探测（"端口已被占用（可能是用户自启的旧实例）→ 直接复用"），没通才 spawn 后端，然后轮询 **45 秒**；拿不到响应即 `showErrorBox('后端启动失败，请查看日志')` + `app.exit(1)`。所以"后端启动失败"这句话永远只有两个可能：45 秒内 1921 上没有响应，或者壳自己找不到 `qbm-node.exe`。
+- 管理器这一侧原先只在 `app.listen(PORT, '127.0.0.1', cb)` 上挂了成功回调，**没有 `error` 监听**。bind 抛 `EADDRINUSE` 时该异常落到顶层 fatal-guard 被"拦下、不退出"，而此刻 listen 回调（`scheduleAutoStart` / `ensureGuardianArmed` / 开机自动连那 1.5 s 定时器）**一次都没跑**，进程里再没有任何定时器或 handle → Node **立刻以退出码 0 静默退出**。壳只在 `code !== 0` 时才写一行 `backend exited`，于是这条失败路径在 `kizuna-backend.log` 里完全不可见（实测旧版：0.5 秒内静默 exit 0，stdout 只有一行 fatal-guard 的 `listen EADDRINUSE`）。
+- 占着 1921 的是上一次没退干净（或卡住）的后端，它自己不会消失，于是**重开必失败**、重试多少次都一样 —— 这正是使用方看到的"后端启动失败，修复"。
+- 现在 `server/index.js`（`app.listen` 一带，`recoverFromListenError()`）显式接管：① 用裸 `GET /api/health HTTP/1.0` 探针问占用者能不能说话（2.5 秒超时；不引新依赖，`http` 这个名字在别处被当局部变量用过）→ 能说话就是已有管理器在跑，`exit(0)`，壳的探测随即成功并走它本来就有的"复用已运行后端"路径；② 不能说话 → `netstat -ano -p TCP` 取监听 1921 的 PID、`Get-Process -Id` 取 exe 路径，确认等于 `process.execPath`（即本运行目录的 `qbm-node.exe`）就 `taskkill /T /F` 后**重新 bind 一次**（同一个 Server 对象，自愈；口径与壳退出时 `stopBackend()` 的"按路径清 qbm-node"一致，绝不碰别人的进程）；③ 其它程序占着 → 如实写明 PID 与路径后 `exit(4)`，让壳的 `backend exited code=4` 成为可查线索。`onManagerListening()` 抽成具名函数是为了让自愈成功后能原样再跑一遍启动动作，`managerStarted` 保证只跑一次。
+- 实测四种场景（2026-09-28）：干净启动 1.4 秒内 200（正常路径一次探针都不做）；健康管理器占着 → 第二个进程 exit 0 且日志写明"复用"、原管理器继续服务；僵尸 `qbm-node.exe`（只 accept 不响应的裸 TCP 监听）占着 → 3 秒内识别、清掉、接管成功并返回 200；外来 `node.exe` 占着 → 拒绝接管、exit 4、占用进程未被动。
+
+「后端中途消失」这一条（2026-09-28，同日的第二处状态机反馈，使用方截图指出）：
+
+- 桌面壳 `ensureBackend()` 只在启动时 spawn 一次后端；`backendProc.on('exit')` 只做一件事 —— `quitting` 为假且退出码非 0 时往 `kizuna-backend.log` 写一行 `backend exited unexpectedly`，**不重启**。因此后端一旦在中途消失（被外部结束、未捕获异常、或按上面那段逻辑 `exit(0)` / `exit(4)` 让位），1921 上就没人应答：界面按 4 秒一轮一直重试、状态行停在「状态接口无响应：Failed to fetch……每 4 秒自动重试」，界面其余部分照旧可用（显示的是缓存值），直到用户自己关掉应用重开。
+- 取数为证：`%APPDATA%\Kizuna\kizuna-backend.log` 里 `11:09:44 [fatal-guard] listen EADDRINUSE` 紧跟 `11:10:20 backend exited code=0` 正是"端口被占、静默退出"（本轮第一处修复的现场）；而 `11:45:25 spawn backend` 之后再没有任何 `backend exited`，说明壳在整个会话里只 spawn 过那一次。
+- 修法：把看护交给唯一活过后端的进程。`armNapcatGuardian()` 现在多传三个参数 `--manager <本进程 pid>`、`--manager-exe <process.execPath>`、`--runtime <RUNTIME_ROOT>`（缺任一个守卫就不做看护，避免拿瞎猜的路径去拉进程）；`server/napcat-guardian.mjs` 的 2 秒主循环在"父进程（应用本体）还在"的分支里补了一段 `respawnManager()`：用与壳完全相同的方式重新拉起后端（`<runtime>/qbm-node.exe server/index.js`，`cwd=<runtime>`，`detached + unref`）。两道限流：10 分钟窗口内最多 3 次；刚拉起的后端 15 秒内又死则不再拉（端口被别的程序占着时新后端会让位退出，没有限流就会变成死循环拉进程）。拉起成功后守卫把看护目标换成新 PID —— 不加这一句时旧 PID 永远"不在"，2 秒后又拉一个，10 分钟内就把额度烧光（实测踩到，见守卫里对应注释）。守卫仍然只在"父进程没了"时才收 NapCat/桥/隔离 DSH；应用真的关掉时它照旧清理并退出。
+- 实测（2026-09-28 20:25 / 20:26 / 20:36 三轮）：杀掉后端 → 1.6 秒（另一轮 3.1 秒）恢复 200，`napcat-guardian.log` 逐轮一行「后端 <旧 pid> 已经不在了 → 已重新拉起后端 pid=<新 pid>（…qbm-node.exe，cwd=…）」，守卫进程本身不换代（新后端重新武装时会先请旧守卫退场，谁在岗由 guard 文件的 `pid` 校验决定；看护目标因此始终对应当前活着的那个后端）。
+- 同一轮把前端那句照抄浏览器的提示改成人话（`src/App.tsx` 状态轮询的 catch 分支）：`Failed to fetch` / `NetworkError` / `fetch failed` / `Load failed` → 「连不上后端进程（后端可能刚被重启，或还没起来）」，其余错误原样显示。
 
 一致做法的三类来源（成因来自仓库注释中记录的同型问题）：开关型配置只在部分路径生效（如 `killOnExit` 必须同时传给守卫，否则打包版中的开关不产生效果），对应做法为开关要么全链路生效、要么明确标注不生效；轮换计数持续增长而无执行者（回合保持与 `rotationDone` 的接线断开），对应做法为每个提前返回均写日志；探测型逻辑占用配额（NapCat 登录接口限流，与 WebUI 页面共用额度），对应做法为探测类行为默认不做、状态未知时不阻断操作、宁可跳过不误伤。
 
@@ -646,7 +664,7 @@ $$\text{cost} = \frac{\text{命中} \times p_{\text{Hit}} + \text{未命中} \ti
 | 12 | 桥不推断会话键 | 唤醒正文的 `[Session]` 行与工具层校验（缺 key 时以该行为准） | 工具作用于错误对象（向其它群或账号发送消息） |
 | 13 | 出站正文经唯一出口 | `core/qq-send.js` 的 `onebotSend` 加审计链与幂等闸门 | 绕过审计或产生重复发送 |
 | 14 | 部署不覆盖目标机能力 | `buildDeployKeepScript()` 的逐键合并（目标机取值优先）加 `state/` 回写 | 一次代码更新清除目标机的 pixiv cookie、语音密钥、白名单、记忆与画像 |
-| 15 | 宿主字段与文件路径可含空格或中文 | PowerShell 参数使用单引号字面量转义；`spawn` 传递参数数组；守卫命令行按需加引号；`RUNTIME_ROOT` 不依赖工作目录 | 安装到 `D:\我的 程序\MoonBot` 一类路径时启动失败 |
+| 15 | 宿主字段与文件路径可含空格或中文 | PowerShell 参数使用单引号字面量转义；`spawn` 传递参数数组；守卫命令行按需加引号；`RUNTIME_ROOT` 不依赖工作目录 | 安装到 `D:\我的 程序\Kizuna` 一类路径时启动失败 |
 | 16 | 配置热加载不更换对象引用 | `applyConfigInPlace()`（`qq-bridge/src/core/config.js:467`）【已核验】加目录监听与轮询双路并用 | 已注入配置的十余个模块读取不到新配置，或被旧配置回写覆盖 |
 
 ## 12. 未核验项与开放问题
@@ -1044,7 +1062,7 @@ SELECT conv_key, sender_uid, sender_name, content, ts_ms FROM chat_messages WHER
 
 ### 18.8 Pixiv
 
-`qq-bridge/src/lib/pixiv.js`（1,684 行）提供搜索、作品详情、原图获取、用户作品与用户搜索五类能力：默认反代基址 `https://x.pixigraph.xyz`（`:122`）、请求超时 `TIMEOUT_MS = 15000`（`:124`）、基址选择 `pickPixivBase`（`:147`）、图片档位 `:207`、发送计划 `planPixivSend`（`:232`）、尺寸判定 `pixivTierSizeVerdict`（`:269`）、成人内容判定 `isAdult` / `isAdultWork`（`:324-328`、`:1464`）、翻页默认 3 与上限 10（`:332-333`）、过滤键 `NEW_KEYS` `:343` 与 `normalizePixivFilters` `:351`、`filterPixivItems` `:479`、搜索来源 `PIXIV_SEARCH_SOURCES`（`:913-917`）、Cookie 与登录态 `pixivCookie` `:998` 与 `pixivLoginState` `:1104`、艺术家缓存上限 `ARTIST_CACHE_MAX = 500`（`:1017`）、请求头 `pixivRequestHeaders`（`:1071-1084`）、详情与原图 `pixivIllustDetail` `:1261` 与 `pixivIllustOriginals` `:1333`、用户作品 `pixivUserWorkIds` `:1410` 与 `:1422`（翻页上限常量名为 `PIXIV_USER_WORKS_MAX_PAGES = 10`）、用户检索 `pixivSearchUsersByName`（`:1593`）【已核验】。
+`qq-bridge/src/lib/pixiv.js`（1,684 行）提供搜索、作品详情、原图获取、用户作品与用户搜索五类能力：默认接口兜底站 `https://pixigraph.online`（2026-09-28 起；此前同族域名 `x.pixigraph.xyz`，`:130`）、请求超时 `TIMEOUT_MS = 15000`（`:124`）、基址选择 `pickPixivBase`（`:147`）、图片档位 `:207`、发送计划 `planPixivSend`（`:232`）、尺寸判定 `pixivTierSizeVerdict`（`:269`）、成人内容判定 `isAdult` / `isAdultWork`（`:324-328`、`:1464`）、翻页默认 3 与上限 10（`:332-333`）、过滤键 `NEW_KEYS` `:343` 与 `normalizePixivFilters` `:351`、`filterPixivItems` `:479`、搜索来源 `PIXIV_SEARCH_SOURCES`（`:913-917`）、Cookie 与登录态 `pixivCookie` `:998` 与 `pixivLoginState` `:1104`、艺术家缓存上限 `ARTIST_CACHE_MAX = 500`（`:1017`）、请求头 `pixivRequestHeaders`（`:1071-1084`）、详情与原图 `pixivIllustDetail` `:1261` 与 `pixivIllustOriginals` `:1333`、用户作品 `pixivUserWorkIds` `:1410` 与 `:1422`（翻页上限常量名为 `PIXIV_USER_WORKS_MAX_PAGES = 10`）、用户检索 `pixivSearchUsersByName`（`:1593`）【已核验】。
 
 Cookie 巡检与令牌轮换：`qq-bridge/src/core/pixiv-watch.js`（122 行）的状态文件位于 `:23`，`CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000`（`:24`）、`FIRST_DELAY_MS = 90 * 1000`（`:25`）、`NOTIFY_COOLDOWN_MS = 24 * 60 * 60 * 1000`（`:26`）【已核验】；令牌刷新间隔 `PIXIV_REFRESH_INTERVAL_MS = 50 * 60 * 1000` 定义于 `qq-bridge/src/lib/pixiv-auth.js:49`，装配于 `:346`，定时器于 `:367`【已核验】。
 
@@ -1054,11 +1072,89 @@ Cookie 巡检与令牌轮换：`qq-bridge/src/core/pixiv-watch.js`（122 行）�
 
 独立识图：`qq-bridge/src/core/vision.js`（158 行）在分流开关开启时以独立视觉模型处理图片，超时 `VISION_TIMEOUT_MS = 45000`（`:22`）、响应字节上限 `VISION_MAX_RESPONSE_BYTES = 64 * 1024`（`:24`），失败分支位于 `:145-157`【已核验】；默认视觉模型在会话创建时按档位计划选择，见「DSH 集成与上下文压缩接口」章的「会话创建与视觉模型」节。
 
-### 18.10 文档发送
+### 18.10 本地语音引擎（Genie / GPT-SoVITS，可选件）
+
+合成链路默认全部走云端；2026-09-28 起多了一条**可选**的本地通道：把一台 GPT-SoVITS（ONNX、纯 CPU）引擎跑在本机，语音就不出网、不用云端密钥、也不吃云端每日额度。
+
+客户端与进程管理在 `qq-bridge/src/lib/genie-tts.js`（497 行）：配置段默认值 `LOCAL_DEFAULTS`（`:36`，`enabled:false` 出厂关闭、`port 4610`、`language zh`、`idleShutdownMs 600000`、`fallbackToCloud:true`）、配置归一化 `normalizeLocal`（`:56`，布尔只认严格 `true`/`false`、端口夹到 1–65535、语言只认 `zh/jp/en/kr`）、路径推导 `localPaths`（`:80`，默认根目录 `qq-bridge/python`，可被 `rootDir` 一并改写）、环境探测 `probeLocal`（`:140`，20 秒缓存；逐条给出缺什么：引擎脚本 / `genie_tts` 包 / `GenieData` / 角色模型；**探测刻意不 import `genie_tts`** —— 上游在数据缺失时会 `input()` 问"要不要自动下载"，非交互环境下那是一次 EOFError，会把"还没下数据"报成"引擎坏了"；改用 `importlib.util.find_spec` + `importlib.metadata.version`）、进程探活 `serverStatus`（`:243`，`GET /health`）、拉起 `spawnServer`（`:266`，`GENIE_DATA_DIR` 与 `Max_Cached_Character_Models` 由它注入）与幂等的 `ensureServer`（`:309`，单例 `_starting`）、关闭 `stopServer`（`:360`：本进程拉起的走"请 `/shutdown` → 超时强杀"；**别的进程拉起的**（上次桥崩了留下的、手工起的）则先探 `/health` 认 `service === 'kizuna-genie-tts'` 再请它退出 —— 不做这一步时 `--stop` 会对着一个正在跑的引擎回「引擎本来就没在跑」，是实测撞到才补的）与退出用的同步版 `killServerSync`（`:392`）、复刻样本落盘 `writeReference`（`:401`，`state/genie-refs/<sha1 前 20 位>.<ext>`，同内容不重复写）、样本解码 `decodeDataUrl`（`:412`）、合成 `synthesizeLocal`（`:429`，native 输出是 WAV）、汇总状态 `localState`（`:476`）。
+
+引擎进程本身是 `qq-bridge/python/genie_server.py`（396 行）——**FastAPI sidecar，只监听 `127.0.0.1`**，复用 genie-tts 自带的 fastapi/uvicorn 依赖（不额外引入 Web 框架）：`GET /health`（回 `service:'kizuna-genie-tts'` 身份标识、`ok`、`rssMb` / `pid` / `characters` / `loaded` / `modelsDir` / `dataDir` / `defaultLanguage` / `seedCharacter` / `bootMs` / `uptimeSec` / `genieVersion` / `genieError` / `jiebaShim` / `maxCachedModels`；**先 import 引擎再取样**，所以那个 `rssMb` 含 onnxruntime、tokenizers 与文本前端，不是空进程的内存）、`GET /characters`、`POST /load`、`POST /tts`（回 WAV 字节，响应头带 `x-genie-ms` / `x-genie-rss-mb`）、`POST /unload`、`POST /shutdown`；`genie_tts` 是**首次用到时才 import**（没装引擎时服务器照样能起来并如实回 `genieError`），内存读数在 Windows 上取 `GetProcessMemoryInfo`（**必须显式声明 ctypes 的 argtypes/restype**，否则它静默返回 0、`rssMb` 变成 null：实测踩过）、Linux 上取 `/proc/self/status`；角色目录同时接受"扁平 `*.onnx`"与"`角色/tts_models/*.onnx`"两种布局，语言由 `zh_` / `jp_` / `en_` / `kr_` 目录前缀推断。
+
+接进合成链的位置在 `qq-bridge/src/core/voice.js`：配置默认段 `:115`、`transcodeToMp3`（`:458`，有 ffmpeg 才把 WAV 转 mp3）、`trySynthesizeLocal`（`:474`）、分支本体在 `synthesize()` 内 `:718-731` —— 位于**云端缓存命中之后、每日额度闸门之前**：本地成功就直接返回，本地失败按 `fallbackToCloud` 决定"回云端"还是"**直接报错**"（关掉回落的人要的是宁可这条语音不发，也不要去动云端额度与密钥）。三条纪律：① 本地合成**只记 `calls`、不记 `chars`**，云端每日额度因此保持诚实；② 本地缓存键是独立命名空间（`local:<engine>`），与云端缓存互不污染；③ 音色设计（`design`）本地没有对应模型，一律走云端。对外三个入口：`localEngineState`（`:561`）、`localEngineSelfTest`（`:566`，真拉起并合成一句，回耗时与内存）、`localEngineStop`（`:579`）。
+
+HTTP 面：桥控制台 `qq-bridge/src/core/console-server.js:5627`（`GET /api/voice/local`、`POST {action:'self-test'|'stop'}`；**安装与下载刻意不放 HTTP 面**，只留命令行，避免远程触发几百 MB 下载）；管理端转发 `server/index.js:7868-7906`，超时**按方法分开**（`VOICE_LOCAL_PROBE_TIMEOUT_MS = 15000` 探测 / `VOICE_LOCAL_STOP_TIMEOUT_MS = 30000` 关进程 / `VOICE_LOCAL_TIMEOUT_MS = 180000` 自检）；界面在 `src/pages/VoiceConfig.tsx` 的「本地语音引擎（可选）」卡片（JSX `:1199`，状态/自检/关闭三个按钮的处理函数 `:749` 起，角色下拉框的选项与"进页面静默探测一次"在 `stopLocalEngine` 之后）。**为什么探测不能共用 180 秒**（2026-09-28 使用方反馈「点进去本地引擎还是有死卡状态机，没有马上变回来」）：180 秒只对自检有意义（它要冷启动引擎），而探测在桥侧只用 `find_spec` 判装没装、再数一下角色目录，正常几十毫秒；一旦那条路由在桥侧不存在或卡住（桥跑在服务器上、桥版本旧……），界面就要握着"检测中"整整三分钟，三个按钮全灰、状态行空白，观感就是"卡死的状态机"。安装器 `qq-bridge/tools/genie-setup.mjs`（426 行）子命令 `check` / `install` / `download` / `add-character` / `convert` / `smoke` / `stop`，pip 走 `PIP_MIRRORS` 四级回退（清华 TUNA → 阿里云 → 中科大 → 官方 pypi，本机实测官方源直接 SSL EOF、能通时也只有 ~80 kB/s），`GenieData` 走 `HF_MIRRORS`（`HF_ENDPOINT=https://hf-mirror.com` → 官方 huggingface.co，本机实测直连同样 SSL EOF：391 MB 走镜像约 6 分钟），所有子进程 stdin 一律给空串（`input: ''`）以免任何交互提问把命令挂死。`--smoke` 打印耗时与**实测常驻内存**并落一份 wav 到 `state/`。两个只能靠实测发现的坑，都已固化进代码：① `--download` 不走上游的 `genie.download_genie_data()`（它是 `local_dir="."` 落在**当前工作目录**、还带着新版 hub 已废弃的 `local_dir_use_symlinks`），改成自己调 `snapshot_download`，且 `local_dir` 必须给 `GenieData` 的**父目录**（仓内路径自带 `GenieData/` 前缀；给 `GenieData` 自己会多套一层 `GenieData/GenieData`）；② 凡是会 `import genie_tts` 的子进程（`--check` 的完整导入校验、`--convert`）都必须显式带 `GENIE_DATA_DIR`，否则上游按 `./GenieData`（相对 cwd）找不到数据就去问"要不要下载"，同样报成 EOFError。
+
+管理端这一侧有两个只有把"源码 → 界面"整条走一遍才会暴露的坑（2026-09-28 由使用方反馈暴露，均已固化）：① **改了卡片必须在管理端重新构建、并把产物覆盖进运行目录** —— 卡片只存在于 `src/pages/VoiceConfig.tsx`，界面上看到的是 `dist/assets/index-<hash>.js`；本轮实际撞上的就是"源码里有卡片、发出去的那份产物里 0 处命中"，界面上自然什么都没有。落地顺序：`npm run build` → 备份运行目录 `dist`（`dist.bak-<tag>-<日期>`）→ 整目录覆盖；验证判据不是"我改了源码"，而是从活着的管理器上 `GET /` 取入口指向哪份产物、再在那份产物里搜卡片文案。入口 `index.html` 恒 `Cache-Control: no-store`（见 `server/index.js:9952` 的注释），所以重启应用必得最新界面；但 Electron 壳是"建窗时 `loadURL` 一次、没有刷新快捷键"，**已经在跑着的窗口不会自己更新**。② **卡片字段的可用性是 `!ready || !localEngine`，所以初值必须由界面自己给**：`voice.local` 在使用方第一次点「应用配置」之前并不存在于配置里（服务端模式下跑的还是不含本功能的旧桥，回包里同样没有这一段），照原写法整卡恒灰、一个字段都改不了。现在界面自带 `LOCAL_FORM_DEFAULTS`（`src/pages/VoiceConfig.tsx:81`，出厂关闭、端口 4610、自动拉起、空闲回收、失败回落），`applyCfg`（`:618`）用 `{...初值, ...回包.local}` 合并，保存时恒带整段 `local`。另需注意：配置**读到之前**整页字段都是灰的（`ready = cfg !== null`，为的是不把空值写回覆盖桥上真实配置），这是既有设计，与这张卡无关。
+
+服务器上的桥版本落后，会让这一页的「本地引擎」直接读不到（2026-09-28 使用方反馈「本地语音引擎报状态读取失败：桥在运行，但没有这条接口（HTTP 404）」）。链条：连上服务器时这一页读的就是服务器上的配置与状态（`voiceScopeOf()` 显式 `scope=remote` → 隧道 13100 → 服务器桥控制台；没连服务器时才落到本机 3100），而 `/api/voice/local` 是随引擎一起加进桥的新路由，服务器上 `/root/qq-bridge` 的代码停在前一版，于是桥"在跑、但没有这条路由"，管理端如实回 `code:'bridge-stale'`。处理方式是把桥代码同步到最新：本机与服务器逐文件比对 `src/`（145 个文件里 6 个不同、1 个新增 `src/lib/genie-tts.js`），只同步这 7 个文件并补上服务器上原先没有的 `tools/genie-setup.mjs`；同步前在服务器上留全量备份 `/root/qq-bridge-src-backup-<时间戳>.tgz`，逐个 `node --check` 通过后按 `start-bridge.sh`（`nohup setsid bash start-bridge.sh >> bridge.out`，脚本内 `exec node src/bridge.js`）重启。重启后经管理端读到的就是服务器上的真实探测结果（`ok:true`、`ready:false`，`reasons` 逐条列出缺什么：`python/genie_server.py`、解释器里的 `genie_tts`、`python/GenieData`、`python/models`），不再是 404。**这一页的读写口径本来就跟连接走**（连上服务器时读写的都是服务器上的 `state/voice-config.json`，切回「本机」才写本机那份），本轮没有改动它 —— 因此"服务器上没装引擎"是如实结论，不是显示错误。
+
+③ **"字段等回包才能动"本身就会被读成卡死**（2026-09-28 第二条反馈：「点进去本地引擎还是有死卡状态机，没有马上变回来」）。第 ② 条只解决了"回包里没有 `local` 时整卡恒灰"，没有解决"回包还没到时整卡灰"——那段时间是真实存在的（冷启动经服务端桥实测 23 秒），用户看到的就是"点进去、卡片是死的、过一会儿才活过来"。现在的口径分两半：**这张卡的字段一律不等回包**（初值来自 `LOCAL_FORM_DEFAULTS`，必然是对象，进页面即可编辑），而**「应用配置」按钮仍然等 `ready`**（空值不允许写回桥上）。两者并存的前提是"迟到的回包不许覆盖用户已经改过的东西"，所以新增 `localTouched`（`src/pages/VoiceConfig.tsx` 卡片状态区）：用户在卡上任何一项动过手就置位，`applyCfg` 合并 `local` 那一段前先看它——已置位则不覆盖，否则"我明明勾了启用、过两秒自己弹回未勾"。同一类问题的另一半在超时上，见本节开头按方法分开的三个常量。这张卡现在能选的两项（默认角色、语言）都走全站自研 `Dropdown`（`src/components/Dropdown.tsx`，面板宽度恒等于触发控件宽度），路径与进程参数六项折进「高级」默认收起（`.lrn-adv-toggle`）。
+
+许可与 IP 边界：引擎代码为 MIT（`High-Logic/Genie-TTS`），公共数据 `GenieData` 取自同样标注 `license:mit` 的 HF 仓 `High-Logic/Genie`，这两部分可以随产品分发；**上游自带的第三方角色音色（蔚蓝档案 / 鸣潮 / 重返未来等）属于他人 IP，本项目一律不分发**，安装器不提供该入口（`genie.load_predefined_character` 未被暴露），只接受使用方自己的模型。
+
+「角色随包分发」（2026-09-28 使用方要求「角色都内置，可以随包分发」）在实现上是成立的、在内容上目前是空的，两者要分开说。**机制**：一个"角色"就是引擎模型目录（`modelsDir`，默认 `<引擎目录>/models`）下的一个子目录，目录里放 GPT-SoVITS 转换出来的 `.onnx`（或 `.onnx` 放在其 `tts_models/` 子目录里，见 `qq-bridge/src/lib/genie-tts.js:120` 的 `listCharacterDirs`）；`/api/voice/local` 会把扫到的目录名放在 `characters` 里回给管理端，页面上的「默认角色」下拉框直接列它，其余场景（请求带某个音色名）由桥侧按名字匹配。所以**把角色目录随包一起放进 `models/`，或安装时用 `--add-character <模型目录> <角色名>` 装进去，界面上就能直接选**——不需要任何"内置角色清单"这种额外机制。**内容**：一个角色都没有随包（2026-09-28 再确认：安装包的 payload 里连 `python/` 这棵树都不存在，本地引擎目前是纯可选件、由 `node tools/genie-setup.mjs` 现装；三个预置角色已在本机装好并逐个实测能合出音频，随包分发需要先把引擎与模型一起搬进 payload，见 18.10.1 末尾的体积决策），因为引擎自带的 `GenieData` 只有公共数据（`speaker_encoder.onnx` 184,812,166 字节 + `chinese-hubert-base` + `G2P`，实测目录清单），角色模型是训练/转换出来的，不是随引擎附带的；要"内置"就得先有我们**有权分发**的音色（自己录、自己训练，或明确授权的模型）。上游 `genie_tts/PredefinedCharacter.py` 里只有三个预设（`mika` = 圣园未花、`feibi` = 菲比、`thirtyseven` = 37），它们不是 `GenieData` 的一部分，而是 `download_chara()` 从同一个 HF 仓按 `CharacterModels/<version>/<角色>/*` 单独下的模型；这三个是对他人作品角色的音色克隆，随包分发等于分发别人的音色，本轮**没有**打进包；`--characters` 现在会在**显式点名**时去下这三个（见 18.10.1），但默认一个都不下，界面与命令输出都写明"只放自己有权使用的模型/仅供本机自用"。上游 `ModelManager.py` 注释里那句「修改后内存: 6448 MB / 修改前: 5952 MB」是**加载期的瞬时峰值**，不是常驻内存 —— 它记录的那次改动是"不再新建 .bin 文件"，做法是 `load_session_with_fp16_conversion()` 把 fp16 权重在内存里升成 fp32、拼回 ONNX 原型、再 `SerializeToString()` 交给 onnxruntime，同一份权重在峰值时刻存在 3–4 个副本（fp16 源 + fp32 缓冲 + 序列化副本 + 运行时副本），改动后反而更高（5952 → 6448）。再叠加 `ModelManager` 默认 `Max_Cached_Character_Models=3`（同时缓存三个角色的整套模型），大头来自**峰值 × 缓存个数**，与"跑一句话就要 6 GB"是两回事。本项目的实测与应对：`Max_Cached_Character_Models` 由 `qq-bridge/src/lib/genie-tts.js` 拉起进程时压到 **1**（可用 `GENIE_MAX_CACHED_MODELS` 覆盖），`/health` 回传 `rssMb` 与 `maxCachedModels`，管理端状态行与 `--smoke` 都会显示实测值；本机（Python 3.13 / onnxruntime 1.22.1 CPU）实测引擎导入完成、未加载任何角色时 **RSS 172.8 MB**。部署提示：这台引擎要 ~1.5 GB 磁盘（.venv 627 MB + GenieData 392 MB）再加一个几百 MB 的角色模型，1 核 3.9 GB 的入门 VPS 不适合当宿主，建议与本机高性能档位放在同一台机器上。
+
+安装期的依赖缺口与兼容垫：上游硬依赖 `jieba_fast`，而它在 PyPI 上**只有源码包**（装它要当场调 C 编译器），没有 MSVC 的 Windows 机器必然失败，pip 会因此把整个 `genie-tts` 回滚掉 —— 看起来就像"引擎根本装不上"。`qq-bridge/python/genie_compat.py` 专门处理这一条：`jieba_fast` 只是 `jieba` 的 Cython 加速分支、公开 API 与分词质量完全一致，所以它在中文 G2P 之前把纯 `jieba`（含 `posseg` / `analyse` / `finalseg` 子模块）注册成 `jieba_fast`，**只读改写、不写盘、装得上真货时一行都不生效**，并把 `{installed, reason}` 透出到 `/health.jiebaShim` 与管理端状态行（被替换过的依赖必须看得见）。`tools/genie-setup.mjs --install` 相应走两段式：先整包安装，失败则 `--no-deps` 只装本体 + 从它自己的元数据（`importlib.metadata.requires('genie-tts')`）读出依赖清单逐条装、跳过 `jieba_fast`、补装纯 `jieba`，并把仍然装不上的依赖列出来（缺语种前端 ≠ 中文不可用）。所有 pip 调用统一带 `--timeout 20 --retries 2`：本机实测遇到过"连接卡死但进程不退出、占着 venv 锁十几分钟零字节进展"，靠 pip 默认超时等不到结论。
+
+#### 18.10.1 本地角色的"装 / 选 / 听"，与 MiMo 三模式的对应
+
+2026-09-28 使用方两条要求：「语音给我把角色装齐啊」「也像小米api那样支持自己设计和选择啊」。小米那套（MiMo TTS）是三种模式：**内置音色**（`audio.voice` 选一个预置音色）、**文本设计音色**（把音色描述写进 `user` 消息，模型生成一个新音色）、**音频克隆**（给一段样本，复刻它）。本地引擎的能力边界与之一一对应，并**如实**告诉用户哪一档本地做不到：
+
+| MiMo 模式 | 本地引擎 | 实现位置 |
+| --- | --- | --- |
+| 内置音色 | `modelsDir` 下的角色目录，界面下拉直接选 | `models/<角色>`；（上游三个预置角色可 `--characters` 一键装） |
+| 音频克隆 | 零样本复刻：把样本落盘成参考音频喂给引擎 | `qq-bridge/src/core/voice.js` 的 `writeReference` → `/tts {reference_audio}` |
+| 文本设计音色 | **本地没有对应模型**（GPT-SoVITS 系不做文本→音色），一律走云端 | `synthesize()` 里 `design` 分支不经本地 |
+
+**装**：`tools/genie-setup.mjs --characters` 把上游 `PredefinedCharacter` 的三个角色下到 `<引擎根>/CharacterModels/<版本>/<角色>`（仓里的文件自带 `CharacterModels/` 前缀，与 `--download` 落地 `GenieData` 同一个道理），再**软链**进 `models/<角色>`，不复制、不占双份空间。实测三个角色各 320.8 / 321.3 / 321.3 MB（`feibi` 菲比·鸣潮·中文、`mika` 圣园未花·蔚蓝档案·日语、`thirtyseven` 37·重返未来：1999·英语），落盘后会在角色目录里写一份 `character.json`（`label` / `language` / `ip` / `source` / `installedAt`）。**为什么必须写 `character.json`**：`mika` 是日语角色，目录名里读不出任何线索，引擎会退回桥侧传来的默认语言（`config.local.language`，默认 `zh`）按中文去合成，出来是废音；而目录名又要保持干净（界面下拉显示的是 `label`）。所以 `/load` 的顺序是：`character.json` 里的 `language` → 请求里的 `language` → 按目录名猜（见 `genie_server.py` 的 `character_meta` / `do_load`）。下载这批文件还有个坑：hf-mirror.com 上它们走 Xet 会 `401 Unauthorized`（`cas-server.xethub.hf.co` 拒绝镜像取数），必须回落普通 LFS，所以 `--characters` 里带 `HF_HUB_DISABLE_XET=1`。
+
+**选**：桥的 `localState`（`genie-tts.js:476`）除原有 `characters`（字符串数组，**形状未动**，旧界面照旧能用）外新增 `characterList` = `[{name,label,language,loaded}]`（`listCharacterInfos`，`genie-tts.js:146`；`language` 只认 `zh/jp/en/kr`，认不出收成空串）。界面一侧的口径抽成纯函数 `src/lib/char-list.ts`（`normalizeChars` / `charDisplay`）：**以 `characterList` 为准**，为空或不存在时回退 `characters`，两份不一致时取并集（对象那份在前，老角色不会被吃掉），`label` 为空则显示 `name`，语言映射成中文/日语/英语/韩语写进选项。抽成纯函数是为了能单测：`qq-bridge/tests/char-list-ui.test.js` 直接断言这四个口径。
+
+**听**：`POST /api/voice/local {action:'preview', text, character}` → `voice.js` 的 `localEnginePreview`（`:584`，路由 `console-server.js:5633`）真拉引擎合成一句，回 `{ok, ms, totalMs, bytes, mime:'audio/wav', audioBase64, rssMb, text}`；界面把 base64 拼成 `data:` URL 用 `new Audio()` 播放，默认文本「你好，我是本地语音引擎。」可改。"选角色"必须能当场听出来才算真的选过 —— 试听是这条链路的验收面，不是装饰。这条链路有一份**手动**验收脚本 `qq-bridge/tests/preview-live-check.mjs`（需要本机装好引擎与角色，所以不进 `npm run check`）：实测回 `{ok:true, character:'feibi', ms:14660, totalMs:19616, bytes:197164, mime:'audio/wav', rssMb:4506.6}`、base64 解出的字节数与 `bytes` 一致且头四字节是 `RIFF`、音频落 `state/preview-check.wav`、收尾能优雅关掉引擎。
+
+**本轮三个角色逐个实测（`--smoke` 真合成，每个都是冷启动）**：`feibi` 中文 302,124 字节 / 6843 ms（含冷启动 21.5 s）；`mika` 日语 437,804 字节 / 9253 ms（含冷启动 23.4 s）；`thirtyseven` 英语 204,844 字节 / 4707 ms（含冷启动 20.0 s）；三次的产物都是合法 `RIFF/WAVE`，命令都能干净退出（退出码 0）。
+
+**本轮实测（本机，Python 3.13 / onnxruntime 1.22.1 CPU / 24 GB 内存）**：引擎冷启动 + 加载 `feibi` 角色 ≈ 12.4 s、就绪时 `rssMb` 4054.5；合成一句 19 字中文 **7337 ms**、产出 350,764 字节 WAV（约 5.5 s 语音）、合成期 `rssMb` 4565.8。也就是说"跑一句要 4.5 GB"是**加载+合成的峰值**量级，不是常驻 —— 但这仍然意味着 1 核 3.9 GB 的入门 VPS 当宿主会直接 OOM，与 18.10 的部署提示一致。
+
+**三个只有真跑才会撞到的坑（都是本轮排查出来的，代码里都已固化）**：① **软链不算目录**：`--add-character` / `--characters` 用 Windows 目录联接装角色，而 `probeLocal` 用 `readdir(withFileTypes)` 过滤 `entry.isDirectory()` —— 联接在这套 API 里报的是 `isSymbolicLink`，于是三个角色装完、`--check` 仍说"一个都没有"，管理端下拉也是空的（引擎自己看得见：Python 的 `os.path.isdir` 会跟随软链）。现在 `listCharacterDirs`（`genie-tts.js:120`）两者都收。② **上游 `load_character` 成功也返回 `None`**：`genie_server.py` 曾拿它的返回值当判据（`if not ok: raise`），于是每一次成功都报成 `HTTP 500：…返回 False`（实测日志：`Character Feibi loaded successfully` + `LOAD_RESULT = None`）；反过来真正的失败（onnxruntime 建会话炸掉）会被上游吞成一行 `logger.error`、**不抛异常**，所以也不能只看异常。现在判据是"模型有没有进 `model_manager.character_to_model` 注册表"（拿不到注册表就不拦），失败提示直接指向引擎日志里 `genie_tts.ModelManager` 的 Error 行。③ **必须挂参考音频**：GPT-SoVITS 合成前若没调 `set_reference_audio`，上游取 `_reference_audios[character_name]` 会 KeyError 而异常被吞在回调里，现象是"引擎没有产出音频文件"（角色加载得动、`loaded successfully` 也照打，就是一句也合不出来）。现在 `/load` 成功后会读角色自带的 `prompt_wav.json` + `prompt_wav/*.wav` 作为默认参考音频（`default_reference`），桥传样本时再用样本覆盖。
+
+**随包分发：目录联接（junction）不会被 electron-builder 打进包，必须先实体化（`--bundle`）**。使用方 2026-09-28 明确要"打进包"，而 `--characters` 装角色默认用 Windows 目录联接省磁盘。实测（用 electron-builder 自己的 `FileMatcher(['**/*'])` + `copyDir` 在临时树上复现）**联接不被跟随**：`app-builder-lib/out/fileMatcher.js:257-283` → `builder-util/out/fs.js:237-262` 的目录遍历用 `lstat`、只在 `stat.isDirectory()` 时递归，联接于是走"readlink + `symlink(...,'junction')`"分支，产物里仍是联接、且指向**构建机的绝对路径**（实测其 `lstat` 只有 121 字节）—— 一个 320 MB 的角色一个字节都不进包，而构建全程不报错（静默落空）。对应能力是 `genie-setup.mjs --bundle`（`--characters --bundle` 亦可，默认行为不变）：把 `models/<角色>` 换成真实目录拷贝，顺序是"同盘暂存目录拷贝 → 文件数与字节数校验 → 摘链接（`lstatSync().isSymbolicLink()` 为真时只 `unlinkSync` 摘链接、绝不 `rmSync` 目标）→ `renameSync` 换入 → 再复验"，并特判"`models` 目录本身就是联接"的现实（必须整目录对换，逐个换会把写入落到源仓库）。实测运行树：41 个文件 / 1,010,202,616 字节 = 963.4 MiB（菲比 320.8 / 未花 321.3 / 三七 321.3 MiB）、耗时 3.4 s、重复执行幂等；实体化后 `--check` 仍报三个角色，`--smoke feibi` 仍能合出音频（94,764 字节、冷启动 20.2 s）。**但实体化并不等于已经进包**：`full` 变体的 payload 是 `kizuna-app/runtime-full`（`build-kizuna-app.mjs:45/57-58`，`:482` 的 `extraResources = [{ from, to:'runtime', filter:['**/*'] }]` 整目录拷贝。注：`:482` 是本轮新增闸门代码之后的当前行号，改动前该行为 `:353`），其中 `qq-bridge` 下没有 `python/` 这棵树（`tools/sync-to-live.ps1:29` 的 `$bridgeDirs` 只含 `src/tools/dsh/scripts/plugins/characters`），历史构建产物 `dist-eb/win-unpacked/resources/runtime/qq-bridge/python` 同样不存在 —— 所以本地引擎目前**根本不在安装包里**，"装完就有本地引擎"需要把 `.venv`（626.6 MB）、`GenieData`（391.5 MB）、`python/*.py` 与 `models`（963.4 MiB）一起搬进 payload（约 +1.94 GiB，装完即用；只搬模型则 +963.4 MB 但没有引擎可跑）。**2026-09-28 定案：使用方选 B（连引擎一起搬，"装完就有本地语音"），并已落地到代码与部署。**
+
+**镜像**：新增 `QQ-Bridge-packaging/tools/mirror-python-engine.mjs`（源按 `--src` → 环境变量 `KIZUNA_PYTHON_SRC` → 与本仓库平级的源码仓 `qq-bridge/python` → `QBM_LIVE_RUNTIME` 顺序取，目标默认 `kizuna-app/runtime-full/qq-bridge/python`，`--check` 只核对不写、`--no-probe` 跳过解释器探测）。它跟随联接实体化（`statSync` 会跟随、`lstatSync` 才是判据），排除 `__pycache__` / `*.pyc` / `*.bak-*` / `*.tmp` / `*.log` / `state` / `logs`，逐项断言"`lstatSync().isSymbolicLink()===false` + 文件数 + 字节数"并做全树重解析点扫描，一致即跳过（幂等）。**刻意不把 python 加进 `sync-to-live.ps1:29` 的 `$bridgeDirs`**：那是每次同步都跑的整树拷贝，重拷 1.98 GB 是纯浪费，这一步改成构建前显式执行。实测：`.venv` 6,982 文件 / 559,370,224 字节、`GenieData` 39 / 410,537,329、`models` 41 / 1,010,202,616、`genie_server.py` 22,057、`genie_compat.py` 3,979，合计 **7,064 文件 / 1,980,136,205 字节 = 1.84 GiB**；首次全量 142.1 s、复跑 41.4 s（5/5 项全部"已一致 → 跳过"）；实体化前先跑 `--check` 得 exit 1、0/5 项，检测路径本身也验过。解释器探测必须带 `-B` 与 `PYTHONDONTWRITEBYTECODE=1`：实测不带时 `import onnxruntime/soundfile/jieba/genie_tts` 会在 site-packages 下留 72 个 `__pycache__`、547 个文件、10,917,108 字节 —— 那正是本脚本刻意不镜像的东西，"镜像时干净、探一次就变脏"，还会让下次 `--check` 永远报不一致。**2026-09-28 续（自带运行时之后）**：payload 里出现 `python\runtime\` 时，`.venv` 改由 `tools/prepare-python-runtime.mjs` 生成、本脚本**跳过**镜像（源 venv 绑的是开发机系统 Python，拷过来等于把问题搬回去；跳过时仍做结构断言），改为**断言** `runtime\`（`python.exe`、`LICENSE.txt > 1000 字节、0 重解析点、`sys.base_prefix` 自洽），并在解释器探测前把 `pyvenv.cfg` 纠正成绝对路径、探测后写回相对占位，最后全树扫构建机路径 —— 出厂占位态下 `--check` exit 0（此前会因"绝对 home 带构建机路径"exit 1）。细则见下文 18.10.1 续段。
+
+**闸门**：`build-kizuna-app.mjs` 新增 `ensureGenieEnginePayload`（构建前，仅 `full` 变体）与 `assertBuiltPayloadEngine`（构建后，查 `win-unpacked/resources/runtime`），两者共用同一张判据表 `GENIE_REQUIRED`：`genie_server.py` / `genie_compat.py` / `models/{feibi,mika,thirtyseven}` / `models/feibi/prompt_wav.json` / `models/feibi/tts_models/t2s_shared_fp16.bin`（≥100 MB）/ `GenieData/speaker_encoder.onnx`（≥50 MB）/ `.venv/Scripts/python.exe`，**每一项都要求 `lstatSync().isSymbolicLink()===false`**（最小字节数是为了拦"空壳目录"：模型目录在、权重不在，界面上角色照样列得出来），再加"`python/` 全树 0 个重解析点"。任一不满足即 abort 并指名修复脚本 `node tools/mirror-python-engine.mjs`。**拦截能力实测**：① 临时 `Rename-Item models\mika → _mika_probe_moved`，构建 exit=1、错误行是 `models/mika 不存在（角色：未花（日语））`；② 临时 `mklink /J python\_probe_link → python\models`，构建 exit=1、错误行是 `payload 的 python/ 下有 1 个联接/软链`；两次都**没进 electron-builder**（`[build] FAILED` 在 `electron-builder 开始` 之前）、`package.json` 均由 `finally` 还原，探针随后清除（`cmd /c rmdir` 只摘链接、不动目标，清理后 `models` 三角色仍在）。**2026-09-28 续**：判据表再加 5 项 —— `runtime/python.exe`、`runtime/python313.dll`、`runtime/Lib/os.py`、`runtime/LICENSE.txt`、`.venv/Lib/site-packages/genie_tts`（少任何一项都意味着这个包在没装 Python 的机器上跑不起来），闸门与构建后断言共用同一张表；实测闸门输出 `7636 个文件 / 1.87 GiB、0 个联接`。
+
+**出包实测**：`node tools/build-kizuna-app.mjs full --dir-only` exit 0、全程 **292.8 s**（其中 electron-builder 249 s）；`dist-eb\win-unpacked` = **32,569 文件 / 4,070,078,514 字节 = 3.79 GiB**（其中 `resources\` = 32,498 文件 / 3,806,378,580 字节 = 3.54 GiB）、`resources\runtime\qq-bridge\python\` = **7,064 文件 / 1,980,136,205 字节 = 1.84 GiB**、全树 0 个重解析点；逐项与 payload 对齐且 `isSymbolicLink()===false`：`genie_server.py` 22,057、`models/{feibi,mika,thirtyseven}/tts_models/t2s_shared_fp16.bin` 各 153,413,634、`GenieData/speaker_encoder.onnx` 184,812,166、`.venv/Scripts/python.exe` 255,320、`.venv/pyvenv.cfg` 344。`--dir-only` 不发布：日志末段为 `--dir-only：跳过发布到 release/`，产物落在 `kizuna-app/dist-eb/win-unpacked`。
+
+**产物与桥的结构兼容性【已核验】**：桥侧 `genie-tts.js:82-97` 的 `localPaths` 把引擎根默认取 `<ROOT>/python`、解释器取 `<rootDir>/.venv/Scripts/python.exe`、`dataDir` 取 `<rootDir>/GenieData`、`modelsDir` 取 `<rootDir>/models`、`serverFile` 取 `<rootDir>/genie_server.py` —— 与 payload 布局一一对应；spawn 时显式注入 `GENIE_DATA_DIR`（`genie-tts.js:314`）。这一条是硬要求：上游 `genie_tts/Core/Resources.py:30-33` 的默认值是 `os.getenv("GENIE_DATA_DIR", "./GenieData")`（**相对 cwd**），并且目录不存在时会在 import 期 `input()` 问"要不要从 HuggingFace 自动下载"（实测不设该变量直接 `EOFError`，产物里的解释器同样如此）。带上 `GENIE_DATA_DIR` 后，**产物里的** `.venv/Scripts/python.exe` 实测 `import onnxruntime, soundfile, jieba, genie_tts` → `IMPORT_OK`、exit 0。
+
+**venv 可移植性：旧布局（venv 绑构建机的系统 Python）不可移植【已核验】—— 本轮已被"包里自带 Python 运行时"取代，见下面 6 段**。`.venv/pyvenv.cfg` 逐字为 `home = C:\Users\17367\AppData\Local\Programs\Python\Python313` / `include-system-site-packages = false` / `version = 3.13.7` / `executable = C:\Users\17367\AppData\Local\Programs\Python\Python313\python.exe` / `command = C:\Users\17367\AppData\Local\Programs\Python\Python313\python.exe -m venv C:\Users\17367\Desktop\Kizuna Public\qq-bridge\python\.venv` —— 三行都是构建机绝对路径（venv 的 `sys.prefix` 取自自身位置、`sys.base_prefix` 取自 `home`，所以换机就散）。实测把 payload 副本的 `home` 改成一个不存在的目录后，`.venv\Scripts\python.exe` 立刻 `exit=103`、输出 `did not find executable at 'C:\Users\Nobody\NoSuchPython\python.exe'`；改回后 sha256 与改前一致（`8D423846…D28765`）且自检 `PREFIX` / `BASE_PREFIX` 正常、exit 0。结论：**同一台构建机上"装完即用"成立，换到没有 Python 3.13 的机器则本地语音起不来**；最小补救是目标机跑 `node tools/genie-setup.mjs --install` 重建 venv（该路径**未实测**：会重建主人现网 venv，本轮没跑）。另有一处泄漏面：全树共 31 个文件含构建机绝对路径 —— `pyvenv.cfg`、`Scripts\activate{,.bat,.fish}`、以及 27 个 `Scripts\*.exe` 启动器内嵌的 shebang（指向**仓库里的源 venv**，`C:\Users\17367\Desktop\Kizuna Public\qq-bridge\python\.venv\Scripts\python.exe`）；`.venv\Scripts\python.exe` 自身**不含**明文路径。`verify-installer-content.ps1` 只 grep `1736784911|868756515|3199924964|AbyssalQuill`，因此不会因 `17367` 判失败 —— 这条泄漏目前**没有**自动化拦截（2026-09-28 续：venv 已换成"自带运行时 + 相对占位"，`Scripts\*.exe` 与 `activate*` 全部不再随包，见下文）。
+
+**包里自带 Python 运行时（本轮新增 `python\runtime\`）【已核验】**：新增 `QQ-Bridge-packaging/tools/prepare-python-runtime.mjs`（默认根 `<packaging>/kizuna-app/runtime-full/qq-bridge/python`，参数 `--root/--base/--check/--force/--keep-old`；base 解释器按 `--base` → `KIZUNA_PYTHON_BASE` → `%LOCALAPPDATA%\Programs\Python\Python3*` → `C:\Python31x` 顺序找，并要求 major.minor 与现有 venv 的 `version` 一致）。来源是官方 CPython 3.13.7 安装整树（`%LOCALAPPDATA%\Programs\Python\Python313`，实测 55,760 文件 / 2,933,972,221 字节 = 2.73 GiB），只保留跑引擎必需的部分：丢掉 `Doc/include/libs/Scripts/tcl/Tools/share`、`python313.zip`、`Lib\` 下的 `site-packages/test/tkinter/idlelib/turtledemo/lib2to3/tcl8/tk8.6`，以及全部 `__pycache__` / `*.pyc|pyo|pdb`；**实测 604 个文件 / 34,307,087 字节 = 32.7 MB**（2.73 GiB → 32.7 MB）。保留 `python.exe`（105,816）、`python313.dll`（6,123,864）、`python3.dll`（72,536）、`vcruntime140.dll` / `vcruntime140_1.dll`、`DLLs\`（43 文件 / 15,079,134）、`Lib\` stdlib，以及 **`LICENSE.txt`（33,861 字节）**——PSF 许可要求再分发解释器时随包带上许可文件。落盘顺序是"拷到 `.runtime-new-<ts>` → 换入 → 断言"，判据是解释器**自洽**：在 `cwd=C:\`（离 payload 越远越好）下跑 `runtime\python.exe -B -c "import sys; print(sys.base_prefix)"`，得到的就是它自己所在目录（实测 `…\qq-bridge\python\runtime`）——这就是"不依赖构建机、也不依赖目标机装过任何 Python"的判据；同时断言 `LICENSE.txt > 1000 字节`、`runtime\` 全树 0 个重解析点。
+
+**venv 指向自带运行时：`pyvenv.cfg` 带相对占位、运行期按当前安装路径纠正【已核验】**：脚本第 2 步用 `runtime\python.exe -B -m venv --without-pip .venv-new` 重建 venv（2a），把旧 `Lib\site-packages` 迁移过来、排除 `__pycache__`/`*.pyc`（2b），精简 `Scripts\`——删掉 4 个 `activate*` 与全部 `*.exe` 启动器，只留 `python.exe`/`pythonw.exe`（2c），换入后真 import 断言、失败自动回滚到旧 venv（2e），最后把 `pyvenv.cfg` 收成**相对占位**（2f）。实测 `.venv` = **6,950 文件 / 556,422,363 字节**（原 6,982 / 559,370,224）。**为什么必须是"占位 + 运行期纠正"**：`.venv\Scripts\python.exe` 是 base 解释器的**副本**，要靠 `pyvenv.cfg` 的 `home` 找到 `python313.dll` 与 stdlib，`home` 不对连启动都做不到；两种写法各撞一次墙——写成**相对**（`home = ..\runtime`）CPython **不认**（它按**当前工作目录**解析，不是按 `pyvenv.cfg` 所在目录，实测同样 `exit=103`、`did not find executable at 'runtime\python.exe'`）；写成**绝对**则必然把构建机用户名路径（`C:\Users\<用户名>\…`）写进安装包。于是口径定为：**包里带相对占位（安装包零构建机路径），任何要用这个解释器的地方用之前按当前安装路径纠正成绝对路径**。实现是一处纯函数 `qq-bridge/src/lib/genie-venv-home.js` 的 `ensureVenvHome(rootDir)`：幂等（已经是对的绝对路径就一个字节都不写）、且**只在 `<rootDir>\runtime\python.exe` 存在时才动手**（`<rootDir>\runtime` 不存在时返回 `{changed:false, skipped:'no-runtime'}`，主人本机现网那种老布局因此一个字节都不动），纠正时顺手丢掉 `command` 行（那是 venv 创建时的命令行，天生带创建者绝对路径、对运行毫无用处）。三个入口都接了：桥 `src/lib/genie-tts.js`（`probeLocal` 开头与 `spawnServer` 内各一次）、`tools/genie-setup.mjs`（任何命令执行前）、打包侧的 prepare/mirror 脚本。**向后兼容实测**：把新代码放进运行树（`D:\Kizuna\resources\runtime\qq-bridge`，那里没有 `runtime\`）后，`ensureVenvHome` 返回 `skipped:'no-runtime'`，`probeLocal` 仍 `ready=true`、`pythonVersion=3.13.7`、三角色齐全、`reasons=[]`，`pyvenv.cfg` 未改动。
+
+**中性副本可移植实测（另一个盘、另一个路径、出厂状态）【已核验】**：把产物 `dist-eb\win-unpacked\resources\runtime` 整目录拷到 `D:\KizunaPortableTest\runtime`（33,061 文件 / 3,807,300,491 字节，`robocopy /MIR` 94.9 s；路径无空格、不含任何用户名），依次实测：① **出厂态直接**跑 `.venv\Scripts\python.exe -B -c "import sys; print(sys.base_prefix, sys.prefix)"`（cwd=`C:\`）→ `exit=103` + `did not find executable at 'runtime\python.exe'`（相对占位的真实表现，也正因此必须有运行期纠正）；② `node <副本>\qq-bridge\tools\genie-setup.mjs --check --root <副本>\qq-bridge\python` → 先打印 `已按当前引擎根纠正 .venv\pyvenv.cfg：home = D:\KizunaPortableTest\runtime\qq-bridge\python\runtime（包里带的是相对占位）`，随后 ①运行时 `.venv\Scripts\python.exe（Python 3.13.7）`、②`genie_tts 2.0.2` **完整导入通过**、③`GenieData` 391.5 MB、④角色 3 个（菲比/未花/三七），exit=0；③ 自愈之后**再直接**跑同一个解释器 → `BASE_PREFIX D:\KizunaPortableTest\runtime\qq-bridge\python\runtime`、`PREFIX …\python\.venv`、`EXE …\.venv\Scripts\python.exe`、exit=0（基前缀指向副本自己的 runtime，而不是构建机的 `C:\Users\…\Programs\Python\Python313`）；④ `--smoke "可移植验证。" --character feibi` → `合成成功：角色=feibi 音频=97324 字节 11796ms（含冷启动共 59829ms）`、常驻内存 4,428.7 MB、wav 落 `<副本>\qq-bridge\state\genie-smoke-1790607199939.wav`（97,324 字节、头四字节 `RIFF`+`WAVE`）、exit=0，引擎进程结束后 4610 端口已回收；⑤ 全树 grep `C:\Users\17367` = **0 个文件**（出厂态与自愈后都是 0；唯一一处在本次 smoke 生成的运行期日志 `qq-bridge\state\genie.log` 里那句临时文件路径，那是使用者机器上运行期才产生的文件、不属于随包内容）；裸数字 `17367` 命中 16 个文件，全部是**巧合**（NapCat 前端静态资源 2 个 + `jieba`/`mpmath`/`pypinyin`/`numpy` 等第三方数据表与测试文件 14 个，例如 `jieba\finalseg\prob_emit.py`、`mpmath\functions\elliptic.py`），属于原样分发的第三方内容、删不得。
+
+**这一轮的产物数字【已核验】**：`node tools/build-kizuna-app.mjs full --dir-only` exit 0、耗时 **317 s**（`--dir-only` 跳过发布）；`dist-eb\win-unpacked` = **33,133 文件 / 4,071,016,501 字节 = 3.79 GiB**、`resources\` = 33,062 / 3,807,316,567、`resources\runtime\` = 33,061 / 3,807,300,491、`resources\runtime\qq-bridge\python\` = **7,636 文件 / 2,011,495,431 字节 = 1.87 GiB**（`.venv` 6,950 / 556,422,363、`GenieData` 39 / 410,537,329、`models` 41 / 1,010,202,616、`runtime\` 604 / 34,307,087、`genie_server.py`+`genie_compat.py` 26,036），全树 0 个重解析点、0 个 `C:\Users\17367`。与上一轮（无自带运行时、且带 `dist.bak-*`）相比：`runtime\` +32.7 MB、`.venv` 略减、`dist.bak-*` −29.1 MB，净增 565 文件 / 约 +3.7 MB —— **换来的能力是"目标机上装没装 Python 都能跑"**。
+
+**打包链路三处扩展【已核验】**：① `mirror-python-engine.mjs`：内置运行时**不参与镜像**（源里没有它），改成**只断言**（`python.exe` 在、`LICENSE.txt > 1000 字节、0 重解析点、`sys.base_prefix` 自洽）；`.venv` 在"payload 已有 runtime"时**跳过镜像**（源 venv 绑的是开发机系统 Python，拷过来等于把问题搬回去），探测前把 `pyvenv.cfg` 纠正成绝对路径、探测后写回相对占位，最后全树扫构建机路径 —— 出厂占位态下 `--check` exit 0（此前 `--check` 会因"绝对 home 带构建机路径"exit 1，属于预期行为）。② `build-kizuna-app.mjs` 的 `GENIE_REQUIRED` 新增 5 项：`runtime/python.exe`、`runtime/python313.dll`、`runtime/Lib/os.py`、`runtime/LICENSE.txt`、`.venv/Lib/site-packages/genie_tts`（构建前闸门与构建后内容断言共用同一张表；少任何一项都意味着"这个包在没装 Python 的机器上跑不起来"），实测闸门输出 `7636 个文件 / 1.87 GiB、0 个联接`。③ `sanitize-full-payload.mjs` 新增 `dist.bak-*` 清理（见下条）。
+
+**顺带修掉的一处泄漏面（`tools/` 里的写死路径）【已核验】**：`qq-bridge/tools/test-dsh-compaction.mjs:27` 曾把构建者的 DSH 安装根写死为 `const DSH = 'C:/Users/17367/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai'`，而这个文件是随 payload `tools/` 一起发给使用者的工具 —— 实测产物 `resources\runtime\qq-bridge\tools\test-dsh-compaction.mjs:27` 命中 `C:\Users\17367`。已改成按当前用户推导 + 允许 `KIZUNA_DSH_PKG_ROOT` 覆盖（`path.join(os.homedir(), 'AppData','Roaming','npm','node_modules','@deepseek-ai','dsh','node_modules','@deepseek-ai')`）：构建机上解析结果与原来一字不差，`node tools/test-dsh-compaction.mjs` 仍 `ALL PASS（51/0）`（第 ⑤ 组"与真实 DSH 对齐"在本机仍是 SKIP —— 那个包不在该路径下，改动前后一致），修完产物全树 `C:\Users\17367` 命中数 1 → 0。另有一处**不算泄漏**但记一下：`qq-bridge/tools/align-readme-lines.mjs:16` 的注释里提到仓库目录名"Kizuna Public"（无盘符、无用户名），保持原样。
+
+**本轮仍未验证 / 仍有风险（如实列出）**：① `genie-setup.mjs --install` 的重建路径**未实测**（会重建主人现网 venv）；② **没有第二台真机**——本次只能在同一台机器的另一个盘、另一个路径的中性副本上验，"换机器可用"以此证据为限；③ NSIS 安装包**未打**（只跑 `--dir-only`，产物在 `kizuna-app\dist-eb\win-unpacked`）；④ 出厂态下 `.venv\Scripts\python.exe` **不能**被手工直接调用（exit=103），必须经桥或 `genie-setup`（这是"包里零构建机路径"换来的取舍，已写明）；⑤ 裸数字 `17367` 在 16 个第三方文件里巧合命中，无法清除；⑥ 打包工程仓库本身在 `C:\Users\17367\Desktop\…` 下，任何**新写**的、带绝对路径的产物文件都会重新引入这个泄漏面 —— 本轮的两道自动拦截是 mirror 的全树 grep 与 sanitize 的 dist.bak 清理，还没有把"全树 grep 构建机路径"做成构建闸门（本轮**未做**）。
+
+**连带改动**：`tools/sanitize-full-payload.mjs` 的 `walk()` 跳过 `.venv`。理由是它现在整棵第三方 Python 运行时都在 payload 里（4,900+ 个第三方 `.py` 与 dist-info），而该脚本会按 SCRUB 表重写命中的文本文件、还会按文件名删（`^manifest-.*\.json$` 一类规则本来只针对我们自己的中间产物）—— 在一份原样分发的运行时里做这两件事都不该发生。实测当前 payload 的 `python/` 子树（含 `models` 与 `GenieData`，7,611 个文件、5,075 个文本文件）对 SCRUB 全表与密钥表**0 命中**，所以今天没有发生任何实际改写；我们自己写的 `python/*.py` 与 `python/models/*.json` 仍照常扫。
+
+**管理端前端不随构建自动更新（本轮查清，是个容易踩的部署坑）**：payload 里的管理端前端在 `runtime-full/dist/`（以 `index.html` 定位，同级 `assets/`；`runtime-src/dist`、`full/app/dist`、`dist-eb\win-unpacked\resources\runtime\dist` 三处同构）。`build-kizuna-app.mjs` **全程不碰 `dist`** —— 它只把 `runtime-full` 整目录设成 `extraResources`（`:482`），文件里出现的 `dist-eb` 只是产物目录名；真正把前端搬过去的是源码仓的 `tools/sync-to-live.ps1:132-142`（先删 `<dst>/dist/assets` 再拷 `index.html` 与整个 `assets/`，所以不会留旧 hash 的 bundle），作用目标是 `:33-40` 的 `$payloadDirs`（`runtime-full` / `runtime-src` / `full\app` / `win-unpacked\resources\runtime`）加上设了 `QBM_LIVE_RUNTIME` 时的运行树。**结论：改了前端而不跑 `sync-to-live.ps1`，payload 与打包产物里的前端会一直是旧的** —— 本轮实测就差了 9 小时（payload 仍引用 `assets/index-ASTPHGvY.js`，运行树已是 `assets/index-BrzCgFuQ.js`，`index.html` 字节数相同、hash 不同，光看体积看不出来）。2026-09-28 终局同步已做：四处 `dist` 全部换成最终版 `index.html`（sha256 `031F78C9CBAE24D7E886F7CEB154D2FD16FDCBE12A683CC14F0582CABEF0FD1E`，引用 `assets/index-BrzCgFuQ.js`）+ `assets/{index-BrzCgFuQ.js 672,240 / index-Blu1yNhm.css 78,790 / index-BrzCgFuQ.js.map 1,995,210}`，逐个文件与源码仓 `dist\` 的 sha256 一致、旧 bundle 已随 `assets` 重建清掉；同步后 `win-unpacked` 3.79 GiB、`resources\` 3.54 GiB。
+
+**另一处待清理的随包垃圾：已修掉【已核验】**：payload 里曾有个 `runtime-full/dist.bak-pixivcard-20260928`（11 文件 / 30,530,605 字节 ≈ 29.1 MB），实测会**被 electron-builder 原样打进包**（产物 `resources\runtime\` 下确实存在）。`sanitize-full-payload.mjs` 的删除规则原本只覆盖 `config.json.bak-*` / `config.json.tmp` / `.pixiv-cookie` 与几个中间产物文件名 —— 现新增 `dist.bak-*` 目录清理。**踩到的坑**：第一版只扫脚本自己的 `PAYLOAD`（= `runtime-full\qq-bridge`），而 `dist.bak-pixivcard-20260928` 坐在 `PAYLOAD` 的**上一级**（`runtime-full\`），于是"清理"一行日志都没打、什么也没删；改成同时扫 `PAYLOAD` 与它的父目录后，单独跑一次即得 `[sanitize] 删除前端备份目录 dist.bak-pixivcard-20260928（11 个文件 / 29.1 MB）`，随后 payload 与产物 `resources\runtime\` 下都不再有它（这一轮产物已实测确认）。
+
+### 18.11 文档发送
 
 `qq-bridge/src/core/docx.js`（140 行）生成并上传 `.docx`：临时目录 `path.join(STATE_DIR, 'doc-tmp')`（`:19`）；正文上限 `MAX_DOCX_CHARS = 1000000`（`:24`）；额度文件 `path.join(STATE_DIR, 'docx-quota.json')`（`:27`）；日额度默认 `100000`（`:38-39`）；额度裁剪 `saveDocxQuota`（`:46`，裁剪行 `:51`，只保留最近 7 天）；额度预占 `docxQuotaReserve`（`:57`，超额直接拒绝且不占用额度）；写入 `writeDocxToMount`（`:74`，文件名 `${safeTitle}${extraName ? '-' + extraName : ''}-${Date.now()}.docx`）；标题净化 `:84`（`replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 40)`）；上传 `uploadFileToQQ`（`:92`，动作 `:94` 取 `upload_private_file` / `upload_group_file`）；上传超时 `AbortSignal.timeout(30000)`（`:116`）；额度提交 `docxQuotaCommit`（`:67`，上传成功后提交）；旧链路 `:139-140`（原 `/help` 发送能力清单文档的链路已删除）。
 
-### 18.11 链接卡片与视频
+### 18.12 链接卡片与视频
 
 `qq-bridge/src/core/media.js`（1,249 行）：封面真图判定 `isRealCoverBytes`（`:34`）只接受 JPEG、PNG、WebP 三种魔数，GIF 不放行；真实字节实测 `:60-63`（无参 `89 50 4E 47` / 4,410,875 字节；`300y300` 同魔数 / 210,146 字节；`imageView` 同魔数 / 210,146 字节；`type=jpg` `FF D8 FF` / 20,913 字节）；封面 URL 归一化 `normalizeCoverUrl` `:53` 与 `normalizeMediaUrl` `:92`；封面来源判定 `QQ_COVER_HOST_RE` `:231` 与 `neteaseRealCover` `:260`；探活 `probeImage`（`:562`，上限 `COVER_PROBE_MAX_BYTES = 64 * 1024` 位于 `:29`，超时 6 秒）；候选选择 `pickImage`（`:575`，主体 `:603-621`，两轮探活，全失败返回空串）；卡片发送与降级 `sendMusicCardWithFallback`（`:276`，降级段 `:286-308`，`primary` → `native` → `link`）；富文本发送 `sendRichOnce`（`:357`，去重窗口 `RICH_DEDUPE_MS = 60000` `:334`，超时 `AbortSignal.timeout(45000)` `:399`，间隔 `sleep(randInt(500, 1500))` `:386`）；音乐卡片构造 `buildMusicCard`（`:930`，主体 `:957-1040`、`netEase` 段 `:1049-1147`、收尾 `:1149-1167`）；音频直链 `neteaseAudioUrl`（`:763`）；音乐检索 `musicSearch`（`:1171`）；签名服务 `:441`、`:921` 注释；封面转存默认关闭 `:681`、`:705`、`:710`、`:715`；媒体域装配 `createMediaDomain`（`:311`、`:1248`）。
 
@@ -1074,15 +1170,16 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 
 `degraded` 判定：`err.degraded = true`（`qq-bridge/src/core/video.js:822`，抖音只剩链接可用）；`err.degraded = true`（`:875`，通用平台抓页失败）；`sentCard === 'link' && videoPlan.style === 'share'`（`qq-bridge/src/core/console-server.js:3428`，预期形态，不计降级）；`sentCard !== 'primary' && !intendedShare`（`:3429-3431`，记降级日志）；端点返回 `{ok:false, error, degraded, url}`（`:3526`）。
 
-### 18.12 空间配图
+### 18.13 空间配图
 
 `qq-bridge/src/lib/qzone-image.js`（297 行）为 `qq_send_qzone` 构造配图参数：参数差异说明 `:16-17`（`file` 为单图参数，`images` 为多图参数）；数量上限 `QZONE_IMAGE_MAX = 3`（`:45`）；临时文件寿命 `QZONE_IMAGE_TMP_MAX_AGE_MS`（`:48`）；文件名匹配 `QZONE_TMP_NAME_RE`（`:52`）；数量钳制 `clampQzoneImageCount`（`:55`）；临时目录 `qzoneImageTmpDir`（`:62`）；校验 `verifyQzoneImage`（`:84`）；参数构造 `prepareQzoneImageArg`（`:106`，分支 `:113-115`、`:124-129`）；清理 `sweepQzoneImageTmp`（`:142`）；收集 `collectQzoneImages`（`:170`，分支 `:167`、`:188`、`:191-201`、`:222-237`、`:243-258`、`:275-277`、`:286`、`:295-296`）。
 
-### 18.13 失败与降级
+### 18.14 失败与降级
 
 - 媒体未投递成功：给模型显式占位文案，提示不推断图片内容（`qq-bridge/src/core/media-pipe.js:207`）；尺寸过大 `[图片（尺寸过大已跳过：…）…]`（`:227`）；获取失败 `[图片（获取失败）…]`（`:229`）。
 - 封面非真图：丢弃该封面，不采用首个候选 URL（`qq-bridge/src/core/media.js:575/603-621`）。
 - 卡片发送失败：逐档降级并回执当前档位与来源（`qq-bridge/src/core/media.js:276-308`）。
+- 本地语音引擎不可用（没装齐 / 进程起不来 / 超时 / 引擎自身报错）：只记一行日志，再按 `config.voice.local.fallbackToCloud` 分流 —— 开着就改走云端（照旧记账与限额，`qq-bridge/src/core/voice.js:718-731`），关着则直接报错、这条语音退回文字发送，绝不动云端额度与密钥。
 - 表情发送失败（`识别URL失败` / `ENOENT`）：以 `base64` 重发一次（`qq-bridge/src/core/sticker.js:313-320`）；`add_custom_face` 不支持时降级为 `local://` 本地图库引用（`:546-554`）。
 - 文档超额：直接拒绝且不占用额度（`qq-bridge/src/core/docx.js:57`）。
 - 视频解析全败：抛错并携带 `degraded` 标记（`qq-bridge/src/core/video.js:821-823`、`:873-877`）。
@@ -1183,9 +1280,9 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 
 ### 21.3 费用口径与报表
 
-单价取自 `qq-bridge/src/core/token-report.js:19-25` 的 `DEFAULT_TOKEN_COST`，单位人民币元每百万 token，现场配置与默认值一致：`pHit 0.02`（缓存命中输入）、`pMiss 1`（缓存未命中输入）、`pOut 4`（输出）、`peakMult 2`（高峰时段倍率）；高峰时段集合为 `[9,10,11,14,15,16,17]`。
+单价取自 `qq-bridge/src/core/token-report.js:87-93` 的 `DEFAULT_TOKEN_COST`，单位人民币元每百万 token，现场配置与默认值一致：`pHit 0.02`（缓存命中输入）、`pMiss 1`（缓存未命中输入）、`pOut 4`（输出）、`peakMult 2`（高峰时段倍率）；高峰时段集合为 `[9,10,11,14,15,16,17]`。
 
-报表文本由 `buildTokenReportText`（`qq-bridge/src/core/token-report.js:117`）生成，失败文案位于 `:123-124`【已核验】。日界偏移 `dayOffsetMin = 480` 定义于 `qq-bridge/src/core/token-meter.js:74-75`，`context-savings.js` 使用同一偏移（`qq-bridge/src/core/context-savings.js:31-32`），环境变量为 `QQ_TOKEN_DAY_OFFSET_MIN`【已核验】；同一性判定 `naturalSame` 位于 `qq-bridge/src/core/token-report.js:134`【已核验】。
+报表文本由 `buildTokenReportText`（`qq-bridge/src/core/token-report.js:189`）生成，失败文案位于 `:196`【已核验】（2026-09-28 复核：正文为「一行一个口径」五行版式 —— 今日 / 自然日 / 命中率（未命中·命中·输出）/ 费用（谷·峰）/ 全天预估，见 CHANGELOG 2.0.4 的「变更与不兼容」；`/token N` 那一路同款式）。日界偏移 `dayOffsetMin = 480` 定义于 `qq-bridge/src/core/token-meter.js:74-75`，`context-savings.js` 使用同一偏移（`qq-bridge/src/core/context-savings.js:31-32`），环境变量为 `QQ_TOKEN_DAY_OFFSET_MIN`【已核验】；同一性判定 `naturalSame` 位于 `qq-bridge/src/core/token-report.js:209`【已核验】。
 
 ### 21.4 工具裁剪与描述压缩
 
@@ -1195,7 +1292,7 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 
 ### 21.5 压缩代理与 DSH 补丁
 
-`qq-bridge/src/lib/dsh-side.js`（613 行）在 MCP 挂载配置中把 `mcp-napcat` 指向压缩代理（`mcpBlock()` 位于 `:252-299`，压缩代理参数位于 `:280-288`），参数形态为 `-c <level> -n napcat [--exclude-tools a,b] [--toonify] -- node <script>`；工具调用超时 `toolCallTimeoutMs: 725000`（`:295`）【已核验】；安装版本 `INSTALL_VERSION = 1` 位于 `:25`。压缩代理不可用时回退直连 `mcp-napcat`（`:280-299`）。
+`qq-bridge/src/lib/dsh-side.js`（2026-09-28 复核：1 180 行 / 75 777 字节）在 MCP 挂载配置中把 `mcp-napcat` 指向压缩代理（`mcpBlock()` 位于 `:452` 起，压缩代理参数位于 `:478-488`），参数形态为 `-c <level> -n napcat [--exclude-tools a,b] [--toonify] -- node <script>`；工具调用超时 `toolCallTimeoutMs: 725000`（`:495`）【已核验】；安装版本 `INSTALL_VERSION = 1` 位于 `:26`。压缩代理不可用时回退直连 `mcp-napcat`（`:490-494`）。
 
 `qq-bridge/src/lib/dsh-compaction.js`（223 行）生成写入 DSH home 的 `cordis.patch.yml`：剪枝标记 `PRUNE_MARKER`（`:28`）、摘要输出上限 `SUMMARY_MAX_TOKENS = 4096`（`:31`）、最小工具结果长度 `MIN_TOOL_RESULT_CHARS = 300`（`:33`）、阈值下限 `MIN_THRESHOLD_RATIO = 0.08`（`:51`）、默认阈值 `DEFAULT_THRESHOLD_RATIO = 0.16`（`:54`），钳制段位于 `:65-90`【已核验】。桥侧配置为 `dshCompaction.thresholdRatio = 0.16`、`retainRatio = 0.02`、`toolResultMaxChars = 8192`、`enabled = true`【已核验】。
 
@@ -1235,7 +1332,7 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 | 桥配置 | `src/pages/BridgeConfig.tsx` | 3575 | 293,141 |
 | 学习 | `src/pages/Learning.tsx` | 2615 | 172,574 |
 | 群画像 | `src/pages/GroupPortrait.tsx` | 1349 | 90,053 |
-| 语音配置 | `src/pages/VoiceConfig.tsx` | 838 | 55,571 |
+| 语音配置 | `src/pages/VoiceConfig.tsx` | 1664 | 112,390 |
 | SSH 配置 | `src/pages/SSHConfig.tsx` | 773 | 50,369 |
 | 首页 | `src/pages/Home.tsx` | 509 | 35,119 |
 | 关系画布 | `src/pages/NetCanvas.tsx` | 561 | 31,827 |
@@ -1243,7 +1340,7 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 | 实例配置 | `src/pages/InstanceConfig.tsx` | 367 | 23,365 |
 | 网页视图 | `src/pages/WebView.tsx` | 195 | 10,519 |
 
-共用模块：`src/api.ts`（1,025 行 / 56,685 字节）提供接口封装；`src/config-cache.ts`（605 行 / 38,165 字节）提供配置缓存；`src/tool-schema-chars.ts`（125 行）为工具描述字符数的前端副本【已核验】。`src/pages/NetCanvas.tsx` 不含 `/api` 字面量也不调用 `api()`，不直接访问管理与桥接口【已核验】。页面目录下另有一个残留备份文件 `src/pages/InstanceConfig.tsx.bak-deadcard-20260923`（15,227 字节），不被构建引入【已核验】。
+共用模块：`src/api.ts`（1,025 行 / 56,685 字节）提供接口封装；`src/config-cache.ts`（605 行 / 38,165 字节）提供配置缓存；`src/tool-schema-chars.ts`（128 行）为工具描述字符数的前端副本【已核验】。`src/pages/NetCanvas.tsx` 不含 `/api` 字面量也不调用 `api()`，不直接访问管理与桥接口【已核验】。页面目录下另有一个残留备份文件 `src/pages/InstanceConfig.tsx.bak-deadcard-20260923`（15,227 字节），不被构建引入【已核验】。
 
 ### 22.3 路由分组
 
@@ -1277,7 +1374,7 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 
 ### 22.5 随包 QQ 窗口隐藏器
 
-`startNapcatHidden(onekey, quickLogin)`（`server/index.js:1291`）在拉起 NapCat 之前隐藏随包 QQ 的窗口，实现方式为向宿主机投放常驻 C# 脚本（`qqWindowHiderScript(cfg)` `:1348`；类名 `MoonBotQqWinHideResident`；脚本首行注释标明由 `server/index.js` 生成）【已核验】。`QQ_HIDER_DEFAULTS`（`:1336`）：`budgetMs` `43200000`（12 小时，观察者自身存活上限，到点退出，实际退出条件由父进程守卫决定）；`pollMs` `200`（常态轮询间隔）；`burstMs` `50`（目标出现后的快扫间隔）；`burstWindowMs` `5000`（快扫持续时长）；`readyTimeoutMs` `2500`（等待条件就绪的上限）。配套机制：存活的隐藏器登记于集合 `qqHiders`（`:1338`），重启 NapCat 时新实例收掉旧实例，不并行运行；目标进程号由 seed 文件传递（`:1353` 注释）【已核验】。路径守卫为硬条件：只处理可执行文件路径位于本 Shell 目录之下的进程（`:1325-1330` 注释）【已核验】。启动器与命令行的具体拼装未逐行核实【未核验】。
+`startNapcatHidden(onekey, quickLogin)`（`server/index.js:1291`）在拉起 NapCat 之前隐藏随包 QQ 的窗口，实现方式为向宿主机投放常驻 C# 脚本（`qqWindowHiderScript(cfg)` `:1348`；类名 `KizunaQqWinHideResident`；脚本首行注释标明由 `server/index.js` 生成）【已核验】。`QQ_HIDER_DEFAULTS`（`:1336`）：`budgetMs` `43200000`（12 小时，观察者自身存活上限，到点退出，实际退出条件由父进程守卫决定）；`pollMs` `200`（常态轮询间隔）；`burstMs` `50`（目标出现后的快扫间隔）；`burstWindowMs` `5000`（快扫持续时长）；`readyTimeoutMs` `2500`（等待条件就绪的上限）。配套机制：存活的隐藏器登记于集合 `qqHiders`（`:1338`），重启 NapCat 时新实例收掉旧实例，不并行运行；目标进程号由 seed 文件传递（`:1353` 注释）【已核验】。路径守卫为硬条件：只处理可执行文件路径位于本 Shell 目录之下的进程（`:1325-1330` 注释）【已核验】。启动器与命令行的具体拼装未逐行核实【未核验】。
 
 ### 22.6 失败与降级
 
@@ -1289,13 +1386,21 @@ JSON.stringify({ type, title: title.slice(0,100), desc: desc.slice(0,100), picUr
 
 未核验：`/api/bridge/chat-stream` 与 `/api/bridge/context-overhead` 的响应字段未取到，其结构未核验；管理端路由的请求与响应字段来自正则抽取，个别端点的字段完整性未核验【未核验】。
 
+### 22.7 一处会毁掉整段文字的排版陷阱：`.lrn-inline-note` 是 `inline-flex`
+
+`src/styles/app.css` 里 `.lrn-inline-note` 的声明是 `display:inline-flex; align-items:center; gap:6px`。它被大量用作"一行小字说明"，但**只要正文里混进元素子节点（`<b>` / `<code>` / `<a>`），那个元素就会变成一个 flex 子项** —— 前后两段文字各自成为匿名 flex 项，于是"半句话"被搬到别处：实测现象是文件名或 `**加粗**` 那一段单独换行、它后面的文字缩进到下一行、彼此还带 6px 间隙（2026-09-28 由使用方截图指出，出现在语音页的音色库两段说明里）。
+
+- 想写**块级段落**（多行、正常断行）：必须显式 `style={{ display: 'block', lineHeight: 1.75 }}`，多个 `<div>` 各占一行。
+- 想保持**行内一行**（图标 + 一句话）：给整段文字套一个 `<span>` 再放进容器（该文件里其余几处就是这么写的），图标单独作为 flex 项。
+- 顺带一条同源教训：正文里写 `**加粗**` 或 `` `代码` `` 是 Markdown 习惯，JSX 不会解析，界面上会照原样显示成星号与反引号（同一处反馈里就有两个：`按**复刻音色**存下来` 与 ``` `state/voice-samples/` ```）。要加粗用 `<b>`，要走等宽字体用 `<code>`。
+
 ## 23. 部署、开机自动连接与运行维护
 
 ### 23.1 本机进程编排与退出守卫
 
 进程编排的进程形态、启动方与日志见「进程与模块拓扑」章的进程清单表；单实例锁为 `qq-bridge/state/bridge.lock`（`qq-bridge/src/lib/paths.js:20`）；隔离 DSH 的 home 由 `isoHomeDir` 解析（`server/index.js:5461`）；NapCat 启动器经 `startNapcatHidden` 拉起（`:1291`），窗口由隐藏器处理；退出守卫由管理端拉起。
 
-`server/napcat-guardian.mjs`（146 行）为独立进程，在管理端退出后回收 NapCat 与随包 QQ：父进程存活探测 `alive(parentPid)` `:69-72`，轮询 `setInterval(…, 2000)` `:131`、`:146`；宽限时间默认 `30000` 毫秒（`:52`）；当前守卫进程号 `currentGuardPid()` `:75-77`；清理对象为三条命令（NapCat `:93`、桥 `:103`、DSH `:110`），均带自身排除判定 `NOT_SELF`（`:87`）；命令行参数 `--parent`、`--guard-file`、`--dsh-port`、`--bridge-script`、`--grace`、`--kill-napcat`、`--dirs`、`--log`；状态文件与目录 `GUARDIAN_FILE`、`CONFIG_DIR`、`LOG_DIR`（`server/index.js:43`、`:45`、`:9863`）；装配 `armNapcatGuardian`（`:9942`）与 `spawnGuardianDetached`（`:9884`，以 `guard-node.exe` 硬链接 `:9887-9896` 配合 WMI `Win32_Process.Create` 与 `ShowWindow=0` 启动 `:9907-9913`）；启动后自动装配 `ensureGuardianArmed()`（`:9989`），环境变量 `QBM_NAPCAT_GUARDIAN`（`:9991-9997`）与父进程名正则 `/^MoonBot$/i`（`:9998`）参与判定，复查间隔 60000 毫秒（`:9651`）；手动装配端点 `POST /api/guardian/arm`（`:10016`）；退出端点 `POST /api/shutdown`，请求体 `{all}`（`:10040`）。
+`server/napcat-guardian.mjs`（146 行）为独立进程，在管理端退出后回收 NapCat 与随包 QQ：父进程存活探测 `alive(parentPid)` `:69-72`，轮询 `setInterval(…, 2000)` `:131`、`:146`；宽限时间默认 `30000` 毫秒（`:52`）；当前守卫进程号 `currentGuardPid()` `:75-77`；清理对象为三条命令（NapCat `:93`、桥 `:103`、DSH `:110`），均带自身排除判定 `NOT_SELF`（`:87`）；命令行参数 `--parent`、`--guard-file`、`--dsh-port`、`--bridge-script`、`--grace`、`--kill-napcat`、`--dirs`、`--log`；状态文件与目录 `GUARDIAN_FILE`、`CONFIG_DIR`、`LOG_DIR`（`server/index.js:43`、`:45`、`:9863`）；装配 `armNapcatGuardian`（`:9942`）与 `spawnGuardianDetached`（`:9884`，以 `guard-node.exe` 硬链接 `:9887-9896` 配合 WMI `Win32_Process.Create` 与 `ShowWindow=0` 启动 `:9907-9913`）；启动后自动装配 `ensureGuardianArmed()`（`:9989`），环境变量 `QBM_NAPCAT_GUARDIAN`（`:9991-9997`）与父进程名正则 `/^Kizuna$/i`（`:9998`）参与判定，复查间隔 60000 毫秒（`:9651`）；手动装配端点 `POST /api/guardian/arm`（`:10016`）；退出端点 `POST /api/shutdown`，请求体 `{all}`（`:10040`）。
 
 ### 23.2 完整性自修
 
@@ -1423,7 +1528,7 @@ $$
 \text{cost}(req)=\frac{\mathrm{cacheRead}\cdot \mathrm{pHit}+\mathrm{prompt}\cdot \mathrm{pMiss}+\mathrm{completion}\cdot \mathrm{pOut}}{10^{6}}\cdot \mathrm{mult}\bigl(h(time(req))\bigr),
 $$
 
-其中 $h(\cdot)$ 取北京时间小时、$\mathrm{mult}(h)=\mathrm{mult}$ 当 $h\in\mathcal{H}$ 否则 $1$；**逐请求**按小时判定倍率的实现见 `qq-bridge/tools/compaction-threshold.mjs:26-29`（`costOf`）与 `qq-bridge/src/core/token-report.js:67-94`（`summarizeMeasuredCost`）【已核验】。上下文本体的边际成本按缓存读价计、前缀失效后的整段重读按未命中价计，二者相差 $50$ 倍，因此上下文长度 $C$ 本身不是成本主项，**前缀重建的次数与重建时的上下文长度**才是。
+其中 $h(\cdot)$ 取北京时间小时、$\mathrm{mult}(h)=\mathrm{mult}$ 当 $h\in\mathcal{H}$ 否则 $1$；**逐请求**按小时判定倍率的实现见 `qq-bridge/tools/compaction-threshold.mjs:26-29`（`costOf`）与 `qq-bridge/src/core/token-report.js:136-163`（`summarizeMeasuredCost`）【已核验】。上下文本体的边际成本按缓存读价计、前缀失效后的整段重读按未命中价计，二者相差 $50$ 倍，因此上下文长度 $C$ 本身不是成本主项，**前缀重建的次数与重建时的上下文长度**才是。
 **量纲提示.** 后文 $b$ 的量纲为 ¥/token/步，而 $\mathrm{pHit}$ 的量纲为 ¥/M token，折算关系为 $b=\mathrm{pHit}\times10^{-6}$；桌面端标定脚本中该折算写作 `T = (v) => v * 1e-6`（`docs/dsh-compaction-math.mjs:16`）【已核验】，$\mathrm{pHit}=0.02$ 对应 $b=2\times10^{-8}$。
 **建模假设清单（可证伪）.**
 
@@ -1436,7 +1541,7 @@ $$
 | A5 | 摘要是保内容的，其体量 $s$ 与 $R$ 无强相关 | 桌面端脚本固定 $s=3000$（`docs/dsh-compaction-math.mjs:22`） | 若 $s$ 随 $R$ 增长，重建成本上升，$T^{*}$ 上移 |
 | A6 | 固定开销 $F$ 与阈值无关 | 压缩器不能修改系统提示词与工具 schema（`dsh/packages/compaction/compaction-basic/README.zh.md`：*"只压缩派生历史——无法缩减系统提示词、工具与会话前缀"*） | 假设成立性由代码结构保证，非近似 |
 
-**固定开销 $F$ 的实测口径.** 仓库中把 $F$ 取为 $F_{0}=27{,}500\ \text{token}$，并在该处标注其口径为"system + 工具表，实测（旧值；压缩后实际更小，用它当保守下限）"（`qq-bridge/tools/test-dsh-compaction.mjs:74`）【据仓库记载】；该值被用于**门禁**（gate）而不是用于拟合：测试断言 $\tau W \ge 1.5F_0$（同文件第 79 行）【已核验】。固定开销的两组量级测量（同一现象的不同截面）：工具 JSON schema 合计约 $8.0\times10^{4}$ 字符 $\approx 2.4\times10^{4}$ token/步、单次请求 system 约 $5.4\times10^{4}$ 字符（均见 `qq-bridge/src/lib/tool-tiers.js:4-5`）；单次请求（较早观测）约 $26$k token，其中约 $87\%$ 为工具 JSON schema（`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml:188-190`）。
+**固定开销 $F$ 的实测口径.** 仓库中把 $F$ 取为 $F_{0}=27{,}500\ \text{token}$，并在该处标注其口径为"system + 工具表，实测（旧值；压缩后实际更小，用它当保守下限）"（`qq-bridge/tools/test-dsh-compaction.mjs:74`）【据仓库记载】；该值被用于**门禁**（gate）而不是用于拟合：测试断言 $\tau W \ge 1.5F_0$（同文件第 79 行）【已核验】。固定开销的两组量级测量（同一现象的不同截面）：工具 JSON schema 合计约 $8.0\times10^{4}$ 字符 $\approx 2.4\times10^{4}$ token/步、单次请求 system 约 $5.4\times10^{4}$ 字符（均见 `qq-bridge/src/lib/tool-tiers.js:4-5`）；单次请求（较早观测）约 $26$k token，其中约 $87\%$ 为工具 JSON schema（`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml:197-199`）。
 
 ## 27. 上下文的分块模型与摘要的递归结构
 
@@ -1489,8 +1594,8 @@ $$
 **定义 2.8（预算的可行性约束）.** 加载期强制 $\alpha+\left|\mu\right|+\omega \le \Theta$，$\Theta\in\mathbb{Z}_{>0},\ \alpha,\omega\in\mathbb{Z}_{\ge0}$，违反即抛 `ToolResultPruneConfig` 错误（同包 `src/config.ts:51-63`）【已核验】；出厂默认 $(\Theta,\alpha,\omega)=(8192,4096,1024)$（同文件第 10-14 行）【已核验】。
 **性质 2.3（剪枝算子的三条不变量）.** ① 幂等性：剪枝后内容长度 $\alpha+|\mu|+\omega\le\Theta$，故二次调用返回恒等，实现由显式断言保证（"replacement must be smaller and within threshold"，`index.ts:116-121`）；② 富块序保持：非文本块原样透传，只改写文本块（同文件第 93-97 行）；③ 回放可恢复：替换事件与一条 `compaction/prune` 事件**同步相邻**，后者携带 `shadowedRange`、`shadowedSeqs`、`shadowedTokenCount`，使纯消费者无需保存逐节点状态即可从压力中减去被遮蔽量（`index.ts:159-173`；事件 schema 见 `dsh/packages/compaction/compaction/src/types.ts:83-88`）。
 **性质 2.4（切分按码点而非 UTF-16 单元）.** 文本切片用 `Array.from(text)` 得到的码点数组，故保留边界不会劈开代理对；但**字素簇仍可能被劈开**（`index.ts:99-110`，函数文档 `76-82` 明确写出该已知限制）【已核验】。这是保真度分析中一类可量化的边界损失。
-剪枝预算的落地取值在两个部署间不同：DSH 插件出厂与桌面端 `web` profile 补丁均为 $8192/4096/1024$（`compaction-tool-result-pruner/src/config.ts:10-14`；`~/.dsh/profiles/web/cordis.patch.yml:200-205`），QQ 桥 preset 为 `thresholdChars 25000`、`headChars 22800`、`tailChars 2000`（`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml:210-215`）。桥侧的推导规则是**按比例分配**：$(\alpha,\omega)=(\lfloor0.6\,\Theta\rfloor,\lfloor0.2\,\Theta\rfloor)$，余下 $20\%$ 留给标记；若标记超预算则把 $\Theta$ 抬到 $\alpha+|\mu|+\omega+32$ 并重算（`qq-bridge/src/lib/dsh-compaction.js:76-90`）【已核验】。
-**实测项：QQ 桥 preset 的阈值项取值.** QQ 桥 preset 只配置了剪枝预算，**没有配置** `thresholdRatio` / `retainRatio`（`agent.cordis.yml:206-215`）【已核验】，因此该 preset 下这两项取 DSH 出厂缺省 $\tau_0=0.8$、$\rho_0=0.16$（`compaction-basic/src/config.ts:20-23`）【已核验】。该 preset 的 `<DSH_HOME>` 级 `cordis.patch.yml` 覆盖是否生效 **【未核验】**：本机既没有 `<DSH_HOME>/cordis.patch.yml`（已确认不存在），桥侧写入的 home 也取决于 `QQB_DSH_HOME` 的解析结果，而该环境变量在本会话中为空。
+剪枝预算的落地取值在两个部署间不同：DSH 插件出厂与桌面端 `web` profile 补丁均为 $8192/4096/1024$（`compaction-tool-result-pruner/src/config.ts:10-14`；`~/.dsh/profiles/web/cordis.patch.yml:200-205`），QQ 桥 preset 为 `thresholdChars 25000`、`headChars 22800`、`tailChars 2000`（`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml:219-224`）。桥侧的推导规则是**按比例分配**：$(\alpha,\omega)=(\lfloor0.6\,\Theta\rfloor,\lfloor0.2\,\Theta\rfloor)$，余下 $20\%$ 留给标记；若标记超预算则把 $\Theta$ 抬到 $\alpha+|\mu|+\omega+32$ 并重算（`qq-bridge/src/lib/dsh-compaction.js:76-90`）【已核验】。
+**实测项：QQ 桥 preset 的阈值项取值.** QQ 桥 preset 只配置了剪枝预算，**没有配置** `thresholdRatio` / `retainRatio`（`agent.cordis.yml:208-224`）【已核验】，因此该 preset 下这两项取 DSH 出厂缺省 $\tau_0=0.8$、$\rho_0=0.16$（`compaction-basic/src/config.ts:20-23`）【已核验】。该 preset 的 `<DSH_HOME>` 级 `cordis.patch.yml` 覆盖是否生效 **【未核验】**：本机既没有 `<DSH_HOME>/cordis.patch.yml`（已确认不存在），桥侧写入的 home 也取决于 `QQB_DSH_HOME` 的解析结果，而该环境变量在本会话中为空。
 
 ## 28. 成本模型与压缩触发判据
 
@@ -1650,7 +1755,7 @@ $$
 历史样本的其余标定量（口径见表内）：边际与截距为 $\text{每次}\approx\text{¥}0.0020+0.022\ \text{¥/M}\times C$（对 $\ge50$k 的最小二乘）；单次重建成本 $\approx$ ¥$0.036$（重建步的实测成本中位数）；重建频率 $\propto 1/\tau$（由重建事件计数得出）；压缩后落点 $R\approx28.7$k token（重建后上下文的中位数）；缓存 TTL 行为为间隔 $<30$ 分钟时 `miss/context` 中位数 $\approx0.005$、间隔 $>2$ 小时时 $0.84$ 且其中 $60\%$ 为完整整段重读（按请求间隔分组的 `miss/context` 中位数）。
 历史样本的模型输出与标定：$\tau=0.08$ 时模型日成本 ¥$3.34$、相对最优 $+32\%$；$\tau=0.12$ 时 ¥$2.67$、$+5.5\%$；$\mathbf{\tau=0.16}$ 时 **¥$2.53$**、最优；$\tau=0.18$ 时 ¥$2.53$、最优（平顶）；$\tau=0.25$ 时 ¥$2.66$、$+5.1\%$。**标定偏差**：模型在 $\tau_{\text{obs}}=0.08$ 处算得 ¥$3.34$/天，实测 ¥$3.49$/天，偏差 $-4\%$。**稳健区间**（相对最优劣化 $\le2\%$）为 $0.14\sim0.20$。**结论**：出厂值由 $0.08$ 改为 $0.16$ 后，模型给出的压缩次数由 $28.7$/天降到 $11.2$/天。
 **证据等级说明.** 上述"$4{,}659$ 次 / $11.2$ 天""¥$3.34$ 对 ¥$3.49$（$-4\%$）""$28.7$/$11.2$ 次每天"等数字**以代码注释形式存在于仓库**（`config.js:41-57`、`dsh-compaction.js:41-50`、`test-dsh-compaction.mjs:64-72`），属**【据仓库记载】**。本次未在本机重跑 `compaction-threshold.mjs`：本机 `qq-bridge/state/token-usage.jsonl` 只有 $304$ 行、且工作区配置并非产出该数据集的配置（本机 `config.json` 的 `thresholdRatio` 已是 $0.16$），不满足"样本 $\ge200$ 条主聊天行"的脚本前置条件；复现方式为在产出该数据集的部署上执行 `cd /root/qq-bridge && node tools/compaction-threshold.mjs`（脚本第 33 行的自述用法）。**该组数字已被后续生产复算取代**（新样本 $5{,}957$ 次 / $13.8$ 天；$-4\%$ 亦被 $-27\%$ 取代，后者口径更完整）。
-**两条标定路径的一致性与强度界限.** 桌面端与 MoonBot 的出厂值同为 $0.16$，但**不能**把它当作两次独立观测：两条路径共用单价（DeepSeek 空闲时段定价）、承载边际假设 $b=\mathrm{pHit}$ 与截距 $a_0$（服务端的 $a_0$ 被桌面端直接沿用，未在桌面端独立回归），仅桌面端的 $g=5{,}500$ 独立——它由聚合量 `(未命中+输出) ÷ 步数` 反推，属**量级估计**而非逐步回归（`docs/DSH-COMPACTION.md` 原 §8 自述）。因此这属于**同一模型在两组参数下的稳健性检查**：参数在 $R\in[10k,160k]$、$g\in[10^3,10^4]$ 的大范围内变动，最优点始终落在 $8\%\sim47\%$ 之间，且与两条路径独立选取的参数点都接近 $0.16$；这支持"$0.16$ 是量级正确的内点最优"，但**不构成**对 $\tau=0.16$ 的精度认证。**该样本之上的后续复算把最优点定位到 $0.14$，同时仍把 $0.16$ 留在稳健区间内**——即"$0.16$ 附近"的结论被更强的样本以"区间下移一档、出厂值不越界"的方式部分修正。
+**两条标定路径的一致性与强度界限.** 桌面端与 Kizuna 的出厂值同为 $0.16$，但**不能**把它当作两次独立观测：两条路径共用单价（DeepSeek 空闲时段定价）、承载边际假设 $b=\mathrm{pHit}$ 与截距 $a_0$（服务端的 $a_0$ 被桌面端直接沿用，未在桌面端独立回归），仅桌面端的 $g=5{,}500$ 独立——它由聚合量 `(未命中+输出) ÷ 步数` 反推，属**量级估计**而非逐步回归（`docs/DSH-COMPACTION.md` 原 §8 自述）。因此这属于**同一模型在两组参数下的稳健性检查**：参数在 $R\in[10k,160k]$、$g\in[10^3,10^4]$ 的大范围内变动，最优点始终落在 $8\%\sim47\%$ 之间，且与两条路径独立选取的参数点都接近 $0.16$；这支持"$0.16$ 是量级正确的内点最优"，但**不构成**对 $\tau=0.16$ 的精度认证。**该样本之上的后续复算把最优点定位到 $0.14$，同时仍把 $0.16$ 留在稳健区间内**——即"$0.16$ 附近"的结论被更强的样本以"区间下移一档、出厂值不越界"的方式部分修正。
 
 ## 30. 生产样本复算记录（2026-09-25）
 
@@ -1767,7 +1872,7 @@ $$
 **定义 6.4（剩余信息率与损耗率）.** 设原区间内容为 $X$（token 量 $|X|=\theta(X)$），其替代物为 $X'$，则 $\eta=\frac{|X'|}{|X|}$（剩余信息率）、$\ell=1-\eta$（损耗率）。两条压缩路径的保真度口径为：剪枝的替代物规模 $\lvert X'\rvert=\alpha+|\mu|+\omega$（码点）、原规模 $\lvert X\rvert=L$，故 $\eta_{\text{prune}}=\frac{\alpha+|\mu|+\omega}{L}$（码点口径，与 token 口径不成严格比例）；摘要的替代物规模为检查点节点价格、原规模为被遮蔽区间价格（恰为 `shadowedTokenCount`），故 $\eta_{\text{sum}}$ 可直接由日志算出。
 **命题 6.1（剪枝的语义损耗是位置性的）.** 剪枝删除的是区间的**中段** $[\alpha,L-\omega)$，保留**首尾**：头部 $\alpha$ 码点内（工具名、参数回显、状态头）与尾部 $\omega$ 码点内（结论、错误串、退出码）逐字保留；中段 $[\alpha,L-\omega)$（数组体、日志体、base64 体）整体丢失，由固定标记 $\mu$ 替代。这正是配置注释所述的取舍："*整段唤醒协议 / 状态快照都能完整留下，真正超大的（图片 base64、超长历史）照旧被剪*"（`qq-bridge/src/core/config.js:63-65`）【据仓库记载】。
 **引理 6.2（边界码点损耗的期望上界）.** 由性质 2.4，字素簇可能被劈开；若字素簇长度有界 $G$，则两个切点各造成至多 $G-1$ 个码点的形变，故 $\mathbb{E}\,[\text{边界形变码点}]\le 2(G-1)$。对 CJK 与拉丁文本 $G=1$（无形变）；对含 ZWJ 序列的 emoji 文本 $G$ 可达 $2\sim7$。这是一个**有界但非零**的保真度损失，且只在切点附近发生。**【未核验】**：仓库中没有对该量的实测统计。
-**定义 6.5（重读保真度）.** 定义"压缩后模型能直接看到的信息占压缩前能被看到的信息的比例" $\phi=\frac{|\text{保留段}|+|\text{摘要}|+|\text{可检索归档}|}{|\text{压缩前上下文}|}$；在 MoonBot 架构中 $\phi$ 有一个非平凡的结构性提升：**被压缩掉的内容并未消失，而是进入可检索的持久层**。因此对"是否还能被取知"这一语义问题，有效保真度高于 $\eta$；对"是否出现在前缀里（即是否计入承载成本）"这一成本问题，保真度就是 $\eta$。**这两种保真度必须分开使用**：混用会导致两类相反的错误——一类是把上下文压得过小、使模型检索不到所需信息；另一类是为了保留而不敢压缩。
+**定义 6.5（重读保真度）.** 定义"压缩后模型能直接看到的信息占压缩前能被看到的信息的比例" $\phi=\frac{|\text{保留段}|+|\text{摘要}|+|\text{可检索归档}|}{|\text{压缩前上下文}|}$；在 Kizuna 架构中 $\phi$ 有一个非平凡的结构性提升：**被压缩掉的内容并未消失，而是进入可检索的持久层**。因此对"是否还能被取知"这一语义问题，有效保真度高于 $\eta$；对"是否出现在前缀里（即是否计入承载成本）"这一成本问题，保真度就是 $\eta$。**这两种保真度必须分开使用**：混用会导致两类相反的错误——一类是把上下文压得过小、使模型检索不到所需信息；另一类是为了保留而不敢压缩。
 **定理 6.1（内点最优的充分条件）.** 若 $\kappa_{rb}>0$、$g>0$、$b>0$ 且可行域为 $T\in(R, W]$ 且 $W-R>\sqrt{2g\kappa_{rb}/b}$，则 (4.1) 给出的 $T^{*}$ 落在可行域内部，且是唯一极小点；若 $W-R\le\sqrt{2g\kappa_{rb}/b}$，则最优点退化为**边界点** $T=W$，即"不压缩"。**证明.** 关于 $T$ 的凸性与唯一驻点由定理 4.1 给出；可行域为闭区间，凸函数在闭区间上的极小点或为内点驻点或为端点。由单调性 $\Phi'(D)<0$ 当 $D<\sqrt{2g\kappa_{rb}/b}$、$\Phi'(D)>0$ 当 $D>\sqrt{2g\kappa_{rb}/b}$，故若 $\sqrt{2g\kappa_{rb}/b}<W-R$ 则驻点在内，否则 $\Phi$ 在 $(R,W]$ 上递减，最小值在 $T=W$。$\square$
 **推论 6.1（"不压缩"作为合理配置的判据）.** 桌面端缺省 $\tau=0.8$（$T=800{,}000$、$D=780{,}000$）远大于 $\sqrt{2g\kappa_{rb}/b}=132{,}665$，故它落在 $\Phi$ 的**递增段**，被模型判为劣（¥$4.1703$/天 对 ¥$2.0229$/天）；反之，若某部署的 $g$ 极小（如纯问答、几乎无工具调用）或 $\kappa_{rb}$ 极大（如窗口很小、保留量很大），则 $T=W$ 可能确实是模型给出的最优解。
 **推论 6.2（稳健区间的解析形式）.** 稳健区间 $[\tau_1,\tau_2]$ 由相对劣化阈值 $\varepsilon$ 隐式定义：$\frac{\Phi(T)}{\Phi(T^{*})}\le 1+\varepsilon$。代入 $D=T-R$、$D^{*}=\sqrt{2g\kappa_{rb}/b}$、$m=g\kappa_{rb}$，有
@@ -2006,7 +2111,7 @@ node docs/dsh-compaction-math.mjs 1000000 10000 400 20000   # g=10,000 时应得
 **验收（可执行的门禁）**：`qq-bridge/tools/test-dsh-compaction.mjs` 对该模型的产物做断言：① $\tau W\ge1.5F_0$ 且 $\tau\in[0.12,0.20]$（`:76-81`）；② 缺省值严格大于 $0.08$，$0.06/0.02/0.005$ 均被夹至 $\ge78{,}000$ token（`:82-88`）；③ 余量 $\tau W-(\rho W+F_0)\ge25{,}000$（`:89-94`）；④ `config.example.json` 的 `dshCompaction` 三项与代码缺省一致（`:95-101`）；⑤ 生成的 YAML 含 `compaction-basic` / `tool-result-pruner` 且都带 `disabled: false`（`:108-115`）；⑥ 剪枝预算满足 $\alpha+\lvert\mu\rvert+\omega\le\Theta$（`:49-50`）。
 **注意**：断言 ① 的窗口常量取 $W_{\text{test}}=1{,}048{,}576$（$2^{20}$，即 MiB 口径），而桌面端标定脚本取 $W=1{,}000{,}000$（十进制兆），最新生产复算的命令行也显式传 $1{,}000{,}000$；二者相差 $4.86\%$，足以解释"$0.16\times W$"在两个脚本中为 $167{,}772$ 与 $160{,}000$ 的差别。**这是口径不一致而非矛盾**，但在同一段落里混用两者会得到不一致的 token 绝对值。
 **运行期计量（`context-savings.js`）.** **性质 10.2（估算的替代方案：直接读权威日志）.** 该模块的第一版走桥的 `mux` 事件流（订阅 `compaction/prune` 与 `step/start` 帧），实测不可行：官方 rc.1 没有全局广播，桥逐会话 `open session`/`follow`，且"仅日志事件能否经 follow 投递"没有保证（`context-savings.js:6-9`）【据仓库记载】；因此改为**读 DSH 自己落的会话日志**：`<dshHome>/sessions/<slug>/<sessionId>/session.jsonl.zstd`。**该数据来源的必要性**：每条 `compaction/prune` / `compaction/summary` 都带 `shadowedSeqs` 与 `shadowedTokenCount`，而日志中完整保留每个 `step/start` 的 `seq` 与时间——于是剪枝收益与重读节省两个量都能**精确**算出，而不是靠字符数估算（同文件第 10-16 行）【据仓库记载】。**`dshHome` 的解析顺序（测量条件）**：管理器里配置的隔离 home 必须排在 `DSH_HOME` 前面；该处注释在本文写作时读取到的内容不完整（同文件第 99-103 行，原文在此处截断）【未核验】；另外本机既不存在 `<DSH_HOME>/cordis.patch.yml` 也未设置 `QQB_DSH_HOME`（本会话已确认），说明该环境变量下的写入路径在本机为空跑【已核验】。
-**其余验证手段与其验证对象**：桥与管理端口径逐字复刻（金额口径 `/token` vs `.cost-custom`，`qq-bridge/src/core/token-report.js:6-14, 63-66`）；与 DSH 对账（水位制，记账覆盖度，`token-meter.js` 的 `reconcileWithDsh` / `tokenReconcileStatus`，`:900, 1014`）；重试事件计数（提供方计费但 DSH 不给 usage 的缺口，`context-savings.js:111-114, 145-147`）；工具 schema 体积实测（固定开销 $F$ 的量级，`qq-bridge/tools/tool-schema-meter.mjs`，引用处 `tool-tiers.js:4`；`qq-bridge/tools/calc-slim-tools.mjs`）；会话日志重算幂等性（面板数值可回填，`context-savings.js:20` 与 `STATE_VERSION` 机制 `:34-37`）。
+**其余验证手段与其验证对象**：桥与管理端口径逐字复刻（金额口径 `/token` vs `.cost-custom`，`qq-bridge/src/core/token-report.js:6-14, 87-93`）；与 DSH 对账（水位制，记账覆盖度，`token-meter.js` 的 `reconcileWithDsh` / `tokenReconcileStatus`，`:900, 1014`）；重试事件计数（提供方计费但 DSH 不给 usage 的缺口，`context-savings.js:111-114, 145-147`）；工具 schema 体积实测（固定开销 $F$ 的量级，`qq-bridge/tools/tool-schema-meter.mjs`，引用处 `tool-tiers.js:4`；`qq-bridge/tools/calc-slim-tools.mjs`）；会话日志重算幂等性（面板数值可回填，`context-savings.js:20` 与 `STATE_VERSION` 机制 `:34-37`）。
 **已知的计量缺口（仓库自述）**：`llm/retry` 事件对应的失败尝试由提供方计费但 DSH 不返回 usage，因此面板会低估这一块；测量批次记录为控制台 $48{,}063{,}224$ / 面板 $47{,}919{,}388$、差 $143{,}836$、同一天恰好 $2$ 条 `llm/retry`（`context-savings.js:111-114`）【据仓库记载】。因此该模块单独统计 `retryEvents`，使缺口可解释而非静默。
 
 ## 36. 标定边界、适用条件与未核验项
@@ -2017,7 +2122,7 @@ node docs/dsh-compaction-math.mjs 1000000 10000 400 20000   # g=10,000 时应得
 | --- | --- | --- |
 | 改单价（`config.json` → `tokenCost`） | $\mathrm{pHit},\mathrm{pMiss},\mathrm{pOut},\mathrm{mult}$ 直接进 $\kappa$ 与 $b$ | `qq-bridge/config.json`、`token-report.js:19-25` |
 | 换模型 / 换服务商 | 缓存 TTL 与命中行为变化；$W$ 变化；$g$ 变化 | $W_{\text{default}}$ 在适配器内（`llm-deepseek/src/adapter.ts:140`，$10^{6}$）与 pi-ai（`llm-pi-ai/src/config.ts:61`，$262{,}144$）不同 |
-| 工具表大改 | $F$ 变化 $\Rightarrow$ 下限 (3.4) 变化 | `tool-tiers.js:4-5`；preset 卸载插件的手段（`agent.cordis.yml:187-195`） |
+| 工具表大改 | $F$ 变化 $\Rightarrow$ 下限 (3.4) 变化 | `tool-tiers.js:4-5`；preset 卸载插件的手段（`agent.cordis.yml:196-204`） |
 | 提示词大改（人设、`prompt.styleLine`、preset） | $F$ 与 $g$ 同时变化 | `qq-bridge/src/core/config.js:96-99` |
 | 观察到"每步都压缩" | 说明 $\tau W$ 已被 $F$ 顶穿 | 推论 3.1、3.3 |
 
@@ -2075,11 +2180,11 @@ node qq-bridge/tools/compaction-threshold.mjs <stateDir> 1000000
 node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限 / 余量 / YAML 形状
 ```
 
-## 附录 A MCP 工具全表（napcat，91 条）
+## 附录 A MCP 工具全表（napcat，94 条）
 
-数据取自 MCP 协议 `tools/list` 的实取结果：以 stdio 传输启动 `qq-bridge/src/mcp-napcat-safe.js`，完成 `initialize` 握手后发送 `tools/list`，取每项工具的 `name` 与 `inputSchema`，`inputSchema.required` 记为必填参数、其余属性记为可选参数，导出结果字段为 `name`、`description`、`required[]`、`optional[]`、`minTier`【已核验】。该启动过程须注入环境变量 `QQB_SLIM_TOOLS_OFF=1`（语义为本次启动忽略压缩档、全部注册，`qq-bridge/src/mcp-napcat-safe.js:687-693`）；不注入时 `tools/list` 返回本机 `config.json` 中 `social.slimTools` 所选档位的子集，得不到完整的九十一项注册表。参考实现见 `qq-bridge/tests/character-tools-mcp.test.js:31-70` 的 `startServer` 与 `:83-89` 的调用处。
+数据取自 MCP 协议 `tools/list` 的实取结果：以 stdio 传输启动 `qq-bridge/src/mcp-napcat-safe.js`，完成 `initialize` 握手后发送 `tools/list`，取每项工具的 `name` 与 `inputSchema`，`inputSchema.required` 记为必填参数、其余属性记为可选参数，导出结果字段为 `name`、`description`、`required[]`、`optional[]`、`minTier`【已核验】。该启动过程须注入环境变量 `QQB_SLIM_TOOLS_OFF=1`（语义为本次启动忽略压缩档、全部注册，`qq-bridge/src/mcp-napcat-safe.js:687-693`）；不注入时 `tools/list` 返回本机 `config.json` 中 `social.slimTools` 所选档位的子集，得不到完整的九十四项注册表。参考实现见 `qq-bridge/tests/character-tools-mcp.test.js:31-70` 的 `startServer` 与 `:83-89` 的调用处。
 
-列口径：`工具名` 为 MCP 服务注册的裸名，不含 `mcp__napcat__` 前缀；`必填参数`与`可选参数`取自工具输入 schema，无参数记 `—`；`最低保留档位`为该工具仍被注册的最低档位，按裁剪强度由强到弱为 `extreme`、`high`、`medium`、`low`、`off`，由 `toolAllowedByTier`（`qq-bridge/src/lib/tool-tiers.js:192-200`）逐档试算取首个判定为真的档位，`qq_status` 在该函数首行恒真（`:193`）故恒为 `extreme`，各档位名单定义见 `TOOL_TIERS`（`:103-151`），档位中文标签为极限、高、中、低、不裁剪【已核验】。共 91 行，按功能分为 16 组。
+列口径：`工具名` 为 MCP 服务注册的裸名，不含 `mcp__napcat__` 前缀；`必填参数`与`可选参数`取自工具输入 schema，无参数记 `—`；`最低保留档位`为该工具仍被注册的最低档位，按裁剪强度由强到弱为 `extreme`、`high`、`medium`、`low`、`off`，由 `toolAllowedByTier`（`qq-bridge/src/lib/tool-tiers.js:223`）逐档试算取首个判定为真的档位，`qq_status` 在该函数首行恒真（`:224`）故恒为 `extreme`，各档位名单定义见 `TOOL_TIERS`（`:125`），档位中文标签为极限、高、中、低、不裁剪【已核验】。共 94 行，按功能分为 16 组。
 
 ### A.G1 状态、时间与运行时信息（5 条）
 
@@ -2241,7 +2346,7 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | `qq_crosschat_send` | `toKey`，`content` | `token` | `off` | 向其它会话留下一条备注，目标在其下次唤醒时读取。 |
 | `qq_crosschat_inbox` | — | `key`，`token` | `off` | 查看其它会话留给当前会话的备注。 |
 
-### A.G16 配置与管理（6 条）
+### A.G16 配置与管理（9 条）
 
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
@@ -2251,10 +2356,13 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | `qq_set_activity_hours` | `windows` | `key`，`token` | `medium` | 设置、修改或清除会话活跃时段，采用二十四小时制。 |
 | `qq_deepsleep` | `enabled` | `token` | `off` | 群的全局静默总开关：开启后全部群消息仅入库而不唤醒。 |
 | `qq_report_feedback` | `message` | `key`，`token`，`level` | `off` | 向控制台或管理员上报问题与需人工介入的情况。 |
+| `qq_config_get` | `key`，`token` | `target`，`path` | `extreme` | 读取桥配置：`target=voice` 读语音页（含发送概率、默认音色等，密钥只回掩码）、`social` 读 default Agent 段、缺省读 `config.json` 其余全部；给 `path` 只取一条点路径。仅所有者与管理员在其发言会话内可执行。 |
+| `qq_config_set` | `key`，`token`，`path`，`value` | `target` | `extreme` | 改一条配置：服务端读真实配置后只改该点路径再整份落盘，避免把读到的掩码密钥回写；密钥类字段（apiKey/token/password）一律拒绝；`target=social` 转发到按字段校验的 `POST /api/social/config`。 |
+| `qq_voice_manage` | `key`，`token`，`action` | `name`，`description`，`fromVoiceId`，`id` | `high` | 音色库管理：列出内置与自定义音色、按文字描述新建设计音色、按 `fromVoiceId` 复刻已有音色（含文字设计的音色）、删除、设为默认。 |
 
 ## 附录 B MCP 宿主服务与联网检索工具表（7 条）
 
-宿主服务由 `qq-bridge/src/mcp-host-server.js` 注册，进程名 `napcat-host`；联网检索服务由 `qq-bridge/src/mcp-web-search-safe.js` 注册，进程名 web-search 安全版。两者与 napcat 的 91 条分属不同服务组，且都不参与工具裁剪档，故`最低保留档位`一列一律记 `—`【已核验】。宿主侧注册顺序与行号：`qq_learning_corpus`（`:142-147`）、`qq_learning_submit`（`:198-210`）、`napcat_status`（`:247-250`）、`start_napcat`（`:264-267`）、`stop_napcat`（`:314-317`），服务名与版本在 `:140` 给出；必填参数取 zod 参数表中不带 `.optional()` 的字段，可选参数取其余字段。联网检索侧注册于 `qq-bridge/src/mcp-web-search-safe.js:943-947` 与 `:980-983`，必填参数为 `query` 与 `url`，取值域取自 zod 链式声明（`:951-957`、`:985-988`）。
+宿主服务由 `qq-bridge/src/mcp-host-server.js` 注册，进程名 `napcat-host`；联网检索服务由 `qq-bridge/src/mcp-web-search-safe.js` 注册，进程名 web-search 安全版。两者与 napcat 的 94 条分属不同服务组，且都不参与工具裁剪档，故`最低保留档位`一列一律记 `—`【已核验】。宿主侧注册顺序与行号：`qq_learning_corpus`（`:142-147`）、`qq_learning_submit`（`:198-210`）、`napcat_status`（`:247-250`）、`start_napcat`（`:264-267`）、`stop_napcat`（`:314-317`），服务名与版本在 `:140` 给出；必填参数取 zod 参数表中不带 `.optional()` 的字段，可选参数取其余字段。联网检索侧注册于 `qq-bridge/src/mcp-web-search-safe.js:1128-1135` 与 `:1164-1169`，必填参数为 `query` 与 `url`，取值域取自 zod 链式声明（`:1137-1140`、`:1171-1173`）。
 
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
@@ -2263,10 +2371,10 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | `napcat_status` | — | — | — | 探测 NapCat 网关是否可达并返回 QQ 在线状态与账号信息。 |
 | `start_napcat` | — | — | — | 启动 NapCat 并等待网关就绪，最长等待九十秒。 |
 | `stop_napcat` | — | — | — | 停止 NapCat 进程，会断开当前 QQ 连接。 |
-| `web_search` | `query` | `maxResults`（3–30，默认 12），`platforms`（18 个平台标识，缺省为全部可用平台） | — | 多平台并行聚合检索并按 URL 去重，结果按平台轮转交错返回；同查询五分钟内命中缓存。 |
+| `web_search` | `query` | `maxResults`（3–30，默认 12），`platforms`（22 个平台标识，缺省为全部可用平台） | — | 多平台并行聚合检索并按 URL 去重，结果按平台轮转交错返回；同查询五分钟内命中缓存。 |
 | `web_fetch` | `url` | `raw`（返回原始标记而非正文），`maxChars`（500–50000，默认 12000） | — | 读取单个 http(s) 页面并抽取可读正文（标题、描述、图片、正文、链接、截断标记）；拒绝内网与环回地址，逐跳校验重定向。 |
 
-其中 `start_napcat` 与 `stop_napcat` 仅当 `napcat.allowProcessControl` 开启时注册【已核验】；`web_search` 的 `platforms` 枚举含 18 个平台标识，`web_fetch` 为只读工具，无本地文件与命令能力【已核验】。
+其中 `start_napcat` 与 `stop_napcat` 仅当 `napcat.allowProcessControl` 开启时注册【已核验】；`web_search` 的 `platforms` 枚举含 22 个平台标识（2026-09-27 补上 `bingnews`、`jawiki` 与此前遗漏在枚举外的 `google`），`web_fetch` 为只读工具，无本地文件与命令能力【已核验】。
 
 ## 附录 C 管理端路由表（93 条）
 
@@ -2439,7 +2547,7 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 - U-30 桥的隔离 home 候选：`<repo>/../.runtime/dsh-isolated-home`（桥侧默认）与管理器配置的 `dsh-isolated-home-official` 并存；实际生效值取决于 `QB_DSH_HOME` 与管理器配置，两份候选不自动对齐。
 - U-31 `DEFAULT_LOCAL.dshWeb = 3210`：该字段语义为远端 DSH Web 端口（`tunnelMapFor()` 使用 `m.dshWeb ?? 3080`，`server/index.js:194`）【已核验】，但模板默认值为 3210（`server/index.js:64`）【已核验】，而前端 `RP_DEFAULTS.dshWeb = 3080`（`src/pages/SSHConfig.tsx:11`）与部署脚本硬写的 3080（`server/deploy.js:1384`）一致；远端未显式配置时隧道映射到 3210 这一默认值是否统一为 3080 未决，属默认值变更，本轮未修改。
 - U-32 `core/napcat-guard.js` 的 `failThreshold` / `cooldownMs` / `maxHealsPerHour` / `restartGraceSec` / `recoverWaitMs`：参数保留于 `DEFAULTS`（`qq-bridge/src/core/napcat-guard.js:34`）【已核验】，探测与重启执行体已删除；属残留契约还是待重新接线的能力未定。
-- U-33 打包工程内部装配规则：本文只核对 `build-installer-full.nsi` 与 `moonbot-app/main.js` 的接口事实；`dsh-runtime/` → `dsh/` 的改名、`full\app\` 的生成顺序、electron-builder 变体的目录布局均未逐条核对。
+- U-33 打包工程内部装配规则：本文只核对 `build-installer-full.nsi` 与 `kizuna-app/main.js` 的接口事实；`dsh-runtime/` → `dsh/` 的改名、`full\app\` 的生成顺序、electron-builder 变体的目录布局均未逐条核对。
 - U-34 `GET /api/config` 的 SSH 密码明文：现状为明文返回，仅依靠 `127.0.0.1` 绑定收敛暴露面；是否纳入脱敏范围需产品决策。
 - U-35 MCP 压缩代理的 `--exclude-tools` / `--toonify` 参数组合：由配置与默认值决定；未逐一验证每种组合的最终命令行，需要时以隔离 home 的 `cordis.patch.yml` 实际内容为准。
 - U-36 关窗守卫日志轮转：实现中未体现轮转策略；长周期运行时的日志体积上界未确定。
@@ -2465,7 +2573,7 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | U11 | 检索盈亏平衡式（推论 8.1） | **本文推导**，仓库无对应标定 |
 | U12 | 期望压缩次数 $\mathbb{E}[k]=N_{\text{sess}}\sqrt{gb}/\sqrt{2\kappa_{rb}}$（命题 7.2） | **本文推导**；仅与记载的"$11.2$ 次/天"做量级对照 |
 | U13 | 摘要保真度随代数 $k$ 的衰减曲线 | **无任何测量**；仓库没有度量摘要保真度的脚本或测试 |
-| U14 | QQ 桥 preset 下 `thresholdRatio` / `retainRatio` 的实际生效值 | preset 未配置这两项（`agent.cordis.yml:206-215`），故取 DSH 出厂 $0.8/0.16$；但桥写入的 home 级 `cordis.patch.yml` 是否覆盖**未验证**——本机不存在 `<DSH_HOME>/cordis.patch.yml`，且 `QQB_DSH_HOME` 为空 |
+| U14 | QQ 桥 preset 下 `thresholdRatio` / `retainRatio` 的实际生效值 | preset 未配置这两项（`agent.cordis.yml:208-224`），故取 DSH 出厂 $0.8/0.16$；但桥写入的 home 级 `cordis.patch.yml` 是否覆盖**未验证**——本机不存在 `<DSH_HOME>/cordis.patch.yml`，且 `QQB_DSH_HOME` 为空 |
 | U15 | 工具 schema 压缩档位的体积收益（该文件举例：`medium` 为 $61{,}587$ 字符 $\approx19{,}246$ token/步、`high` 为 $27{,}109$ 字符 $\approx8{,}472$ token/步） | 见 `qq-bridge/src/lib/tool-schema-compress.js:16-25` 的注释，系**作者在真实 wire 格式上的实测**，本次**未重跑** `tools/tool-schema-meter.mjs` |
 | U16 | `context-savings.js` 第 99-103 行注释的完整表述 | 该处注释在本文写作时读取到的内容不完整，**未引用其技术结论** |
 

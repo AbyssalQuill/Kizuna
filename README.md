@@ -1,6 +1,6 @@
-# MoonBot Pro
+# Kizuna Pro
 
-MoonBot Pro 是运行于 Windows 本机的 QQ 对话机器人一体化部署工具。**NapCat / OneBot v11** 承接 QQ 协议；**隔离的 DeepSeek Harness（DSH）实例**承担 agent 推理；**qq-bridge** 承担唤醒判定、提示词组装、工具调用与消息发送；**Electron 管理端**承担安装、配置、进程编排与运行监控。作者 AbyssalQuill，仓库 AbyssalQuill/MoonBot。
+Kizuna Pro 是运行于 Windows 本机的 QQ 对话机器人一体化部署工具。**NapCat / OneBot v11** 承接 QQ 协议；**隔离的 DeepSeek Harness（DSH）实例**承担 agent 推理；**qq-bridge** 承担唤醒判定、提示词组装、工具调用与消息发送；**Electron 管理端**承担安装、配置、进程编排与运行监控。作者 AbyssalQuill，仓库 AbyssalQuill/Kizuna。
 
 MIT · Windows 10 / 11 · Node.js ≥ 22.13 · Electron 28 · React 18 · 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)
 
@@ -18,7 +18,7 @@ MIT · Windows 10 / 11 · Node.js ≥ 22.13 · Electron 28 · React 18 · 版本
 
 | 安装包 | 内容 | 适用 |
 | --- | --- | --- |
-| `MoonBot Pro Setup.exe` | 管理端与整套内置组件：NapCat（OneKey 与 QQ 客户端）、DSH CLI、qq-bridge 出厂桥 | 本机运行整套；也可只使用其 SSH 配置页连接自备服务器 |
+| `Kizuna Pro Setup.exe` | 管理端与整套内置组件：NapCat（OneKey 与 QQ 客户端）、DSH CLI、qq-bridge 出厂桥 | 本机运行整套；也可只使用其 SSH 配置页连接自备服务器 |
 
 安装步骤：
 
@@ -43,7 +43,7 @@ MIT · Windows 10 / 11 · Node.js ≥ 22.13 · Electron 28 · React 18 · 版本
 ### 仓库结构
 
 ```
-MoonBot Public/
+Kizuna Public/
 ├─ src/                   管理端前端（React + TypeScript + Vite）
 ├─ server/                管理端后端（HTTP API、实例编排与探活、SSH 部署）
 ├─ qq-bridge/             桥接层
@@ -93,7 +93,7 @@ MoonBot Public/
 
 ## 主要能力
 
-- **桥接与消息**：唤醒判定（私聊、被 @、被引用、点名、关键词、直接提问、AI 与技术话题、指定发言人与概率接话），潜水与活跃双模式，活跃时段与免打扰窗口，在途注入与回合保持，私聊打字等待，文本气泡分段与发送节奏，引用回复、撤回、定时消息、跨会话留言，富文本卡片、音乐卡、合并转发与 Word 文档，收发图片，Pixiv 搜图与发图，QQ 空间动态与配图，语音合成与转写，QQ 原生表情、收藏贴纸与内置表情包，视频解析与检索。
+- **桥接与消息**：唤醒判定（私聊、被 @、被引用、点名、关键词、直接提问、AI 与技术话题、指定发言人与概率接话），潜水与活跃双模式，活跃时段与免打扰窗口，在途注入与回合保持，私聊打字等待，文本气泡分段与发送节奏，引用回复、撤回、定时消息、跨会话留言，富文本卡片、音乐卡、合并转发与 Word 文档，收发图片，Pixiv 搜图与发图，QQ 空间动态与配图，语音合成与转写（云端为主，另有**可选的本地引擎**：GPT-SoVITS ONNX 跑在本机，语音不出网、不吃云端额度），QQ 原生表情、收藏贴纸与内置表情包，视频解析与检索。
 - **记忆与画像**：SQLite 长期记忆（三层记忆 + FTS5 检索）、会话级记忆、群成员画像与结构化档案、黑话学习、人格学习、角色库与角色卡，以及隔离 DSH 侧的跨会话语义记忆插件（`remember` / `recall` / `/lmemory`）。
 - **NapCat 集成**：三组 MCP server（`mcp-napcat` / `mcp-napcat-host` / `mcp-web-search-safe`），工具描述压缩代理与名单档位裁剪，发送白名单强制，`[CQ:` 注入转义，敏感内容拦截，NapCat 会话守护与登录态巡检。
 - **SSH 部署与同步**：远程部署保留目标机既有数据，代码、数据、表情包与 `config.json` 分别同步；配置热加载；上下文压缩（阈值 0.16）与工具表压缩；Token 计量与费用估算。
@@ -101,9 +101,9 @@ MoonBot Public/
 
 ### MCP 工具
 
-三组 MCP server 共注册 98 条工具：`mcp-napcat` 91 条、`mcp-napcat-host` 5 条、`mcp-web-search-safe` 2 条。运行时实际注册数另受工具名单档位裁剪（`toolAllowedByTier`）与 `config.json` 的开关分支影响（如 `napcat.allowProcessControl` 关闭时进程控制工具不注册）。下表为名称清单，必填与可选参数、最低保留档位与功能表述见 [docs/TECHNICAL.md](docs/TECHNICAL.md) 附录 A 与附录 B。
+三组 MCP server 共注册 101 条工具：`mcp-napcat` 94 条、`mcp-napcat-host` 5 条、`mcp-web-search-safe` 2 条。运行时实际注册数另受工具名单档位裁剪（`toolAllowedByTier`）与 `config.json` 的开关分支影响（如 `napcat.allowProcessControl` 关闭时进程控制工具不注册）。下表为名称清单，必填与可选参数、最低保留档位与功能表述见 [docs/TECHNICAL.md](docs/TECHNICAL.md) 附录 A 与附录 B。
 
-表 3：MCP 工具清单（98 条）
+表 3：MCP 工具清单（101 条）
 
 | 用途分组 | 条数 | 工具 |
 | --- | --- | --- |
@@ -122,7 +122,7 @@ MoonBot Public/
 | QQ 空间 | 5 | `qq_qzone_view`、`qq_qzone_comment`、`qq_qzone_reply_comment`、`qq_qzone_like`、`qq_send_qzone` |
 | 计划与定时 | 3 | `qq_schedule_message`、`qq_schedule_list`、`qq_schedule_cancel` |
 | 跨会话通信 | 2 | `qq_crosschat_send`、`qq_crosschat_inbox` |
-| 配置与管理 | 6 | `qq_get_system_config`、`qq_set_system_config`、`qq_get_activity_hours`、`qq_set_activity_hours`、`qq_deepsleep`、`qq_report_feedback` |
+| 配置与管理 | 9 | `qq_get_system_config`、`qq_set_system_config`、`qq_get_activity_hours`、`qq_set_activity_hours`、`qq_deepsleep`、`qq_report_feedback`、`qq_config_get`、`qq_config_set`、`qq_voice_manage` |
 | 宿主服务（`mcp-napcat-host`） | 5 | `qq_learning_corpus`、`qq_learning_submit`、`napcat_status`、`start_napcat`、`stop_napcat` |
 | 联网检索（`mcp-web-search-safe`） | 2 | `web_search`、`web_fetch` |
 
@@ -152,6 +152,12 @@ MoonBot Public/
 - 行为默认值：唤醒默认活跃（潜水须指定有限时长，到期自动恢复活跃），打字节拍 150 ms/字（桥侧夹在 60–320 ms 与 800–6000 ms 之内），上下文压缩阈值 0.16。
 
 数据落盘与隐私：聊天记录 `qq-bridge/state/chat.db`、记忆档案 `qq-bridge/state/memory.db` 与 JSON 状态文件只保存在本机与部署方自行配置的服务器上，不上传至项目本身；模型调用会把当前会话上下文发送给部署方配置的模型服务商。隔离 DSH 侧的记忆插件另在 `~/.dsh/lmemory/` 及其注册的记忆根下保存一份语义事实记忆。
+
+联网检索（模型侧只有一套工具，桥自己提供）：`mcp__web-search-safe__web_search` 与 `mcp__web-search-safe__web_fetch`，由桥的 `qq-bridge/src/mcp-web-search-safe.js` 注册，内核在 `qq-bridge/src/lib/web-search.js`（`searchAll()`：Firecrawl / Bing / 必应新闻 / DuckDuckGo / 百度 / 360 / 萌娘百科 / 中英日维基 / bilibili 等 22 个平台并发抓取，交错合并后过相关度闸门、去重、缓存 5 分钟，CORE 平台全部落定即早返回，硬上限 7.4 s）。`web_fetch` 带 SSRF 加固（仅 http/https、禁内网与本机地址、每跳重定向重新校验、响应体限量读取）。
+
+- same engine, two callers：桥进程内的 pixiv「名字 → 画师号」（第 ④ 条来源）直接 `import` 同一个 `searchAll()`，不再 spawn 子进程，所以引擎只有一份、行为一致。
+- 宿主 DSH 自带的 `web_search` / 抓取**不注册**：`qq-chat` 预设里 `tool-web` 的 `search` 与 `fetch` 恒为 `false`，桥每次启动都用 `syncPresetToolWeb` 钉住（幂等），避免出现"看得见却调不动"或静默换一条搜索路径的第二套工具面。
+- 历史：2026-09-28 曾集成第三方 DSH 插件 ModSearch（`@liustack/modsearch`，开关 `dsh.modsearch`）；同日晚些时候按要求**整体去掉**（装配代码、开关、测试、文档一并删除，`dsh.modsearch` 这个配置键不再存在，写了也会被忽略）。升上来的旧隔离 home 里若还留着 `tool-web.search: true` 或 profile 的 `# === modsearch overlay …` 覆盖行，启动时分别被 `syncPresetToolWeb` 改回、被 `stripLegacyModsearchOverlay` 摘掉（都幂等）。
 
 ## 常用命令与故障处置
 

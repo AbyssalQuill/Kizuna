@@ -154,8 +154,10 @@
 
 #### 2.3.1 档位识别
 
-档位判定前先把镜像站代理地址还原为内层 `i.pximg` 地址（`pixivImageInnerUrl`，`pixiv.js:187`：从
-`/api/image.php?url=...` 取出 `url` 参数），因为档位取决于内层地址。
+档位判定前先把镜像站代理地址还原为内层 `i.pximg` 地址（`pixivImageInnerUrl`）：当前只有一种镜像
+形态 —— host 重写式（`https://i.muxmus.com/<path>`），还原动作就是把镜像域名换回 `i.pximg.net`。
+老 API 式（`/api/image.php?url=...`）的解包分支随 2026-09-28 移除该图片源一并删除。因为档位取决于
+内层地址。
 
 `pixivImageTier`（`pixiv.js:207`）按下表判定档位。
 
@@ -204,7 +206,7 @@ const PIXIV_ORIGINAL_NAME_RE  = /\/\d+_p\d+\.(?:jpe?g|png|webp|gif)$/i;
 | 顺序 | 候选 | 说明 |
 | --- | --- | --- |
 | ① | `i.pximg.net` 直联（带 `referer`） | 实测 60~400 ms，字节与源文件逐字节一致 |
-| ② | 镜像站同名图代理（`pixivProxyUrl`） | 字节一致，延迟高（2.7~5.7 s，偶发超时） |
+| ② | host 重写式镜像（`pixivProxyUrls`：`i.muxmus.com` → `pximg.cocomi.eu.org` → `i.pixiv.re`） | 与直联逐字节一致；本机实测 0.28~1.29 s；候选一律不带 `referer` |
 | ③ | 既有候选：由缩略图推导日期路径（`pixivImageCandidates`） | 搜索路径持续使用，行为保持不变 |
 
 `size=original` 时，非原图档候选被标记 `fallback: true` 并附原因（`pixiv.js:1497-1504`）；`unknown` 档不标记，
@@ -309,12 +311,34 @@ pximg 取得逐字节一致原图的必要条件。`host` 头由本函数按 URL
 | 入口 | 参数 | 行为 |
 | --- | --- | --- |
 | 作品号 | `illustId`（作品号或 `pixiv.net/artworks/<数字>` 链接） | 直接取该作品；其它搜索与筛选参数全部忽略 |
-| 画师 | `authorId` | 画师号、`pixiv.net/users/<数字>` 链接或画师名称。名称走 `resolvePixivAuthor`（官方用户搜索）；存在歧义时返回候选列表交由调用方选择，不做自动定号（误发作者账号的代价高于不投递） |
+| 画师 | `authorId` | 画师号、`pixiv.net/users/<数字>` 链接或画师名称。名称走 `resolvePixivAuthor`：先官方用户搜索（app-api / 官网 cookie / 镜像站代拉），三条都得登录态或都失败时退到桥自己的搜索引擎（见 2.6.1.1）；存在歧义时返回候选列表交由调用方选择，**搜索引擎那条来源一律只给候选**，不做自动定号（误发作者账号的代价高于不投递） |
 | 关键词 | `query` | 走 `pixivSearch`（本地筛选加自动翻页） |
 
-画师名称路径的实测约束（`pixiv.js:1520-1532`）：web 搜索引擎路径不可靠。线上 VPS 上 bing 候选恒为 0，
-duckduckgo 间歇返回 202；常见名称（如“七菜”）会返回 3 个同名账号而目标账号不在前列。因此实现只产出候选，
-不做自动定号。
+画师名称路径的实测约束（测量批次 2026-09-20；2026-09-28 复测）：**桥自带**的 web 搜索引擎路径在境外 VPS 上仍偏弱。修复后的引擎在 VPS 上 22 个平台里有 6 个有产出（firecrawl / 萌娘百科 / bilibili / 日文维基 / 必应新闻 / 中文维基），bing 依旧为 0 —— 原因是境外出口拿不到 Bing 的 HTML 结果页，只能退到 `&format=rss`（对拉丁文有效，对 CJK 基本被相关度闸门滤掉）；duckduckgo 在数据中心 IP 上偶发失败。常见名称（如“七菜”）会返回多个同名账号而目标账号不一定在前列。因此实现只产出候选，不做自动定号。
+
+#### 2.6.1.1 按名称定号的四条来源（测量批次 2026-09-27；第 ④ 条于 2026-09-28 改接自建引擎）
+
+表 15.1：名称到画师号的来源顺序（`pixiv.js` 的 `pixivSearchUsersByName`）
+
+| 序 | 来源 | 前置条件 | 线上 VPS 实测（2026-09-27） |
+| --- | --- | --- | --- |
+| ① | app-api `/v1/search/user`（Bearer 长期令牌） | 需要 `refresh_token` | 无令牌，跳过 |
+| ② | 官网 `ajax/search/users?nick=`（cookie） | 需要 PHPSESSID | 未配 cookie，跳过 |
+| ③ | 镜像站 `native.php` 代拉同一地址 | 无 | 返回 HTTP 200 但没有 `users` 字段（代拉拿不到用户搜索） |
+| ④ | 桥自己的搜索引擎内核（`lib/web-search.js` 的 `searchAll()`；平台白名单 `firecrawl / bing / duckduckgo / baidu / sogou / so360`） | 无（普通出口 IP 即可，无需登录态） | **可用（2026-09-28 在 VPS 上端到端实测，用自建引擎）**：`site:pixiv.net/users 望月けい` → 1 599 ms、1 个候选（`1193008`，标题里的名字与查询完全相等）；`site:pixiv.net/users ちーのすけ` → 996 ms、6 个候选（首位 `54776863`）。2026-09-27 那一轮 ④ 走的是第三方插件 ModSearch（`endpoint=modsearch:5.10.4`），同日该插件已被整体移除，④ 改接自建引擎 |
+
+④ 的两条实现约束：
+
+1. **一律只给候选**（`shapeAuthorResolution`：`source === 'search'` 直接返回候选列表）。名称是从搜索结果的
+   标题里剥出来的（pixiv 用户页标题形如「昵称 - pixiv」），可能与 pixiv 上的昵称不完全一致；剥不出来的
+   （标签页 / 作品页 / 超长标题）一律给空名字，不参与“名字完全相等”的判断。既然名字本身不是权威字段，
+   “唯一一个同名且名下有作品 = 敢定号”那套依据就不成立 —— 候选里带着主页链接，由调用方念给用户认。
+2. **不再有额度成本**（2026-09-28 起）：走的是桥自己的聚合引擎，没有 keyless Firecrawl 那种每月 / 每日配额，
+   也不依赖某个 key。查询仍旧是两条（先 `site:pixiv.net/users <名字>`，没命中再 `<名字> pixiv`），
+   为的是少打无谓请求；跨调用还有 5 分钟结果缓存兜底。
+
+解析出来的候选会写进与官方同一个本地缓存（`state/pixiv-artists.json`），命中缓存时不再联网、也不再花额度
+（实测 `米山舞` 命中的是 2026-09-19 写下的缓存，直接给出 `1554775`）。
 
 #### 2.6.2 逐候选试的顺序与闸门
 
@@ -658,3 +682,5 @@ imageCount   配几张：默认 1，上限 3（QZONE_IMAGE_MAX）
 | 投递前卡口 | `lib/image-compress.js` 的 `IMAGE_HARD_MAX_BYTES` 已核对：`image-compress.js:47` 为 `15 * 1024 * 1024`，与 `MAX_IMAGE_FETCH_BYTES` 同值；判定处为 `image-compress.js:250`、`295-296` | 【已核验】 |
 | 空跑脚本 | 空跑脚本 `_qzone_dryrun.mjs` 是 `lib/qzone-image.js:2693` 注释提到的临时脚本，本仓库 `qq-bridge/tools/` 下不存在（已检索），因此 §3.3 的空跑结论为转述代码注释，本轮未复现 | 【未核验】 |
 | 覆盖范围 | 本文未覆盖 `qq_send_image`（联网找图直发）的完整实现，只核到它复用 `safeFetchBuffer` 的同一道闸门 | 【已核验】 |
+| 第 ④ 条来源（名字 → 画师号）对真实 QQ 会话的生效 | 2026-09-27 的端到端只在服务器上用脚本实跑过（走的是当时还在的 ModSearch 插件：`ちーのすけ` / `しらたま` → `endpoint=modsearch:5.10.4`）。2026-09-28 ④ 改接桥自建的 `searchAll()` 后，链条本身已在服务器上端到端跑通（`望月けい` → 1 个候选 / `ちーのすけ` → 6 个候选，见 2.6.1.1 表 15.1），但**线上运行的桥进程仍加载改动前的 `pixiv.js`**（未重启任何进程），所以“重启后真人发一条 `authorId=<名字>` 能走通”仍未验证 | 【未核验】 |
+| 自建引擎在“名字 → 画师号”上的召回率 | 已在服务器上实跑通两条查询（见 2.6.1.1 表 15.1），但样本只有 2 个名字、都是日文名；常见中文名（如“七菜”）返回多个同名账号时目标账号是否在前列、以及 bing 在境外恒为 0 对召回的影响，都还没有量过。`tools/probe-search-platforms.mjs` 可以在任一出口上单测每个平台 | 【未核验】 |
