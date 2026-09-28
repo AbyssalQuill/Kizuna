@@ -10,13 +10,16 @@
  *   idle → connecting（SSH）→ tunnels（隧道 x/y）→ server-starting（服务端组件逐个就绪）
  *        → warming（静默预鉴权 NapCat 界面，一次性）→ ready
  *   任何一步失败 → failed（带人话原因），并按退避重试。
+ *   2026-10-01 新增 partial：「连上了，但服务端的组件没起来」的终态（例如 DSH/NapCat 在跑、桥停了）。
+ *   它不是失败（SSH 与隧道都好好的），也不是进行中（没有任何组件在启动），所以界面不该继续显示
+ *   「服务端连接中」—— 各卡片如实显示自己那份「运行中 / 未运行」，并可点「启动服务端」。
  *
  * 本模块只做状态与文案：不联网、不起进程。推进由 server/index.js 的驱动函数负责，
  * 判定"服务端组件好了没有"用的就是既有的 getRemoteServerStatus 结果（纯函数 describeRemoteStatus）。
  */
 
 /** 阶段枚举（界面按这个顺序显示进度）。 */
-export const PHASES = ['idle', 'connecting', 'tunnels', 'server-starting', 'warming', 'ready', 'failed'];
+export const PHASES = ['idle', 'connecting', 'tunnels', 'server-starting', 'warming', 'ready', 'partial', 'failed'];
 
 /** 某个端口通不通。优先看组件自己报的 ports（NapCat 那份），再退回顶层聚合表；两处都没有 → null（不判定）。 */
 function portUpFor(remote, port, componentId = '') {
@@ -73,6 +76,30 @@ export function describeRemoteStatus(remote, opts = {}) {
 }
 
 /**
+ * 组件明细 → 状态机该怎么写（纯函数，remote / observe 共用；两者只差"就绪那一步落在哪"）。
+ *
+ * 2026-10-01 主人反馈「状态机不对」：线上实测的连接状态是 SSH/隧道都通、DSH ready、NapCat ready、
+ * **桥 down** —— 而旧代码把这三种局面一律写成 server-starting，于是界面一直显示
+ * 「服务端连接中 · 服务端组件启动中」：既不真（没有任何东西在启动），又把每个组件自己的
+ * 「运行中 / 未运行」小字整段盖掉（卡片中间态文案优先于服务端状态，见 Home.tsx 的渲染顺序）。
+ * 现在按"到底有没有东西在起"分开：
+ *   · 有组件 state=starting（进程在、端口还没听）→ 真的是启动中 → server-starting；
+ *   · 其余（全都没跑 / 有的在跑有的停了）→ partial：**连接是成功的**，只是组件没起来，
+ *     如实说明谁没在运行，并把卡片小字交回各组件自己的状态；
+ *   · 没读到明细（components 为空）→ null：调用方保持原状，什么结论都不下。
+ * @returns {{phase:'server-starting'|'partial', note:string}|null}
+ */
+export function verdictOf(d) {
+  if (!d || !d.components || !d.components.length) return null;
+  if (d.components.some((c) => c.state === 'starting')) return { phase: 'server-starting', note: d.note };
+  const downNames = d.components.filter((c) => c.state === 'down').map((c) => c.name);
+  const note = d.down
+    ? '服务端整套都没在运行（点「一键启动整套」）'
+    : `服务端已连接，但 ${downNames.join(' / ')} 没在运行（点该卡片的「启动服务端」）`;
+  return { phase: 'partial', note };
+}
+
+/**
  * 连接状态机。`set()` 只在阶段/文案真的变了时才更新时间戳，方便界面做"卡在这一步多久了"的显示。
  * @param {{now?:() => number, log?: (msg: string) => void}} [opts]
  */
@@ -116,11 +143,33 @@ export function createConnectMachine(opts = {}) {
       const total = (created || []).length;
       return set({ phase: 'tunnels', note: total ? `隧道已建立 ${okCount}/${total} 条` : '隧道已就绪' }, reason);
     },
-    /** 服务端组件状态（每次轮询都调，文案跟着变）。 */
+    /** 服务端组件状态（连接循环里每次轮询都调，文案跟着变）。 */
     remote(remote, reason = '') {
       const d = describeRemoteStatus(remote, { napcatWebuiPort: opts.napcatWebuiPort });
       if (d.ready) return set({ phase: 'warming', note: '服务端已就绪，正在静默完成 NapCat 界面鉴权…', components: d.components }, reason);
-      return set({ phase: 'server-starting', note: d.note, components: d.components }, reason);
+      const v = verdictOf(d);
+      /* 状态还没取到（首轮未回 / 取状态失败）：既不能说"在启动"，也不能说"没在运行" ——
+       * 保持中间态那一档并如实写"还没取到"，同时**不动**上一轮已知的组件明细（它还是界面的兜底依据）。 */
+      if (!v) return set({ phase: 'server-starting', note: d.note || '正在读取服务端组件状态…' }, reason);
+      return set({ phase: v.phase, note: v.note, components: d.components }, reason);
+    },
+    /**
+     * 被动观测：由 /api/state 的轮询顺手喂进来（连接循环之外）。
+     *
+     * 2026-10-01「状态机不对」的另一半根因：状态机原先只在 waitServerReady 那 150 秒里被推进，
+     * 循环一结束就再没人更新它 —— 于是"桥停了""桥后来起来了"这类变化界面永远看不到，
+     * 一直停在最后一帧「服务端组件启动中」。这里只在"连接已经完成"之后接管（idle/connecting/tunnels
+     * 阶段一律不插嘴），且就绪直接落 ready：连接循环之外没有"静默预鉴权"那一步，不能停在 warming。
+     */
+    observe(remote, reason = '') {
+      const cur = state.phase;
+      if (cur === 'idle' || cur === 'connecting' || cur === 'tunnels') return snapshot();
+      const d = describeRemoteStatus(remote, { napcatWebuiPort: opts.napcatWebuiPort });
+      if (!d.components.length) return snapshot();                       // 没读到：什么都不改（别把结论说小）
+      if (d.ready) return set({ phase: 'ready', note: '服务端已就绪', components: d.components }, reason);
+      const v = verdictOf(d);
+      if (!v) return snapshot();
+      return set({ phase: v.phase, note: v.note, components: d.components }, reason);
     },
     /** 静默预鉴权结果（一次性；成功/限流/失败都如实记）。 */
     warmed(result, reason = '') {

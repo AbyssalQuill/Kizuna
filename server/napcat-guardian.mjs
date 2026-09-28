@@ -18,18 +18,22 @@
  *         ② 停桥（命令行含 bridge.js 的 node/qbm-node）
  *         ③ 停隔离 DSH（命令行含 `--port <dshPort>`）
  *      然后把动作写进日志并退出。
+ *   · 顺带看护后端（2026-09-28）：应用还在、`--manager` 那个后端进程没了 → 重新拉起一个
+ *     （`--manager-exe server/index.js`，cwd=`--runtime`，detached）。壳自己不会重启后端，
+ *     没有这一条，后端一没界面就永远停在「状态接口无响应」。10 分钟内最多拉 3 次。
  *
  * 安全边界（都很重要）：
- *   · 只有"父进程是应用本体(MoonBot.exe)"时后端才会拉起本进程 —— 别的启动方式（wscript 拉完就退出、
+ *   · 只有"父进程是应用本体(Kizuna.exe)"时后端才会拉起本进程 —— 别的启动方式（wscript 拉完就退出、
  *     双击 qbm-node、cmd 启动）不会被误判成"应用关了"，所以不会开机就把 NapCat 杀掉；
  *   · 目录参数由后端传进来（同一套 napcatManagedDirs 逻辑），并且只按路径前缀匹配进程；
  *   · `--dirs` 为空时什么都不杀（宁可不动，也不误杀）。
  *
  * 用法（后端自动调用，也可手工跑）：
  *   node napcat-guardian.mjs --parent <pid> --guard-file <path> --dirs '<json数组>' --dsh-port 10721
+ *   （后端看护可选：--manager <后端pid> --manager-exe <qbm-node.exe> --runtime <runtime目录>）
  * ========================================================================== */
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const argv = process.argv.slice(2);
 const argOf = (name, def = '') => {
@@ -55,6 +59,14 @@ const graceMs = Number(argOf('grace', '30000')) || 30000;
  * 关掉时只跳过 NapCat 这一步，桥与隔离 DSH 的清理照旧 —— 那本来就是守卫的职责，
  * 该开关的语义是"退出时别动 NapCat"，不是"退出时什么都别管"。 */
 const killNapcat = argOf('kill-napcat', '1') !== '0';
+/* 2026-09-28：新增"顺手把后端拉回来"。
+ * 现场：壳（Electron）只会 spawn 一次后端，`backendProc.on('exit')` 只写日志、不重启；后端一没，
+ * 界面就一直挂着「状态接口无响应：Failed to fetch …… 每 4 秒自动重试」，直到用户自己关掉重开。
+ * 守卫是这条链上唯一"活过后端"的进程，所以让它顺带盯着后端 PID：应用还在、后端没了 → 重新拉起。
+ * 只在这三个参数都给齐时才做（缺一个就不做：没有 exe/cwd 就是瞎拉进程）。 */
+let managerPid = Number(argOf('manager', '0')) || 0;
+const managerExe = argOf('manager-exe', '');
+const runtimeDir = argOf('runtime', '');
 let dirs = [];
 try { dirs = JSON.parse(argOf('dirs', '[]')) || []; } catch { dirs = []; }
 const logFile = argOf('log', '');
@@ -111,6 +123,48 @@ function stopDsh() {
   log(`已停隔离 DSH（--port ${dshPort}）`);
 }
 
+/* ── 后端看护（2026-09-28）───────────────────────────────────────────────────
+ * 应用还在、后端没了 → 重新拉起后端。为什么要守卫来做：壳只 spawn 一次、也不重启
+ * （`backendProc.on('exit')` 只写一行日志），后端一没，界面就永远停在「状态接口无响应」。
+ * 拉起来的方式与壳一致：<runtime>/qbm-node.exe server/index.js，cwd=<runtime>，detached。
+ * 限流：10 分钟内最多 3 次，且新后端 15 秒内又死了就不再拉 —— 端口被别的程序占着时
+ * 管理器会自己退（见 server/index.js 的 recoverFromListenError），没有限流就会变成死循环拉进程。 */
+const RESPAWN_WINDOW_MS = 600000;
+const RESPAWN_MAX = 3;
+let respawns = [];
+let lastRespawnPid = 0;
+let lastRespawnAt = 0;
+function respawnManager(reason) {
+  respawns = respawns.filter((t) => Date.now() - t < RESPAWN_WINDOW_MS);
+  if (respawns.length >= RESPAWN_MAX) {
+    log(`后端 ${managerPid} ${reason}，但 10 分钟内已经拉过 ${respawns.length} 次 → 不再拉（避免死循环），应用重开后恢复`);
+    return;
+  }
+  if (lastRespawnPid && Date.now() - lastRespawnAt < 15000 && !alive(lastRespawnPid)) {
+    log(`刚拉起的后端 ${lastRespawnPid} 又没了（可能端口被别的程序占着）→ 不再拉，留给用户处理`);
+    respawns = respawns.concat(Date.now(), Date.now(), Date.now());
+    return;
+  }
+  try {
+    const gone = managerPid;
+    const child = spawn(managerExe, ['server/index.js'], {
+      cwd: runtimeDir, detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    child.unref();
+    lastRespawnPid = child.pid || 0;
+    lastRespawnAt = Date.now();
+    respawns.push(Date.now());
+    /* 拉起来之后就把看护目标换成新后端。踩过的坑（2026-09-28 实测）：不换的话 managerPid 永远是那个
+     * 已经死掉的旧 pid，2 秒后又一次"不在了"→ 又拉一个，10 分钟内几次就把限流额度烧光，
+     * 日志里全是「刚拉起的后端 xxx 又没了」。（多拉起来的那些自己会退出：新后端已在监听时，
+     * server/index.js 的 recoverFromListenError 会识别出"已有管理器在服务"并让位。） */
+    managerPid = child.pid || 0;
+    log(`后端 ${gone} ${reason} → 已重新拉起后端 pid=${child.pid}（${managerExe}，cwd=${runtimeDir}）`);
+  } catch (e) {
+    log(`后端 ${managerPid} ${reason}，重新拉起失败：${e?.message ?? e}`);
+  }
+}
+
 function shutdownAll(reason) {
   log(`父进程 ${parentPid} 已退出（${reason}）→ 开始收起：${killNapcat ? 'NapCat → ' : '（按 killOnExit=false 跳过 NapCat）'}桥 → 隔离 DSH`);
   if (killNapcat) stopNapcat();
@@ -123,24 +177,37 @@ function shutdownAll(reason) {
 
 // ---- 主循环：父进程在就每 2s 看一眼；父进程没了先等宽限期再二次核对 ----
 if (!parentPid) { log('没有 --parent，直接退出（不做任何事）'); process.exit(0); }
-log(`守卫启动：父进程=${parentPid} 托管目录=${dirs.length} 个 宽限=${graceMs}ms 收NapCat=${killNapcat} guardFile=${guardFile || '(未指定)'}`);
+log(`守卫启动：父进程=${parentPid} 托管目录=${dirs.length} 个 宽限=${graceMs}ms 收NapCat=${killNapcat} 看护后端=${managerPid ? `${managerPid}（${managerExe}）` : '(未指定)'} guardFile=${guardFile || '(未指定)'}`);
 
 let acted = false;
 // 千万不能 unref：本进程"活着盯住父进程"就是它的存在意义。上一版手滑写成 unref，
 // 事件循环立刻空掉、进程几毫秒就自己退了 —— 表现是"父进程关了它也不动手"。
 const timer = setInterval(() => {
-  if (alive(parentPid)) return;
-  clearInterval(timer);
-  setTimeout(() => {
-    if (acted) return;
-    acted = true;
+  if (!alive(parentPid)) {
+    clearInterval(timer);
+    setTimeout(() => {
+      if (acted) return;
+      acted = true;
+      const owner = currentGuardPid();
+      if (owner && owner !== process.pid) {
+        log(`guard 文件已归新后端（pid=${owner}）所有 → 说明是"管理器重启"，不杀任何东西`);
+        process.exit(0);
+      }
+      shutdownAll('父进程不存在且没有新后端接管');
+      process.exit(0);
+    }, graceMs);
+    log(`父进程 ${parentPid} 不在了，${graceMs}ms 后复核 guard 文件再决定是否动手`);
+    return;
+  }
+  /* 应用还在 → 顺手看一眼后端在不在（见上面「后端看护」一节）。
+   * 只有当前守卫还是我、且真的配了 --manager 时才动手：否则可能是新一代守卫已经接手，
+   * 这里再拉一次就会拉起第二个管理器（虽然它会自己让位，但没必要制造噪声）。 */
+  if (managerPid && managerExe && runtimeDir && !alive(managerPid)) {
     const owner = currentGuardPid();
     if (owner && owner !== process.pid) {
-      log(`guard 文件已归新后端（pid=${owner}）所有 → 说明是"管理器重启"，不杀任何东西`);
+      log(`guard 文件已归新守卫（pid=${owner}）所有 → 后端看护交给它，本进程退出`);
       process.exit(0);
     }
-    shutdownAll('父进程不存在且没有新后端接管');
-    process.exit(0);
-  }, graceMs);
-  log(`父进程 ${parentPid} 不在了，${graceMs}ms 后复核 guard 文件再决定是否动手`);
+    respawnManager('已经不在了');
+  }
 }, 2000);

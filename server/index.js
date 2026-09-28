@@ -181,6 +181,8 @@ function saveConfig(cfg) {
 /* ------------------------------------------------------------------ */
 /* SSH 连接与隧道                                                      */
 /* ------------------------------------------------------------------ */
+/* 2026-09-26 ⑩：同 id「正在建立中」的 Promise（建连单飞，见 establishConnection）。 */
+const connectInflight = new Map();
 const sshConnections = new Map();
 const tunnels = new Map();
 /* 学习系统代理：远端 bridge 的 console-token 缓存（serverId -> { token, at }） */
@@ -286,7 +288,10 @@ const manualDisconnects = new Set();   // 用户明确点过「断开」的 serv
  * "掉线"，于是排一次重连、重连里又换连接、又抛 close …… 状态机空转不停（见 establishConnection）。 */
 const replacingConnections = new Set();
 let reconnectState = { serverId: null, attempt: 0, nextAt: 0, reason: '' };
-const RECONNECT_BACKOFF_MS = [5000, 10000, 20000, 30000, 60000];
+/* 断线重连退避（2026-09-26 ⑩：首项 5000 → 800）。原来第一次重连要空等 5 秒，
+ * 「打开应用自动连服务器」这条路上很显眼；首项降到 0.8 秒让首次重连几乎无感，
+ * 后续仍按 3/8/20/40/60 秒逐级退避，不会对着挂掉的服务器狂打（另有 sshCooldownInfo 冷却兜底）。 */
+const RECONNECT_BACKOFF_MS = [800, 3000, 8000, 20000, 40000, 60000];
 
 function cancelReconnect(serverId) {
   const t = reconnectTimers.get(serverId);
@@ -294,8 +299,19 @@ function cancelReconnect(serverId) {
   if (reconnectState.serverId === serverId) reconnectState = { serverId: null, attempt: 0, nextAt: 0, reason: '' };
 }
 
-/** 与「连接」按钮同一段建立流程（鉴权 + 隧道 + 缓存作废 + 设为活动服务器）。 */
+/** 与「连接」按钮同一段建立流程（鉴权 + 隧道 + 缓存作废 + 设为活动服务器）。
+ *  2026-09-26 ⑩：外面这层只做「建连单飞」—— 同 id 在飞的建立过程共用一个 Promise，连点「连接」
+ *  或手动连接撞上自动重连时不会并发造出两条 ssh2 Client（后写入 Map 的那条赢；被顶掉那条以前
+ *  没人清理：既泄漏一条连接，旧连接的 close 还可能把刚建好的隧道误关掉 → 界面「连上了但打不开」。） */
 async function establishConnection(server, opts = {}) {
+  const inflight = connectInflight.get(server.id);
+  if (inflight) return inflight;
+  const p = establishConnectionInner(server, opts);
+  connectInflight.set(server.id, p);
+  try { return await p; } finally { connectInflight.delete(server.id); }
+}
+
+async function establishConnectionInner(server, opts = {}) {
   if (sshConnections.has(server.id)) {
     /* 2026-09-23 修「断网重连时状态机反复循环」：
      * 这里换掉旧连接时调的 `end()` 会触发旧连接的 'close' 事件，而那一刻 sshConnections 里
@@ -403,6 +419,8 @@ async function waitServerReady(server, reason = 'manual', { waitServerMs = 15000
   const conn = sshConnections.get(server.id);
   const napPort = tunnelLocalPort(server.id, 'NapCat WebUI', 13000);
   const deadline = Date.now() + Math.max(5000, waitServerMs);
+  let lastSt = null;            // 最近一次真读到的服务端状态（循环退出后用来判定 partial / failed）
+  let lastD = null;
   while (Date.now() < deadline) {
     let st = null;
     try {
@@ -414,6 +432,7 @@ async function waitServerReady(server, reason = 'manual', { waitServerMs = 15000
       continue;
     }
     const d = describeRemoteStatus(st);
+    lastSt = st; lastD = d;
     /* 先把组件明细写进状态机（ready 时它自己会切到 warming），这样"已就绪 → 预鉴权 → ready"这段
      * 也带着明细，界面不会在最后一步把三件套的状态清空。 */
     connectMachine.remote(st, reason);
@@ -424,15 +443,24 @@ async function waitServerReady(server, reason = 'manual', { waitServerMs = 15000
       connectMachine.warmed(r, reason);
       return { ok: true, warm: r, remote: st };
     }
-    /* 整套都没在跑时不用干等：状态机已经写明"点一键启动整套"，这里就到点为止。
+    /* 没有组件在"起"的时候不用干等：整套没在跑（d.down）与"有的在跑、有的停了"（partial）都属这一类 ——
+     * 状态机已经写明是哪种、该点哪里，这里就到点为止。
      * 2026-09-23：注意这条 break 之后不能直接判 failed 就完事：服务端刚开机/刚重启时
      * "三件套都没在跑"是正常的过渡态，旧代码在这里 fail 之后没有任何人再推进状态机，
-     * 界面就永远停在"连接失败"，而重连定时器还在按退避反复触发 → 看起来就是"反复循环"。 */
-    if (d.down) break;
+     * 界面就永远停在"连接失败"，而重连定时器还在按退避反复触发 → 看起来就是"反复循环"。
+     * 2026-10-01：只有**确实有组件在启动**（进程在、端口还没听）才继续轮询等它起来。 */
+    if (!d.components.some((c) => c.state === 'starting')) break;
     await sleepMs(pollMs);
   }
-  /* 到点或遇到"整套没在跑"：如实记失败原因，但同时安排一次重连，让状态机能自己走下去。
-   * 已在重连中（reconnectTimers 有本机）时不重复排，避免叠加定时器。 */
+  /* 2026-10-01 主人反馈「状态机不对」：这里原先一律 fail，于是"SSH 明明连着、只是桥没在跑"
+   * （线上实测 DSH ready + NapCat ready + 桥 down）被写成「连接失败（会自动重试）」并按退避反复重连，
+   * 界面看起来就是永远在"服务端连接中 / 启动中"。现在分开：
+   *   · 没有任何组件在启动（全停 / 部分停）→ 连接本身是成功的，只是组件没起来 → 记 partial，
+   *     不判失败、不排重连（重连也修不好"桥没在跑"）；
+   *   · 到点了还有组件在启动 → 才是真超时，照旧 fail + 排重连。 */
+  if (lastD && !lastD.ready && !lastD.components.some((c) => c.state === 'starting')) {
+    return { ok: false, partial: true, remote: lastSt };
+  }
   connectMachine.fail(new Error('服务端组件到点还没就绪（看状态机里的组件明细，或点「一键启动整套」）'), reason);
   if (!reconnectTimers.has(server.id) && !manualDisconnects.has(server.id)) {
     scheduleReconnect(server.id, 'server-not-ready');
@@ -941,15 +969,15 @@ function findNapcatOneKey() {
 
 /**
  * 收集「所有」NapCat OneKey Shell 目录（不只第一个命中的）：
- * 本机可能同时存在 开发工作区版 与 已安装版(%LOCALAPPDATA%\Programs\MoonBot 等)，
+ * 本机可能同时存在 开发工作区版 与 已安装版(%LOCALAPPDATA%\Programs\Kizuna 等)，
  * 停止时若只按 findNapcatOneKey() 的单一目录前缀去杀，会漏掉真正在跑的另一套。
  */
 function findNapcatOneKeyAll() {
   const proj = RUNTIME_ROOT;
-  // 默认目录（%LOCALAPPDATA%\Programs\MoonBot）只是"其中之一"：安装目录页允许用户装到任意盘，
+  // 默认目录（%LOCALAPPDATA%\Programs\Kizuna）只是"其中之一"：安装目录页允许用户装到任意盘，
   // 所以再扫一遍 Programs\* 里所有带 resources\runtime\napcat-onekey 的安装（2026-09-12）。
   const programsRoot = join(homedir(), 'AppData', 'Local', 'Programs');
-  const programMoon = join(programsRoot, 'MoonBot', 'resources', 'runtime');
+  const programMoon = join(programsRoot, 'Kizuna', 'resources', 'runtime');
   const siblingInstalls = (() => {
     try {
       return readdirSync(programsRoot)
@@ -1111,22 +1139,56 @@ function localNapcatWebuiTokenFromFile(shellDir = null) {
 /* 2026-09-23：`napcatWebuiTokenWorks()` 已删除：它做的事情就是"打一发登录接口看通不通"，
  * 而登录额度是 WebUI 页面自己的。它本来就只剩这一个定义、没有任何调用点（删前已全仓确认）。 */
 
+/* 2026-09-26 ⑦：token 记忆改成「落盘 + 24 小时有效」。
+ * 原来只在内存 Map 里、半小时就作废：进程一重启（或隔天再开应用）就得重新现场对一遍，
+ * 对不上的那一次点击就是主人看到的「获取QQ列表失败 / 获取二维码失败: Unauthorized」。
+ * 现在把"最近一次现场读到的可用 token"写进管理器配置（napcatWebuiTokens），启动即可用。
+ * ⚠️ 配置里是明文 token —— 与既有的 SSH 密码/私钥同级（本来也都是明文），界面上仍一律掩码显示。 */
+const NAPCAT_WEBUI_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+let napcatWebuiTokenWriteAt = 0;   // 写盘节流：10 秒最多写一次
+function persistNapcatWebuiToken(key, rec) {
+  const now = Date.now();
+  if (now - napcatWebuiTokenWriteAt < 10000) return;
+  napcatWebuiTokenWriteAt = now;
+  try {
+    const cfg = loadConfig();
+    cfg.napcatWebuiTokens = { ...(cfg.napcatWebuiTokens || {}), [key]: { token: rec.token, at: rec.at, verified: rec.verified === true } };
+    saveConfig(cfg);
+  } catch { /* 写盘失败不影响本次使用：内存缓存依然有效 */ }
+}
+/** 从配置里取回落盘的那份（重启后第一次用到时读一次）。 */
+function persistedNapcatWebuiToken(key) {
+  try {
+    const rec = loadConfig()?.napcatWebuiTokens?.[key];
+    const token = String(rec?.token ?? "").trim();
+    if (!token) return null;
+    return { token: token, at: Number(rec.at) || Date.now(), verified: rec.verified === true };
+  } catch { return null; }
+}
+
 /** 记下"最近一次确认可用"的 token（状态探测、令牌卡片写回、验证成功时都调这个）。 */
 function rememberNapcatWebuiToken(scope, port, token, verified = false) {
-  const t = String(token ?? '').trim();
+  const t = String(token ?? "").trim();
   if (!t) return;
   const key = `${scope}:${port}`;
   const prev = napcatWebuiTokenCache.get(key);
   if (!prev || prev.token !== t || (verified && !prev.verified)) {
-    napcatWebuiTokenCache.set(key, { token: t, at: Date.now(), verified: verified || prev?.verified === true });
+    const rec = { token: t, at: Date.now(), verified: verified || prev?.verified === true };
+    napcatWebuiTokenCache.set(key, rec);
+    persistNapcatWebuiToken(key, rec);   // 落盘（节流）：下次开应用不用重新对一遍
   }
 }
 
-/** 缓存里的候选（未过期；verified 的优先）。 */
+/** 缓存里的候选（未过期；verified 的优先）。重启后第一次查不到内存记录时，回落到落盘的那份。 */
 function cachedNapcatWebuiToken(scope, port) {
-  const hit = napcatWebuiTokenCache.get(`${scope}:${port}`);
-  if (!hit) return '';
-  if (Date.now() - hit.at > 30 * 60 * 1000) return '';   // 半小时没再确认过就不算数
+  const key = `${scope}:${port}`;
+  let hit = napcatWebuiTokenCache.get(key);
+  if (!hit) {
+    const seed = persistedNapcatWebuiToken(key);
+    if (seed) { napcatWebuiTokenCache.set(key, seed); hit = seed; }
+  }
+  if (!hit) return "";
+  if (Date.now() - hit.at > NAPCAT_WEBUI_TOKEN_TTL_MS) return "";   // 24 小时没再确认过就不算数
   return hit.token;
 }
 
@@ -1368,7 +1430,7 @@ function qqWindowHiderScript(cfg) {
     "using System.Collections.Generic;",
     "using System.Text;",
     "using System.Runtime.InteropServices;",
-    "public static class MoonBotQqWinHideResident {",
+    "public static class KizunaQqWinHideResident {",
     "  delegate bool EnumProc(IntPtr h, IntPtr l);",
     '  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);',
     '  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
@@ -1476,7 +1538,7 @@ function qqWindowHiderScript(cfg) {
   const tbCs = [
     "using System;",
     "using System.Runtime.InteropServices;",
-    "public static class MoonBotTaskbarClean {",
+    "public static class KizunaTaskbarClean {",
     '  [ComImport, Guid("56FDF342-FD6D-11d0-958A-006097C9A090"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]',
     "  public interface ITaskbarList {",
     "    void HrInit();",
@@ -1505,7 +1567,7 @@ function qqWindowHiderScript(cfg) {
     "}",
   ].map((l) => `'${l}'`);
   return [
-    "# MoonBot QQ window hider (resident) - generated by server/index.js; 观察随包 QQ 的窗口并隐藏",
+    "# Kizuna QQ window hider (resident) - generated by server/index.js; 观察随包 QQ 的窗口并隐藏",
     "$ErrorActionPreference = 'SilentlyContinue'",
     // 2026-09-24：stdout/stderr 现在被管理端接进日志文件了。PS 5.1 重定向时的默认编码是本地 OEM
     // 代码页（简中是 GBK），报错文本会变成乱码；显式设成 UTF-8，让日志里的错误能读。
@@ -1585,7 +1647,7 @@ function qqWindowHiderScript(cfg) {
     "$script:infoAt = -99999",
     "function Update-PpidMap {",
     "  $m = @{}",
-    "  foreach ($line in @([MoonBotQqWinHideResident]::Procs())) {",
+    "  foreach ($line in @([KizunaQqWinHideResident]::Procs())) {",
     "    $g = $line.Split('|')",
     "    if ($g.Count -ge 2) { $m[$g[0]] = $g[1] }",
     "  }",
@@ -1700,9 +1762,9 @@ function qqWindowHiderScript(cfg) {
     "  if ($pids.Count -gt 0) {",
     "    if (-not $seenBundled) { $seenBundled = $true; $burstUntilMs = $sw.ElapsedMilliseconds + $burstWindowMs }",
     "    if ($burstUntilMs -gt 0 -and $sw.ElapsedMilliseconds -lt $burstUntilMs) { $sleepMs = $burstMs }",
-    "    foreach ($w in @([MoonBotQqWinHideResident]::VisibleWindowsOf([uint32[]]$pids))) {",
-    "      try { [MoonBotQqWinHideResident]::Hide([long]$w) } catch { }",
-    "      try { if ($tbReady) { [MoonBotTaskbarClean]::Remove([long]$w) | Out-Null } } catch { }",
+    "    foreach ($w in @([KizunaQqWinHideResident]::VisibleWindowsOf([uint32[]]$pids))) {",
+    "      try { [KizunaQqWinHideResident]::Hide([long]$w) } catch { }",
+    "      try { if ($tbReady) { [KizunaTaskbarClean]::Remove([long]$w) | Out-Null } } catch { }",
     "      $hex = '0x' + ([long]$w).ToString('X8')",
     "      $hiddenGui[$hex] = $true",
     "      if ($hidden.ContainsKey($hex)) {",
@@ -1717,12 +1779,12 @@ function qqWindowHiderScript(cfg) {
     "    # 只碰 $pids（名字 + 路径双守卫过的随包进程）名下的窗口 —— 主人的 QQ / 终端一个都不碰。",
     "    if ($tbReady -and ($sw.ElapsedMilliseconds - $unlistedAt) -gt 1000) {",
     "      $unlistedAt = $sw.ElapsedMilliseconds",
-    "      foreach ($aw in @([MoonBotQqWinHideResident]::AllWindowsOf([uint32[]]$pids))) {",
+    "      foreach ($aw in @([KizunaQqWinHideResident]::AllWindowsOf([uint32[]]$pids))) {",
     "        $ahex = '0x' + ([long]$aw).ToString('X8')",
     "        if ($unlisted.ContainsKey($ahex)) { continue }",
     "        $unlisted[$ahex] = $true",
-    "        try { [MoonBotQqWinHideResident]::Hide([long]$aw) } catch { }",
-    "        try { [MoonBotTaskbarClean]::Remove([long]$aw) | Out-Null } catch { }",
+    "        try { [KizunaQqWinHideResident]::Hide([long]$aw) } catch { }",
+    "        try { [KizunaTaskbarClean]::Remove([long]$aw) | Out-Null } catch { }",
     "        Write-HiderLog ('[napcat] 已把随包窗口从任务栏摘掉：hwnd=' + $ahex + ' 用时 ' + $sw.ElapsedMilliseconds + ' ms')",
     "      }",
     "    }",
@@ -1730,17 +1792,17 @@ function qqWindowHiderScript(cfg) {
     "  # ② 黑框：NapCat 那条链随时可能起 cmd / node，所以整段观察期都盯（$consoleScanMs 只是兜底上限）",
     "  $pending = 0",
     "  if ($sw.ElapsedMilliseconds -lt $consoleScanMs) {",
-    "    foreach ($cw in @([MoonBotQqWinHideResident]::VisibleConsoleWindows())) {",
+    "    foreach ($cw in @([KizunaQqWinHideResident]::VisibleConsoleWindows())) {",
     "      $chex = '0x' + ([long]$cw).ToString('X8')",
     "      if ($hidden.ContainsKey($chex) -or $notOurs.ContainsKey($chex)) { continue }",
     "      $now = $sw.ElapsedMilliseconds",
     "      if ($checkStamp.ContainsKey($chex) -and ($now - [int]$checkStamp[$chex]) -lt 700) { $pending++; continue }",
     "      $checkStamp[$chex] = $now",
-    "      $cpid = [int][MoonBotQqWinHideResident]::PidOf([long]$cw)",
+    "      $cpid = [int][KizunaQqWinHideResident]::PidOf([long]$cw)",
     "      $ow = Test-ShellAncestor $cpid",
     "      if ($ow -eq 'yes') {",
-    "        try { [MoonBotQqWinHideResident]::Hide([long]$cw) } catch { }",
-    "        try { if ($tbReady) { [MoonBotTaskbarClean]::Remove([long]$cw) | Out-Null } } catch { }",
+    "        try { [KizunaQqWinHideResident]::Hide([long]$cw) } catch { }",
+    "        try { if ($tbReady) { [KizunaTaskbarClean]::Remove([long]$cw) | Out-Null } } catch { }",
     "        $hidden[$chex] = $true",
     "        $hiddenCon[$chex] = $true",
     "        if ($firstHideMs -lt 0) { $firstHideMs = $now }",
@@ -1794,7 +1856,7 @@ function startQqWindowHider(shellDir, opts = {}) {
   const budgetMs = Math.max(1000, Math.round(Number(opts.budgetMs) || QQ_HIDER_DEFAULTS.budgetMs));
   const pollMs = Math.max(50, Math.round(Number(opts.pollMs) || QQ_HIDER_DEFAULTS.pollMs));
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const base = `moonbot-qq-hider-${stamp}-${process.pid}`;
+  const base = `kizuna-qq-hider-${stamp}-${process.pid}`;
   const ps1 = join(tmpdir(), `${base}.ps1`);
   const logFile = join(tmpdir(), `${base}.log`);
   const readyFile = join(tmpdir(), `${base}.ready`);
@@ -1974,7 +2036,7 @@ function psHideQqWindowsScript(shellDir) {
     'using System;',
     'using System.Collections.Generic;',
     'using System.Runtime.InteropServices;',
-    'public static class MoonBotQqWinHide {',
+    'public static class KizunaQqWinHide {',
     '  delegate bool EnumProc(IntPtr h, IntPtr l);',
     '  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);',
     '  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
@@ -1994,11 +2056,11 @@ function psHideQqWindowsScript(shellDir) {
     '}',
     "'@",
     '  Add-Type -TypeDefinition $type -ErrorAction Stop',
-    '  $n = [MoonBotQqWinHide]::Hide(@($qq | ForEach-Object { [uint32]$_.Id }))',
+    '  $n = [KizunaQqWinHide]::Hide(@($qq | ForEach-Object { [uint32]$_.Id }))',
     '} catch {',
     // 编译不出来时的退路：只用 MainWindowHandle（一个进程一个主窗口，够用）
-    "  Add-Type -Namespace MoonBotFallback -Name Win -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c);' -ErrorAction SilentlyContinue",
-    '  foreach ($p in $qq) { if ($p.MainWindowHandle -ne 0) { [MoonBotFallback.Win]::ShowWindow($p.MainWindowHandle, 0) | Out-Null; $n++ } }',
+    "  Add-Type -Namespace KizunaFallback -Name Win -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c);' -ErrorAction SilentlyContinue",
+    '  foreach ($p in $qq) { if ($p.MainWindowHandle -ne 0) { [KizunaFallback.Win]::ShowWindow($p.MainWindowHandle, 0) | Out-Null; $n++ } }',
     '}',
     'Write-Output $n',
   ].join('\n');
@@ -2882,6 +2944,12 @@ async function resolveServices(cfg, connected) {
   if (sshMode && connected) {
     const conn = sshConnections.get(connected.id);
     remoteStatus = await getRemoteServerStatus(connected, conn);          // 复用这条连接（内部 10 秒缓存）
+    /* 2026-10-01 主人反馈「状态机不对」：把这份现场状态顺手喂给状态机。状态机原先只在
+     * waitServerReady 那 150 秒的循环里被推进，循环一结束就再没人更新它 —— 于是"桥停了""桥后来
+     * 又起来了"这类变化界面永远看不到，一直停在最后一帧（实测：SSH 连着、DSH/NapCat 在跑、
+     * 桥停着，首页三张卡却一直写「服务端连接中 · 服务端组件启动中」）。
+     * observe 只在连接完成之后接管（connecting/tunnels 阶段不插嘴），并且只读这里已经取到的缓存。 */
+    connectMachine.observe(remoteStatus, 'state-poll');
     const u = await remoteServiceUrls(connected, remoteStatus);
     const remoteServices = [
       { id: 'srv-dsh-web', scope: 'remote', name: '服务端 DSH 界面', url: u.dsh, desc: '服务器 systemd dsh-web · 隧道 ' + u.ports.dsh + ' · 已带访问令牌' + (remoteStatus?.dsh?.token ? '' : '（未取到令牌，令牌见服务端日志）') },
@@ -3096,7 +3164,7 @@ function installLocationWarnings() {
   try {
     const root = RUNTIME_ROOT.toLowerCase();
     if (/[\\/]program files( \(x86\))?[\\/]/.test(root)) {
-      out.push('当前安装在 Program Files 下：这套程序是"按用户"安装的，没有管理员权限时记忆库/人设可能写不进去。建议改装到 D:\\MoonBot 这类普通目录。');
+      out.push('当前安装在 Program Files 下：这套程序是"按用户"安装的，没有管理员权限时记忆库/人设可能写不进去。建议改装到 D:\\Kizuna 这类普通目录。');
     }
     if (/[\\/](onedrive|dropbox|google drive|坚果云|微云)[\\/]/.test(root) || /同步盘|同步空间/.test(RUNTIME_ROOT)) {
       out.push('当前安装目录看起来在同步盘里：聊天记忆库（SQLite）会被持续同步，可能损坏或写入冲突。建议改装到本地非同步目录。');
@@ -4301,7 +4369,9 @@ app.post('/api/ssh/stack', async (req, res) => {
   ];
   const plan = action === 'start' ? startPlan : stopPlan;
   try {
-    conn = await connectOne(server);
+    /* 2026-09-26 ⑩：优先复用已建立的常驻连接（与 /api/ssh/service 同一约定）——「应用已经连上
+       服务器」这条常见路径上，每次动作都重做一次 SSH 握手纯属浪费；复用不打断隧道，动作更快。 */
+    conn = sshConnections.get(server.id) || await connectOne(server);
     steps.push({ step: '连接服务器', ok: true, msg: `已连接 ${server.username || ''}@${server.host}` });
     for (const [stepName, cmd, timeout] of plan) {
       // 动作项可以直接给一个函数（本机动作，如"停掉本机 NapCat"）—— 不一定是远端命令字符串
@@ -4322,7 +4392,9 @@ app.post('/api/ssh/stack', async (req, res) => {
   } catch (e) {
     res.json({ success: false, message: e.message, steps });
   } finally {
-    try { conn?.end(); } catch {}
+    /* 2026-09-26 ⑩：复用了常驻连接时**不能**在这里 end() —— 那会把隧道一起关掉（原来每次都新建
+       一条临时连接，所以无条件 end 是对的；现在复用优先，必须区分这条是谁建的）。 */
+    if (conn && conn !== sshConnections.get(server.id)) { try { conn.end(); } catch {} }
   }
 });
 
@@ -5154,6 +5226,11 @@ async function chatConvsOffline(kind, limit, offset) {
         key: k,
         kind: k.startsWith('private:') ? 'private' : 'group',
         name: nameMap.get(k) || '',
+        // 离线兜底（桥没运行）：拿不到群名/昵称，只能沿用库里的 name —— 标明来源，界面好区别
+        groupName: '',
+        groupNick: '',
+        remark: '',
+        nameSource: nameMap.get(k) ? 'db' : '',
         count: Number(r.cnt) || 0,
         sent: Number(r.sent) || 0,
         received: (Number(r.cnt) || 0) - (Number(r.sent) || 0),
@@ -5215,7 +5292,7 @@ app.get('/api/bridge/chat-stats', async (req, res) => {
 /* 聊天记录实时推流（2026-09-24 主人要求："去掉刷新按钮，改为 SSE"）。
    写法与 /api/learning/token-stream、/api/napcat/login-stream 同一套（见下文那两个端点）：
    取数留在管理端（连着服务器就取服务端桥、否则读本机），浏览器只收"变化"。
-     · 每 5 秒取一次 stats + convs；JSON 签名没变就一个字节都不发 —— 前端不重渲染、不闪；
+     · 每 2 秒取一次 stats、convs 每 3 拍一次（≈6 秒）；JSON 签名没变就一个字节都不发 —— 前端不重渲染、不闪；
      · 事件：snapshot（连接后第一份全量）/ stats / convs / stream-error；另有 20 秒一次的心跳注释；
      · 取数失败不清屏：错误当事件推过去，前端保留上一次数据并提示，下一轮继续重试；
      · 收尾只认 res 的 close —— 挂 req 的 close 会在请求体读完时就触发，等于立刻自杀。 */
@@ -5264,6 +5341,10 @@ app.get('/api/bridge/chat-stream', async (req, res) => {
           key: String(c?.key || ''),
           kind: c?.kind === 'private' ? 'private' : 'group',
           name: String(c?.name || ''),
+          groupName: String(c?.groupName || ''),
+          groupNick: String(c?.groupNick || ''),
+          remark: String(c?.remark || ''),
+          nameSource: String(c?.nameSource || ''),
           count: Number(c?.count) || 0,
           sent: Number(c?.sent) || 0,
           received: Number(c?.received) || 0,
@@ -5281,11 +5362,29 @@ app.get('/api/bridge/chat-stream', async (req, res) => {
     }
   };
 
+  /* 【2026-09-26 主人要求：SSE 都改 0.1 秒探针】探针 0.1 秒一次，但上游**不能**跟着 0.1 秒打：
+     桥侧 chat-stats 每拍要全文读 token-usage.jsonl（最多 5 万行）并做 FTS 计数，10 次/秒会把桥烧掉，
+     而且它 0.1 秒内本来也不会有新数据。所以这里加一层「按 key 的短 TTL 记忆」：探针只做一次便宜的
+     比较，真正取数按 TTL 走，顺带把并发的重复请求合成一次（同 key 在飞的 Promise 直接复用）。
+     观感上仍然足够实时：数字最长滞后 = TTL（stats 0.5 秒、convs 3 秒），比原来的 2 秒/6 秒快得多。 */
+  const STATS_TTL_MS = 500;
+  const CONVS_TTL_MS = 3000;
+  const streamMemo = new Map();   // key → { at, p }
+  const memoRead = (key, ttlMs, fn) => {
+    const hit = streamMemo.get(key);
+    if (hit && Date.now() - hit.at < ttlMs) return hit.p;
+    const p = Promise.resolve().then(fn).catch((e) => { streamMemo.delete(key); throw e; });
+    streamMemo.set(key, { at: Date.now(), p });
+    return p;
+  };
+
   const tick = async () => {
     if (closed) return;
-    try { const s = await readStats(); if (!closed) { const sig = JSON.stringify(s); if (sig !== sigStats) { sigStats = sig; send('stats', s); } } } catch { /* 下一轮再试 */ }
+    /* 三张统计卡是"瞬时读数"：探针 0.1 秒，实际取数 0.5 秒一次（上面的 STATS_TTL_MS）。
+       会话列表那份是 300 行的重查询，TTL 3 秒；两者都不再按拍数抽稀。 */
+    try { const s = await memoRead('stats', STATS_TTL_MS, readStats); if (!closed) { const sig = JSON.stringify(s); if (sig !== sigStats) { sigStats = sig; send('stats', s); } } } catch { /* 下一轮再试 */ }
     if (closed) return;
-    try { const c = await readConvs(); if (!closed) { const sig = JSON.stringify(c); if (sig !== sigConvs) { sigConvs = sig; send('convs', c); } } } catch { /* 下一轮再试 */ }
+    try { const c = await memoRead('convs', CONVS_TTL_MS, readConvs); if (!closed) { const sig = JSON.stringify(c); if (sig !== sigConvs) { sigConvs = sig; send('convs', c); } } } catch { /* 下一轮再试 */ }
   };
 
   const onClose = () => {
@@ -5298,7 +5397,7 @@ app.get('/api/bridge/chat-stream', async (req, res) => {
   send('snapshot', { scope, serverId: String(serverId || ''), days, at: Date.now() });
   await tick();
   if (!closed) {
-    timer = setInterval(() => { void tick(); }, 5000);
+    timer = setInterval(() => { void tick(); }, 100);   // 0.1 秒探针（2026-09-26 主人要求）
     beat = setInterval(() => { if (!closed) { try { res.write(': ping\n\n'); } catch { /* 客户端已走 */ } } }, 20000);
   }
 });
@@ -5318,6 +5417,10 @@ app.get('/api/bridge/chat-convs', async (req, res) => {
         key: String(c?.key || ''),
         kind: c?.kind === 'private' ? 'private' : 'group',
         name: String(c?.name || ''),
+        groupName: String(c?.groupName || ''),
+        groupNick: String(c?.groupNick || ''),
+        remark: String(c?.remark || ''),
+        nameSource: String(c?.nameSource || ''),
         count: Number(c?.count) || 0,
         sent: Number(c?.sent) || 0,
         received: Number(c?.received) || 0,
@@ -6557,7 +6660,35 @@ function getLocalBridgeTarget() {
 }
 
 /** 经 ssh2 exec 执行一条远程命令，捕获 stdout/stderr（超时只关流，不误杀整个 SSH 连接） */
+/* 2026-09-26 ⑩：死连接驱逐 —— 在命令层面认出"这条 SSH 已经死了"（而不是命令本身报错）时，
+ * 把它从 sshConnections 摘掉并排一次重连。以前死连接会一直留在 Map 里：之后每次取状态、每次
+ * 打开页面都拿它发命令、全部失败，界面就长期停留在"连上了但什么都打不开"，非要等 keepalive
+ * （最长约 180 秒）在 close 里发现。这里只认"连接层"的措辞，命令自己的报错（权限、找不到文件）
+ * 一律放过 —— 那些与连接是否健在无关。 */
+const SSH_DEAD_HINTS = ['not connected', 'no response from server', 'channel open failure', 'socket closed', 'connection lost', 'connection reset', 'client is not connected', 'keepalive timeout'];
+function sshEvictIfDead(conn, errText) {
+  const s = String(errText ?? '').toLowerCase();
+  if (!s || !SSH_DEAD_HINTS.some((h) => s.includes(h))) return;
+  let sid = '';
+  for (const [id, c] of sshConnections) { if (c === conn) { sid = id; break; } }
+  if (!sid || sshConnections.get(sid) !== conn) return;
+  sshConnections.delete(sid);
+  mlog(`[ssh] 命令层判定连接已死（${String(errText).slice(0, 80)}），摘掉该连接`);
+  try { conn.end(); } catch { /* 已经断了就算 */ }
+  if (manualDisconnects.has(sid)) return;   // 用户主动断开的那台：只摘不重连
+  scheduleReconnect(sid, 'dead-connection');
+}
+/** 包一层：调用点一行不改，只在失败时多看一眼"是不是连接死了"。 */
 function sshExecCapture(conn, command, timeoutMs = 8000) {
+  let out;
+  try { out = sshExecCaptureRaw(conn, command, timeoutMs); } catch (e) { sshEvictIfDead(conn, e?.message); throw e; }
+  if (!out || typeof out.then !== 'function') { sshEvictIfDead(conn, out?.error); return out; }
+  return out.then(
+    (r) => { if (r && r.ok === false) sshEvictIfDead(conn, r.error); return r; },
+    (e) => { sshEvictIfDead(conn, e?.message); throw e; },
+  );
+}
+function sshExecCaptureRaw(conn, command, timeoutMs = 8000) {
   return new Promise((resolve) => {
     let streamRef = null;
     const timer = setTimeout(() => {
@@ -6840,12 +6971,31 @@ function parseRemoteStatus(out, server) {
  * 取某台已连接服务器的现场状态。不新建 SSH 连接：一律用 sshConnections 里那条。
  * 10 秒内重复请求复用缓存（失败也短缓存 3 秒，避免前端轮询时连着戳服务器）。
  */
+/* 2026-09-26 ⑩：同 id「正在取状态」的 Promise。/api/state 轮询、点开桥配置页、动作端点会同时要状态，
+ * 以前每个调用者各发一次 SSH（= 各一次完整往返）；现在非 force 的调用共用同一次结果。
+ * force=true 仍单独跑：动作刚改完现场，必须拿动作之后的新数据，不能命中动作之前那一发。 */
+const remoteStatusInflight = new Map();
+
 async function getRemoteServerStatus(server, connArg, opts = {}) {
   const { force = false, timeoutMs = 8000 } = opts;
   const conn = connArg || sshConnections.get(server?.id);
   if (!server?.id || !conn) return { ok: false, connected: false, at: Date.now(), message: '未连接（先在 SSH 配置页点「连接」建立隧道）' };
   const hit = remoteStatusCache.get(server.id);
   if (!force && hit && Date.now() - hit.at < (hit.ttl ?? REMOTE_STATUS_TTL_MS)) return hit.data;
+  if (!force) {
+    const inflight = remoteStatusInflight.get(server.id);
+    if (inflight) return inflight;
+  }
+  const p = fetchRemoteServerStatus(server, conn, timeoutMs);
+  if (!force) {
+    remoteStatusInflight.set(server.id, p);
+    try { return await p; } finally { remoteStatusInflight.delete(server.id); }
+  }
+  return p;
+}
+
+/** 真正发那一发命令（调用方一律走 getRemoteServerStatus，别直连这里）。 */
+async function fetchRemoteServerStatus(server, conn, timeoutMs) {
   const r = await sshExecCapture(conn, buildRemoteStatusCommand(server), timeoutMs);
   if (!r.ok) {
     const data = { ok: false, connected: true, at: Date.now(), error: r.error || '远程命令执行失败', server: { id: server.id, name: server.name, host: server.host } };
@@ -7132,6 +7282,53 @@ app.get('/api/ssh/bridge-config', async (req, res) => {
   res.json({ ...data, cached: false });
 });
 
+/**
+ * 「贴一次 cookie 就自动轮换」的服务端落地（2026-09-28）。
+ *
+ * 现场：主人在管理端的功能配置里贴了 pixiv 的 PHPSESSID，登录态却始终没建立起来。根因两条：
+ *   ① 写进 config.json 的 cookie 只打开「每次请求现带 cookie」的旧路径，而 OAuth 交换
+ *      （PHPSESSID → refresh_token）当时**只有手工跑 tools/pixiv-login.mjs** 才会触发 ——
+ *      改配置这个动作从不触发交换，于是永远停在「一份会过期的 cookie」；
+ *   ② 那次粘贴后来在任何一份 config.json 里都没留下痕迹（本机/安装目录/打包三份 + 服务器全查过），
+ *      连旧路径也没在跑 —— 所以现象是「完全没有登录态」。
+ * 这段补上第 ① 步，而且**必须在服务器上换**：这台 PC 上 pixiv 的官方域名被 DNS 污染 + TCP 黑洞
+ *（www.pixiv.net / i.pximg.net / app-api.pixiv.net 实测全部超时），只有服务器连得上 OAuth 口。
+ *
+ * 凭证纪律（照 tools/set-pixiv-cookie.mjs 的既有做法）：cookie 只经 SFTP 落到服务器 600 的临时文件、
+ * 用完立刻删除；绝不进命令行（ps 可见）、绝不写进日志或返回值 —— 回给界面的只有工具 stdout 的尾巴，
+ * 而工具本身对 cookie / verifier / code 都做了脱敏。
+ */
+async function bootstrapPixivOnServer(conn, dir, cookieRaw) {
+  const cookie = String(cookieRaw ?? '').trim();
+  if (!cookie) return null;
+  const tool = `${dir}/tools/pixiv-login.mjs`;
+  const stamp = Date.now();
+  const remoteTmp = `/tmp/kizuna-pixiv-cookie-${stamp}.txt`;
+  const localTmp = join(tmpdir(), `kizuna-pixiv-cookie-${stamp}.txt`);
+  try {
+    // 预检：工具得在，而且得是支持 --cookie-file 的那版（旧版只认 --cookie，那会把凭证塞进 argv）。
+    const pre = await sshExecCapture(conn, `test -f ${tool} && grep -c -- "--cookie-file" ${tool} || echo 0`, 20000);
+    if (!/^[1-9]/m.test(String(pre?.out || ''))) {
+      return { ok: false, message: `服务器上 ${tool} 不存在或版本过旧（缺 --cookie-file）：先在管理端同步一次代码，再重贴 cookie` };
+    }
+    writeFileSync(localTmp, cookie, { mode: 0o600 });
+    const up = await uploadFileVerified(conn, localTmp, remoteTmp);
+    const r = await sshExecCapture(conn,
+      `chmod 600 ${remoteTmp}; cd ${dir} && node ${tool} --cookie-file ${remoteTmp} 2>&1; ec=$?; echo "KIZUNA_PIXIV_EXIT=$ec"; rm -f ${remoteTmp}; exit 0`,
+      150000);
+    const raw = String(r?.out || '');
+    const m = /KIZUNA_PIXIV_EXIT=(\d+)/.exec(raw);
+    const exitCode = m ? Number(m[1]) : null;
+    const body = raw.replace(/KIZUNA_PIXIV_EXIT=\d+\s*$/, '').trim();
+    return { ok: exitCode === 0, exitCode, bytes: up?.bytes ?? 0, tool, output: body.slice(-1600) };
+  } catch (e) {
+    return { ok: false, message: `在服务器上换取长期令牌时异常：${e?.message ?? e}` };
+  } finally {
+    try { unlinkSync(localTmp); } catch { /* 本地临时文件没了就算了 */ }
+    try { await sshExecCapture(conn, `rm -f ${remoteTmp}`, 15000); } catch { /* 服务器上删不掉也不该拦着保存 */ }
+  }
+}
+
 /** POST /api/ssh/bridge-config：写服务端 config.json（备份 + 原子替换 + 回读比对） */
 app.post('/api/ssh/bridge-config', async (req, res) => {
   const body = req.body ?? {};
@@ -7177,6 +7374,22 @@ app.post('/api/ssh/bridge-config', async (req, res) => {
     out.steps.push({ step: '回读比对关键字段', ok: out.verified, msg: out.verified ? '全部一致' : ('不一致：' + mismatched.join(', ')) });
     if (!out.verified) { out.ok = false; out.success = false; out.message = '已写入服务端 config.json，但**回读比对不一致**：' + mismatched.join(', '); }
     else out.message = `已写入服务端 config.json（${dir}/config.json）· 回读比对一致 · 桥按 mtime 热加载，下一条消息即生效`;
+  }
+
+  /* ①a-2 「贴一次 cookie 就自动轮换」（2026-09-28）：这次提交里带了 pixiv.cookie → 顺手在服务器上
+   * 做一次 OAuth 交换（见 bootstrapPixivOnServer）。失败**不**把整次保存判成失败 —— 配置确实写进去了，
+   * 没成的只是"顺手换令牌"这一步；如实放进 steps 与 out.pixiv，界面照常显示，别让人以为配置没保存。 */
+  const savedPixivCookie = typeof body?.config?.pixiv?.cookie === 'string' ? body.config.pixiv.cookie.trim() : '';
+  if (savedPixivCookie) {
+    const px = await bootstrapPixivOnServer(conn, dir, savedPixivCookie);
+    out.pixiv = px;
+    const tail = String(px?.output || px?.message || '').trim().split('\n').filter(Boolean).slice(-3).join(' / ');
+    out.steps.push({
+      step: '用刚填的 pixiv cookie 在服务器上换长期令牌',
+      ok: !!px?.ok,
+      msg: px?.ok ? '已拿到长期令牌并落盘（此后每 50 分钟自动轮换）' : (tail.slice(0, 300) || `未成功（exit ${px?.exitCode ?? '?'}）`),
+    });
+    if (!px?.ok) out.pixivWarning = `pixiv 长期令牌没换到（exit ${px?.exitCode ?? '?'}）：${tail.slice(0, 200)}`;
   }
 
   /* ①b 「接口密钥」→ 服务端隔离 DSH 的凭据文件（2026-09-19：需求"接上它"）
@@ -7644,6 +7857,144 @@ app.delete('/api/voice/voices', (req, res) => {
 });
 app.post('/api/voice/preview', voiceRoute('/api/voice/preview', 'POST', { withBody: true }));
 app.post('/api/voice/test', voiceRoute('/api/voice/test', 'POST', { withBody: true }));
+
+/* 本地语音引擎（Genie / GPT-SoVITS ONNX sidecar，2026-09-28 新增）。
+ *   GET  /api/voice/local                      → 状态（环境探测 + 进程 + 内存读数 + 本地音色档案 localVoices）
+ *   POST /api/voice/local {action:'self-test'}  → 真拉起引擎合成一句，回耗时与内存
+ *   POST /api/voice/local {action:'preview'}    → 按指定角色/文本（或指定本地音色档案 voiceId）合成一句，把 wav 字节带回给界面
+ *   POST /api/voice/local {action:'voice-create'} → 新建本地音色（name + baseCharacter + sampleBase64 / fromVoiceId），2026-10-02
+ *   POST /api/voice/local {action:'voice-delete'} → 删掉一个本地音色（连同它自己的样本文件），2026-10-02
+ *   POST /api/voice/local {action:'stop'}       → 关掉引擎进程
+ * 「preview 这条不需要改这里」：下面的 voiceLocalRoute 原样透传 body（只另加 `?force=1`），
+ * 桥侧不认识这个 action 时会自己回 { ok:false, reason }，界面照原样显示。
+ * 2026-10-02 新增的两个音色档案 action 同理**一行都不用改**：voice-create 的样本走 body.sampleBase64
+ * （base64 JSON，`express.json({limit:'60mb'})` 这条上限对它够用；multipart 才需要另开一条流转发），
+ * voice-delete 只是一个普通 JSON body —— 两者都落在既有的 `{...req.body}` 透传上。
+ * 「为什么不能直接用上面那条 voiceRoute」：自检要冷启动引擎（导入 onnxruntime + 加载模型），
+ * 首次可能一两分钟，90 秒那条会把它掐断 —— 这里单独给 180 秒。
+ * 装引擎/下模型（pip + 391MB 数据）不在管理端做，走 `node tools/genie-setup.mjs`。 */
+const VOICE_LOCAL_TIMEOUT_MS = 180000;
+/* 【2026-09-28 拆开】原来 GET/POST 共用上面那 180 秒，可 180 秒只对「自检合成」有意义（它要冷启动引擎）。
+ * 「检测状态」只是一次探测（桥侧用 find_spec 判装没装、再数一下角色目录，不 import 引擎），正常几十毫秒；
+ * 一旦那条路由在桥侧不存在或卡住（桥跑在服务器上、桥版本旧……），界面就要握着"检测中"整整三分钟 ——
+ * 三个按钮一直禁用、状态行一直是空的，看起来就是"卡死的状态机"（使用方原话：「点进去本地引擎还是有死卡
+ * 状态机，没有马上变回来」）。现在按方法分开给：探测 15 秒封顶、关进程 30 秒、自检仍是 180 秒。 */
+const VOICE_LOCAL_PROBE_TIMEOUT_MS = 15000;
+const VOICE_LOCAL_STOP_TIMEOUT_MS = 30000;
+app.get('/api/voice/local', (req, res) => voiceLocalRoute(req, res, 'GET'));
+app.post('/api/voice/local', (req, res) => voiceLocalRoute(req, res, 'POST'));
+async function voiceLocalRoute(req, res, method) {
+  const s = voiceScopeOf(req);
+  let forced = null;
+  if (s.explicit) {
+    forced = voiceScopeTarget(s.scope, s.serverId);
+    if (!forced) {
+      res.json({
+        success: false, ok: false, code: 'target-unavailable',
+        message: s.scope === 'remote'
+          ? '要看服务端的本地语音引擎，但服务器/桥隧道当前没连上：先到「服务器」页连上，或把目标切回「本机」。'
+          : '本机桥目标不可用（没找到 qq-bridge 目录）。',
+      });
+      return;
+    }
+  }
+  const body = method === 'POST' ? { ...(req.body ?? {}) } : undefined;
+  /* `?force=1` 要原样带给桥：桥侧探测有 20 秒缓存，界面上的「检测状态」按一下必须拿到**当下**的
+   * 结论（比如刚跑完 --install / --add-character），否则会显示 20 秒前的旧结果。只透传这一个键，
+   * 别的查询参数（scope 等）在管理端就地消费掉，不往桥上泄。 */
+  const force = String(req.query?.force ?? '') === '1' ? '?force=1' : '';
+  /* 按方法（以及 POST 的 action）给超时：见上面三个常量的说明。action 认不出来时按自检的大超时办 ——
+   * 宁可多等，也不要把一次真在跑的合成掐断在半路。 */
+  const action = String(body?.action ?? '');
+  const timeoutMs = method === 'POST'
+    ? (action === 'stop' ? VOICE_LOCAL_STOP_TIMEOUT_MS : VOICE_LOCAL_TIMEOUT_MS)
+    : VOICE_LOCAL_PROBE_TIMEOUT_MS;
+  await proxyToBridgeConsole(req, res, { path: '/api/voice/local' + force, method, body, timeoutMs }, forced);
+}
+
+/* 取某个音色的**样本音频字节**（2026-10-01 新增，「音色导出」用）。
+ * 「为什么不能照抄上面那几行 voiceRoute」：callBridgeConsole 把桥的回包一律按 JSON 解析
+ * （解析不出来或 404 就判成 code='bridge-stale' 的"桥版本旧"）—— 音频字节在这里会被整套误判。
+ * 故这条单独透传字节流：Content-Type 原样带回给前端（前端靠它决定导出的音频后缀是 .mp3 还是 .wav）。
+ * 只读不写，scope 的口径与其它 voice 路由一致（显式 scope 不可用时明确说明，不悄悄退化成写本机）。
+ * 失败回包沿用本文件 voice 路由的写法（HTTP 200 + { ok:false, ... }，前端按 ok/内容类型判断），
+ * 只有桥自己的 4xx（没有样本文件 / 没有这个音色）原样带状态码与 body 回去。 */
+app.get('/api/voice/sample', async (req, res) => {
+  const s = voiceScopeOf(req);
+  let forced = null;
+  if (s.explicit) {
+    forced = voiceScopeTarget(s.scope, s.serverId);
+    if (!forced) {
+      res.json({
+        success: false, ok: false, code: 'target-unavailable',
+        message: s.scope === 'remote'
+          ? '要导出服务端桥上的音色样本，但服务器/桥隧道当前没连上：先到「服务器」页连上，或把目标切回「本机」。'
+          : '本机桥目标不可用（没找到 qq-bridge 目录）。',
+      });
+      return;
+    }
+  }
+  let t = null;
+  try { t = forced || resolveBridgeTarget(); } catch (e) {
+    res.json({
+      success: false, ok: false, code: 'bridge-offline',
+      message: '找不到可用的桥目标：本机没找到 qq-bridge 目录，也没有已连接的服务器',
+      detail: String(e?.message || e),
+    });
+    return;
+  }
+  try {
+    const token = t.kind === 'remote' ? await getRemoteBridgeToken(t.server, t.conn) : t.token;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), VOICE_TIMEOUT_MS);
+    let resp;
+    try {
+      resp = await fetch(`${t.base}/api/voice/sample?id=${encodeURIComponent(String(req.query.id ?? ''))}`, {
+        headers: token ? { 'x-console-token': token } : {},
+        signal: ctrl.signal,
+      });
+    } finally { clearTimeout(timer); }
+    const ct = String(resp.headers.get('content-type') || '');
+    if (resp.ok && /^audio\//i.test(ct)) {
+      const buf = Buffer.from(await resp.arrayBuffer());
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Content-Length', String(buf.length));
+      // 桥给的中文文件名（含 filename*）原样带上，直接拿这个 URL 下载时也能得到像样的名字
+      const cd = resp.headers.get('content-disposition');
+      if (cd) res.setHeader('Content-Disposition', cd);
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(buf);
+      return;
+    }
+    /* 不是音频 → 桥那边没给成。桥的错误体是 JSON（{ ok:false, error:'中文原因' }），原样带回；
+     * 只有"有状态码、没有 JSON 体"的 404 才是"桥在跑但版本里没这条路由"（旧桥），这时才说版本旧。 */
+    const text = await resp.text();
+    let j = null;
+    try { j = text ? JSON.parse(text) : null; } catch { /* 非 JSON（桥/代理没答上） */ }
+    if (j && (j.error || j.message)) { res.status(resp.status).json({ ...j, ok: false }); return; }
+    const stale = resp.status === 404;
+    res.json({
+      success: false, ok: false,
+      code: stale ? 'bridge-stale' : 'bridge-error',
+      message: stale
+        ? '桥在运行，但它的版本里没有「取音色样本」这条接口（HTTP 404）：把桥代码更新到最新并重启桥，再试一次。'
+        : `取音色样本失败（HTTP ${resp.status}）：${String(text).slice(0, 200) || '桥没有给出原因'}`,
+      detail: `HTTP ${resp.status}${ct ? ` ${ct}` : ''}`,
+    });
+  } catch (e) {
+    // 与 callBridgeConsole 同一套"桥没在听 / 桥在听但这次没取到"的措辞（前者才催启动，后者指向令牌或超时）
+    const detail = `${e?.message ?? e}${e?.cause?.code ? ` (${e.cause.code})` : ''}`;
+    console.error('[voice sample] 取音色样本失败:', detail);
+    const offline = bridgeNotListening(detail);
+    res.json({
+      success: false, ok: false, code: 'bridge-offline',
+      message: offline
+        ? `桥没在运行（${t.kind === 'remote' ? '或 Bridge 控制台隧道没通' : '本机'}）：${t.base} 无响应，音色样本要从桥上取，启动桥后重试。`
+        : '这次没取到音色样本（超时或控制台令牌不对）：确认桥上控制台令牌与管理端一致后点重试。',
+      detail,
+    });
+  }
+});
 
 /* 黑话库批量审批（管理端弹窗的三个批量按钮）：桥侧端点早就有了，管理端此前没有转发，
  * 于是界面上的「批量通过 / 批量拒收 / 批量分析」会 404。这里按同路径补三条 POST 代理。 */
@@ -8715,6 +9066,8 @@ function personaLibraryEntry(uid) {
       style,
       catchphrases,
       topics: strArr(it.topics),
+      // 人格学习产出的标签（2026-09-26 新增）：主人画像页的 chips 唯一来源
+      tags: strArr(it.tags),
       taboos: strArr(it.taboos),
       samples: Number(it.samples) || 0,
       learnedAtMs: Number(it.learnedAtMs) || 0,
@@ -8860,6 +9213,39 @@ async function napcatOneBot(action, params = {}, timeoutMs = 8000) {
 const GROUP_ROLE_TTL_MS = 10 * 60 * 1000;
 const ROLE_RANK = { member: 1, admin: 2, owner: 3 };
 let groupRoleCache = { at: 0, map: new Map(), groups: 0 };
+/* 【2026-09-27 主人反馈「这个管理员你标群成员」】根因不是界面：角色来自 NapCat 的
+ * get_group_member_list，而内存缓存一重启就没了 —— NapCat 没运行时一次都拉不到，
+ * 于是整页 role=null，界面只能回落成「群成员」。
+ * 现在每次成功拉到就写一份到桥的 state/group-roles.json，冷启动第一次用到时读回来：
+ * NapCat 关着也能显示上次那份角色；TTL 过期照旧尝试刷新，拉不到就继续用手上这版。
+ * 读写失败一律只告警 —— 绝不能因为磁盘/权限问题把整页画像带崩。 */
+function groupRoleCachePath() {
+  try { return join(findBridgeDir(), 'state', 'group-roles.json'); } catch { return ''; }
+}
+function loadGroupRolesFromDisk() {
+  const p = groupRoleCachePath();
+  if (!p || !existsSync(p)) return;
+  try {
+    const j = JSON.parse(readFileSync(p, 'utf-8'));
+    const map = new Map();
+    for (const it of (Array.isArray(j?.roles) ? j.roles : [])) {
+      const uid = String(Array.isArray(it) ? it[0] : '').trim();
+      const role = String(Array.isArray(it) ? it[1] : '').trim();
+      if (uid && ROLE_RANK[role]) map.set(uid, role);
+    }
+    if (!map.size) return;
+    groupRoleCache = { at: Number(j?.at) || Date.now(), map, groups: Number(j?.groups) || 0 };
+    console.log(`[group-roles] 已从磁盘载入 ${map.size} 条群角色`);
+  } catch (e) { console.warn('[group-roles] 磁盘角色表读取失败:', e?.message || e); }
+}
+function saveGroupRolesToDisk() {
+  const p = groupRoleCachePath();
+  if (!p) return;
+  try {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify({ at: groupRoleCache.at, groups: groupRoleCache.groups, roles: [...groupRoleCache.map] }), 'utf-8');
+  } catch (e) { console.warn('[group-roles] 磁盘角色表写入失败:', e?.message || e); }
+}
 let groupRoleRefreshing = null;                  // 进行中的刷新（同一时刻只允许一个，避免并发开页重复打 NapCat）
 
 /** 画像涉及的群号：桥白名单 allow.groups 优先，再并上近 30 天有消息的群；上限 40 个（再多只是白等） */
@@ -8915,13 +9301,15 @@ async function fetchGroupRoles(groupIds) {
  */
 async function getGroupRoleMap(groupIds, budgetMs = 5000) {
   // 统一出口：cached 表示"此刻手里有没有可用缓存数据"（缓存为空时给 false，别让排查的人以为拿的是缓存）
-  const snap = (pending) => ({ map: groupRoleCache.map, cached: groupRoleCache.at > 0, at: groupRoleCache.at, pending, groups: groupRoleCache.groups });
+const snap = (pending) => ({ map: groupRoleCache.map, cached: groupRoleCache.at > 0, at: groupRoleCache.at, pending, groups: groupRoleCache.groups });
+  // 冷启动（内存里还没有）先把上次落盘的角色表读回来：NapCat 关着也能显示上次的角色
+  if (!groupRoleCache.at) loadGroupRolesFromDisk();
   if (groupRoleCache.at && Date.now() - groupRoleCache.at < GROUP_ROLE_TTL_MS) return snap(false);
   if (!groupIds.length) return snap(false);
   if (!groupRoleRefreshing) {
     groupRoleRefreshing = fetchGroupRoles(groupIds)
       .then((r) => {
-        if (r.okGroups > 0) groupRoleCache = { at: Date.now(), map: r.map, groups: r.okGroups };
+if (r.okGroups > 0) { groupRoleCache = { at: Date.now(), map: r.map, groups: r.okGroups }; saveGroupRolesToDisk(); }
         return r;   // 一个群都没拉到 → 不写缓存（下次开页重试），角色保持 null
       })
       .catch((e) => { console.warn('[group-roles] 刷新异常:', e?.message || e); return null; })
@@ -9064,7 +9452,6 @@ app.get('/api/learning/owner-profile', async (_req, res) => {
     const ownerRow = db.prepare("SELECT uid, name, personality, likes, dislikes, birthday, notes, updated_at FROM profiles WHERE uid = ?").get(OWNER_QQ);
     const stats = msgStatsSince(db, cut30);
     const st = stats.find((r) => String(r.uid) === OWNER_QQ);
-    const memRows = db.prepare("SELECT category, content, created_at FROM memory_entries WHERE uid = ? AND created_at >= ? ORDER BY created_at DESC").all(OWNER_QQ, cut30);
     const owner = ownerRow ? {
       uid: OWNER_QQ,
       name: String(ownerRow.name ?? '').slice(0, 60) || '主人',
@@ -9076,9 +9463,13 @@ app.get('/api/learning/owner-profile', async (_req, res) => {
       updatedAtMs: Number(ownerRow.updated_at) || 0,
     } : { uid: OWNER_QQ, name: '主人', birthday: null, personality: null, likes: null, dislikes: null, notes: null, updatedAtMs: 0 };
 
-    const profileTags = splitFieldTags([owner.personality, owner.likes, owner.dislikes, owner.notes], 12);
-    const memoryTop = memoryTopWords(memRows, 18);
+    /* 2026-09-26 主人要求：标签「改为人格学习的时候自动加上，别兜底，没有就写没有」。
+       旧版这里是两路现算：先按 profile 字段切（personality/likes/dislikes/notes），
+       不够 8 个再拿近 30 天记忆条目的「高频二字词」补 —— 那套按二字窗口切、无词典可依，
+       实测切出过「技术／术问／问题／角洲」这类碎词，主人点名的就是它。现在标签只有一个来源：
+       人格学习产出的 tags（persona-library），没有就是空数组，前端显示「没有」。 */
     const persona = personaLibraryEntry(OWNER_QQ);
+    const learnedTags = Array.isArray(persona?.tags) ? persona.tags : [];
     /* 用户真实的群角色：本接口没有节点结构（只有 owner 一个对象），就挂在 owner.role 上，
        与 /api/learning/graph 的 node.role 同一套取值；拿不到一律 null（NapCat 没开也不该影响画像页）。
        注意这与 owner 的"本人"含义不是一回事：用户本人在自己的群里可能只是普通成员。 */
@@ -9088,8 +9479,7 @@ app.get('/api/learning/owner-profile', async (_req, res) => {
     res.json({
       ok: true,
       owner,
-      profileTags,
-      memoryTop,
+      learnedTags,
       persona,
       msgCount30d: Number(st?.c) || 0,
       lastSeenAt: Number(st?.last) || null,
@@ -9583,7 +9973,7 @@ const distDir = join(RUNTIME_ROOT, 'dist');
 if (existsSync(join(distDir, 'index.html'))) {
   /* 2026-09-23 修「前端改了、完全退出重启也看不到」：
    * 带 hash 的 assets 可以放心缓存（文件名变了就是新文件），但 index.html 绝不能缓存：
-   * Electron 壳是"建窗时 loadURL 一次、没有菜单也没有刷新快捷键"（见打包工程的 moonbot-app/main.js），
+   * Electron 壳是"建窗时 loadURL 一次、没有菜单也没有刷新快捷键"（见打包工程的 kizuna-app/main.js），
    * 一旦它把旧 index.html 留在自己的 HTTP 缓存里，之后每次启动都会照着旧 index.html 去要
    * 已经不存在的旧 bundle；而下面那条兜底路由会把 index.html 的内容当 HTML 回给 .js 请求，
    * 于是要么白屏、要么从缓存里把旧 bundle 拿出来继续用 —— 表现就是"怎么重启都还是原来的样子"。
@@ -9609,8 +9999,110 @@ process.on('uncaughtException', (err) => {
 });
 
 const PORT = Number(process.env.QBM_API_PORT || 1921);// QBM_NO_LISTEN=1 时只导出 app 不监听端口（供 node --check / 一次性集成测试自起临时端口）
+
+/* ── 启动期最后一关：bind 失败不许变成"哑掉的僵尸进程"（2026-09-28 反馈"后端启动失败"）────────
+ * 桌面壳里的原话是它弹的那句：spawn 后端后轮询 45 秒，拿不到响应就 showErrorBox('后端启动失败，请查看日志')
+ * 然后退出（见 app.asar 里的 main.js ensureBackend）。现场看到的是另一半：壳弹框退出了，管理器进程却
+ * 还活着 —— 1921 上什么都不服务、CPU 空闲、日志里也看不出原因，而且**重开应用照样失败**。
+ * 根因是两层叠在一起：
+ *   ① 壳的第一次探测只给 800ms（`httpReady(READY_URL, 800)`），打不通就 spawn 一个新的后端；
+ *   ② 如果 1921 已经被上一个没退干净（或卡住）的管理器占着，新进程 app.listen 会抛 EADDRINUSE，
+ *      而这个异常被下面的 fatal-guard 当成"随便一个漏 catch 的异常"吞掉 —— 进程不退出、也不再监听，
+ *      就成了哑掉的僵尸；占着端口的那一位不消失，所以怎么重开都是同一句"后端启动失败"。
+ * 现在显式接管 listen 的 error，处置顺序是"先问、再修、最后才认输"：
+ *   · 占用者能说话 → 那就是已有管理器在跑，本进程直接退出，让壳走"复用已运行后端"那条路；
+ *   · 占用者不说话但确认是本运行目录里的 qbm-node.exe → 判为僵尸后端，清掉它再 bind 一次（自愈）；
+ *   · 其余情况 → 把占用者 PID/进程名/路径写进日志再 exit(4)：壳的日志里必须留下能查的线索，
+ *     而不是像以前那样只剩一句"后端启动失败"。 */
+let managerStarted = false;
+let listenRecovered = false;
+
+/** 问一句"这个端口上有人能说 HTTP 吗"。用裸 HTTP/1.0 探针（不引新依赖、也不受 http 这个名字
+ *  在别处被当局部变量用的影响）：对端回任意字节即算能说话。 */
+function probeManagerHttp(port, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const fin = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let sock;
+    try {
+      sock = connect({ host: '127.0.0.1', port }, () => {
+        try { sock.write(`GET /api/health HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\n\r\n`); } catch { fin(false); }
+      });
+      sock.setTimeout(timeoutMs, () => { try { sock.destroy(); } catch { /* ignore */ } fin(false); });
+      sock.once('data', () => { try { sock.destroy(); } catch { /* ignore */ } fin(true); });
+      sock.once('error', () => fin(false));
+      sock.once('close', () => fin(false));
+    } catch { fin(false); }
+  });
+}
+
+/** 端口占用者 PID（netstat 解析；拿不到就回 0）。 */
+function listenPortOwnerPid(port) {
+  try {
+    const r = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+    const text = typeof r?.stdout === 'string' ? r.stdout : '';
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.includes('LISTENING')) continue;
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 5) continue;
+      if (String(cols[1] || '').endsWith(`:${port}`)) return Number(cols[cols.length - 1]) || 0;
+    }
+  } catch { /* ignore */ }
+  return 0;
+}
+
+/** 某 PID 的可执行文件全路径（用来判断"是不是我们自己的 qbm-node.exe"）。 */
+function processExePath(pid) {
+  try {
+    const r = spawnSync('powershell', ['-NoProfile', '-Command',
+      `$p = Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue; if ($p) { $p.Path }`],
+      { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+    return typeof r?.stdout === 'string' ? r.stdout.trim() : '';
+  } catch { return ''; }
+}
+
+async function recoverFromListenError(err, srv) {
+  const code = err?.code || '';
+  if (code !== 'EADDRINUSE' || listenRecovered) {
+    mlog(`[listen] 管理器无法监听 127.0.0.1:${PORT}（pid ${process.pid}）：${err?.message ?? err}`);
+    process.exit(4);
+  }
+  listenRecovered = true;
+  mlog(`[listen] 端口 ${PORT} 被占用（pid ${process.pid}）：${err?.message ?? err} —— 先确认占用者在不在正常服务`);
+  if (await probeManagerHttp(PORT)) {
+    mlog(`[listen] 已有管理器在 127.0.0.1:${PORT} 上正常服务 → 本进程退出（桌面壳会直接复用那个后端，不会弹"后端启动失败"）`);
+    process.exit(0);
+  }
+  const owner = listenPortOwnerPid(PORT);
+  const exe = owner ? processExePath(owner) : '';
+  mlog(`[listen] 占用者 pid=${owner || '未知'} exe=${exe || '查不到'} —— 它不响应 HTTP，判定为没退干净的僵尸后端`);
+  if (owner && exe && exe.toLowerCase() === process.execPath.toLowerCase()) {
+    mlog(`[listen] 占用者就是本运行目录的 qbm-node.exe（${exe}）：结束它并重新 bind 一次`);
+    try { spawnSync('taskkill', ['/pid', String(owner), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch { /* ignore */ }
+    await sleepMs(700);
+    try {
+      srv.listen(PORT, '127.0.0.1', onManagerListening);
+      return;
+    } catch (e) {
+      mlog(`[listen] 清掉僵尸后重新 bind 仍然失败：${e?.message ?? e}`);
+    }
+  } else if (owner && exe) {
+    mlog(`[listen] 占用者是另一个程序（${exe}），不替用户动它：请自行结束该进程后重开应用`);
+  }
+  mlog(`[listen] 端口 ${PORT} 被无响应的进程占着，管理器无法启动。排查：netstat -ano | findstr :${PORT}`);
+  process.exit(4);
+}
+
 if (process.env.QBM_NO_LISTEN !== '1') {
-  app.listen(PORT, '127.0.0.1', () => {
+  const apiServer = app.listen(PORT, '127.0.0.1', onManagerListening);
+  apiServer.on('error', (err) => { void recoverFromListenError(err, apiServer); });
+}
+
+/** 监听成功后的启动动作（抽成具名函数：bind 失败自愈成功时要原样再跑一遍）。 */
+function onManagerListening() {
+  if (managerStarted) return;
+  managerStarted = true;
+  {
     console.log(`[QQ-Bridge Manager API] http://127.0.0.1:${PORT}`);
     scheduleAutoStart();
     ensureGuardianArmed();
@@ -9659,7 +10151,7 @@ if (process.env.QBM_NO_LISTEN !== '1') {
     /* 2026-09-23：去除探针与状态检测。本机 NapCat 的"每 60 秒看一眼起没起 +
      * 起来了就静默预鉴权一次"整套定时器已删除：它既是一个周期性自动探针，又会花掉
      * WebUI 页面首次登录要用的那发登录额度。管理器现在不主动查本机 NapCat 任何状态。 */
-  });
+  }
 }
 
 /* ============================================================================
@@ -9841,8 +10333,8 @@ export function __testRegisterNapcatLaunch(pid = 0, name = 'NapCatWinBootMain') 
 export function __testQqHiderScript(shellDir, opts = {}) {
   return qqWindowHiderScript({
     shellDir,
-    logFile: opts.logFile || join(tmpdir(), 'moonbot-qq-hider-test.log'),
-    readyFile: opts.readyFile || join(tmpdir(), 'moonbot-qq-hider-test.ready'),
+    logFile: opts.logFile || join(tmpdir(), 'kizuna-qq-hider-test.log'),
+    readyFile: opts.readyFile || join(tmpdir(), 'kizuna-qq-hider-test.ready'),
     budgetMs: Number(opts.budgetMs) || QQ_HIDER_DEFAULTS.budgetMs,
     pollMs: Number(opts.pollMs) || QQ_HIDER_DEFAULTS.pollMs,
     burstMs: Number(opts.burstMs) || QQ_HIDER_DEFAULTS.burstMs,
@@ -9860,7 +10352,7 @@ export function __testQqHiderScript(shellDir, opts = {}) {
  * 所以以前"关掉应用，NapCat 还挂在后台"。解决办法是一个活过后端的守卫进程
  * （server/napcat-guardian.mjs）：它盯着后端 PID，后端一没，就把 NapCat/桥/DSH 一起收掉。
  *
- * 只在"父进程就是应用本体(MoonBot.exe)"时才武装 —— 这样不会把启动器拉完即退、双击 qbm-node、
+ * 只在"父进程就是应用本体(Kizuna.exe)"时才武装 —— 这样不会把启动器拉完即退、双击 qbm-node、
  * cmd 里 node server/index.js 这些启动方式误判成"应用关了"（否则一开机就会把 NapCat 杀掉）。
  * 想强制开/关：环境变量 QBM_NAPCAT_GUARDIAN=1 / 0。
  * 管理器正常重启不会误杀：新后端起来第一件事就是接管守卫（杀旧守卫 + 改写 guard 文件），
@@ -9932,12 +10424,12 @@ export function spawnGuardianDetached(scriptPath, args, logFn = () => {}, opts =
   }
 }
 
-/** 找正在运行的 MoonBot 应用进程（找不到返回 0）。守卫只盯验证过名字的进程，
+/** 找正在运行的 Kizuna 应用进程（找不到返回 0）。守卫只盯验证过名字的进程，
  *  绝不拿一个来路不明的 PID 去当"应用"—— 否则守卫会把"父进程不存在"当成应用关闭、当场把整套收掉。 */
-function findMoonBotPid() {
+function findKizunaPid() {
   try {
     const r = spawnSync('powershell.exe', ['-NoProfile', '-Command',
-      'Get-Process MoonBot -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id'],
+      'Get-Process Kizuna -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id'],
       { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 8000, encoding: 'utf8' });
     return parseInt(String(r.stdout || '0').trim(), 10) || 0;
   } catch { return 0; }
@@ -9970,6 +10462,12 @@ function armNapcatGuardian(watchPid, opts = {}) {
       '--bridge-script', join(RUNTIME_ROOT, 'qq-bridge', 'src', 'bridge.js'),
       // 0 = 按该开关的设置，退出时不动 NapCat；1/缺省 = 收（老行为）
       '--kill-napcat', killNapcat ? '1' : '0',
+      /* 2026-09-28：把"我"也交给守卫看着。壳只 spawn 一次后端、后端退出了它只写日志（不重启），
+       * 于是后端一没，界面就一直停在「状态接口无响应」。守卫是唯一活过后端的进程，让它在
+       * "应用还在、后端没了"时把后端拉回来（限流见 napcat-guardian.mjs 的 RESPAWN_MAX）。 */
+      '--manager', String(process.pid),
+      '--manager-exe', process.execPath,
+      '--runtime', RUNTIME_ROOT,
       '--log', logFile,
     ], (m) => mlog(`[guardian] ${m}`));
     if (!pid) { mlog(`[guardian] 武装失败（不影响其它功能）：${error || '未知'}`); return { pid: 0, error }; }
@@ -9989,7 +10487,7 @@ function armNapcatGuardian(watchPid, opts = {}) {
 /** 自动武装策略（启动时一次 + 每 60s 复查一次）：
  *   ① 已经武装好（guard 文件里的守卫还活着）→ 什么都不做；
  *   ② 本后端的父进程就是应用本体 → 盯它；
- *   ③ 否则找一台在跑的 MoonBot.exe → 盯它（这一条很关键：应用启动时如果复用已在跑的后端，
+ *   ③ 否则找一台在跑的 Kizuna.exe → 盯它（这一条很关键：应用启动时如果复用已在跑的后端，
  *      就不会有新后端去自动武装，于是"关掉应用 NapCat 还在"—— 有了这条，下次开应用 60 秒内就武装好了）；
  *   ④ 应用没开 → 静默等着，不武装。QBM_NAPCAT_GUARDIAN=0 可整体关掉。 */
 function ensureGuardianArmed() {
@@ -10001,8 +10499,8 @@ function ensureGuardianArmed() {
     const ppid = Number(process.ppid) || 0;
     // QBM_NAPCAT_GUARDIAN=1：显式武装（开发者/回归测试用），盯自己的父进程
     if (envMode === '1') { armNapcatGuardian(ppid || process.pid); return true; }
-    if (ppid && /^MoonBot$/i.test(parentProcessName(ppid))) { armNapcatGuardian(ppid); return true; }
-    const appPid = findMoonBotPid();
+    if (ppid && /^Kizuna$/i.test(parentProcessName(ppid))) { armNapcatGuardian(ppid); return true; }
+    const appPid = findKizunaPid();
     if (!appPid) { return false; }                                       // ④ 应用没开
     armNapcatGuardian(appPid);
     return true;
@@ -10013,20 +10511,20 @@ function ensureGuardianArmed() {
 }
 
 /** POST /api/guardian/arm：手工（重新）武装守卫。
- *  为什么需要：守卫默认只在"后端由应用本体(MoonBot.exe)拉起"时自动武装；如果后端是被脚本/命令行
+ *  为什么需要：守卫默认只在"后端由应用本体(Kizuna.exe)拉起"时自动武装；如果后端是被脚本/命令行
  *  拉起来的（比如开发者用 restart-manager.ps1 重启管理器），那一次就没有守卫 —— 但用户的应用窗口
- *  其实还开着。这个接口可以把守卫指向当前真正在跑的那个 MoonBot.exe，于是"关掉应用 → NapCat 一起关"
+ *  其实还开着。这个接口可以把守卫指向当前真正在跑的那个 Kizuna.exe，于是"关掉应用 → NapCat 一起关"
  *  立刻生效，不用先关一次应用。
- *  body.parentPid 可显式指定；不传就自动找第一个 MoonBot 进程。找不到就如实报错（绝不瞎指一个 PID，
+ *  body.parentPid 可显式指定；不传就自动找第一个 Kizuna 进程。找不到就如实报错（绝不瞎指一个 PID，
  *  否则守卫会把"父进程不存在"当成应用关闭、当场把整套收掉）。 */
 app.post('/api/guardian/arm', (req, res) => {
   try {
     let pid = Number(req.body?.parentPid) || 0;
-    if (!pid) pid = findMoonBotPid();
-    if (!pid) return res.status(400).json({ ok: false, message: '没有找到正在运行的 MoonBot 应用进程（应用没开？那就等下次由应用自己武装）' });
+    if (!pid) pid = findKizunaPid();
+    if (!pid) return res.status(400).json({ ok: false, message: '没有找到正在运行的 Kizuna 应用进程（应用没开？那就等下次由应用自己武装）' });
     const pname = parentProcessName(pid);
-    if (!/^MoonBot$/i.test(pname)) {
-      return res.status(400).json({ ok: false, message: `pid ${pid} 不是 MoonBot 应用进程（实际是 ${pname || '已退出'}），拒绝武装` });
+    if (!/^Kizuna$/i.test(pname)) {
+      return res.status(400).json({ ok: false, message: `pid ${pid} 不是 Kizuna 应用进程（实际是 ${pname || '已退出'}），拒绝武装` });
     }
     const r = armNapcatGuardian(pid, { manual: true });
     if (!r.pid) return res.status(500).json({ ok: false, message: `守卫启动失败：${r.error || '未知'}` });

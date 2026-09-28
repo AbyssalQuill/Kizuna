@@ -1,13 +1,13 @@
 /**
  * NapCat 运行时完整性自检 / 自修 —— 2026-09-19 加。
  *
- * 【为什么必须有它】真机事故（别人装在 `D:\QQbot\9.19新版\MoonBot` 上）：
+ * 【为什么必须有它】真机事故（别人装在 `D:\QQbot\9.19新版\Kizuna` 上）：
  *   ```
  *   Error [ERR_MODULE_NOT_FOUND]: Cannot find module '...\conout-D9oph_Le.js' imported from '...\napcat.mjs'
  *   ```
  * 根因不在那台机器上，而在**我们打出去的 payload**：`napcat.mjs` 是被引用文件（`conout-<hash>.js`，
  * 名字就是内容哈希）的宿主，只要这两者不是同一次构建出来的，就必然报这个错。实测打包仓库里
- * `moonbot-app\runtime-full` 的 napcat.mjs 引用 `conout-D9oph_Le.js`，而同目录只有旧的
+ * `kizuna-app\runtime-full` 的 napcat.mjs 引用 `conout-D9oph_Le.js`，而同目录只有旧的
  * `conout-wiJ7YKRd.js` —— 装到谁机器上都是启动即崩。
  *
  * 另外两种真实成因也走同一套自修：杀软误删单个 js、以及"更新时文件被占用导致复制不完整"
