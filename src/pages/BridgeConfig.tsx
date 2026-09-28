@@ -2,13 +2,26 @@ import { useEffect, useRef, useState } from 'react';
 import NoticeBar from '../components/NoticeBar';
 import type { ReactNode } from 'react';
 import { sshServiceAction } from '../api';
-import { api, getBridgeConfig, saveBridgeConfig, saveActivityHours, getActivityTargets, resetSpeechRules, listCharacters, importCharacter, instanceAction, listProfiles, saveProfile, deleteProfile, getRemoteBridgeConfig, saveRemoteBridgeConfig, memePacks, memePackUpload, memePackDelete, memePackBind, getMemoryStats, type MemoryStats, type CharacterEntry, type ConfigProfile, type ActivityTarget, type MemePackEntry, type MemePackUploadReport } from '../api';
+import { api, getBridgeConfig, saveBridgeConfig, saveActivityHours, getActivityTargets, resetSpeechRules, listCharacters, importCharacter, instanceAction, listProfiles, saveProfile, deleteProfile, getRemoteBridgeConfig, saveRemoteBridgeConfig, memePacks, memePackUpload, memePackDelete, memePackBind, getToolSchemaStats, type CharacterEntry, type ConfigProfile, type ActivityTarget, type MemePackEntry, type MemePackUploadReport, type ToolSchemaStats } from '../api';
 import { TOOL_SCHEMA_CHARS, SLIM_PREFIX } from '../tool-schema-chars';
 import { ArrowLeft, Save, Upload, FileText, X, HelpCircle, Loader2, Coffee, Activity, Users, MessageSquare, MessagesSquare, RotateCcw, Library, BookOpen, Terminal, Layers, Trash2, Check, Server, AlertTriangle, Mic, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
 import NapcatTokensCard from '../components/NapcatTokensCard';
+import { warmNapcatTokens } from '../components/NapcatTokensCard';
 import NumInput from '../components/NumInput';
 import Dropdown from '../components/Dropdown';
 import { CFG_BRIDGE_LOCAL, bridgeRemoteKey, getCachedConfig, rememberConfig } from '../config-cache';
+/* 「先出上次读到的内容、再后台静默重读」的两件零件（见 src/lib/read-cache.ts 与 src/components/ReadState.tsx）：
+ *   · initialFromCache / writeCacheValue / dropCacheValue：进程内旧值缓存，只在成功回包后写入；
+ * 本页的桥配置那一份旧值沿用既有的 config-cache（它本就按本机/服务端分键，且多一层 localStorage
+ * 持久化），此处不再重复造一份缓存，以免同一份配置出现两个互相打架的旧值。 */
+import { initialFromCache, writeCacheValue, dropCacheValue, warmCache } from '../lib/read-cache';
+import { ReadBar, Skeleton } from '../components/ReadState';
+/* 入口按钮 hover 时预热目标页（见文件末尾的 hoverWarm / warmBridgePage）：
+   这几个页面模块都不 import 本文件，故不存在循环依赖。 */
+import { warmVoicePage } from './VoiceConfig';
+import { warmLearningPage } from './Learning';
+import { warmPortraitPage } from './GroupPortrait';
+import { warmChatPage } from './ChatHistory';
 
 /** remote：连上服务器时把「服务端」那套传进来（配置读写服务端 /root/qq-bridge），null = 编辑本机 */
 interface Props { onBack: () => void; onRefresh: () => void; onOpenLearning: () => void; onOpenPortrait: () => void; onOpenChat: () => void; onOpenVoice: () => void; remote?: { id: string; name: string; host: string } | null; }
@@ -115,6 +128,10 @@ const LABEL: Record<string, string> = {
   // 2026-09-19：不再有 摘要模型服务商 / 摘要模型 两栏：摘要一律用主模型（全局语言模型服务商）。
   'dshCompaction.thresholdRatio': '触发比例', 'dshCompaction.retainRatio': '逐字保留比例',
   'dshCompaction.toolResultMaxChars': '工具结果保留字数',
+  /* 2026-09-28：config.json 里真实存在、但标签表一直漏登的两个（摘要用哪个服务商/模型）。
+   * 漏登的表现就是 tools/audit-ui-labels.mjs 报"会在界面上裸奔英文名"。 */
+  'dshCompaction.summarizationProvider': '摘要用的服务商（留空＝主服务商）',
+  'dshCompaction.summarizationModel': '摘要用的模型（留空＝主模型）',
   // 表情包 / 等待
   stickerEnabled: '表情包', syncTtlMs: '同步缓存', maxListCount: '列表上限', includeInPrompt: '提示里附带',
   promptMaxStickers: '提示最多表情', collectEnabled: '自动收藏', maxPerMinute: '每分钟上限', maxPerHour: '每小时上限',
@@ -198,10 +215,16 @@ const LABEL: Record<string, string> = {
   'social.send.linearBaseMs': '（已废弃）首条气泡延迟', 'social.send.linearStepMs': '（已废弃）每条递增间隔',
   'social.send.gapBaseMs': '（已废弃）间隔基数', 'social.send.gapPerCharMs': '（已废弃）每字追加间隔',
   'social.send.gapJitterRatio': '（已废弃）间隔抖动比例',
+  /* 2026-09-28：音乐卡片这三项桥侧早就支持，但 LABEL / HELP 从没登记过 → 界面把键名当标签，
+     整行显示成「未登记名称的配置项」（使用方截图反馈：一个勾选框 + 两个输入框都没有名字）。
+     名字与说明分两处：这里给短名，HELP 给详细说明。 */
+  'social.send.musicCardStyle': '音乐卡片版式',
+  'social.send.musicCardOnly': '音乐卡片只发真卡',
+  'social.send.neteaseUct2': '网易云 UCT2 令牌（只给自己私聊补卡用）',
   'social.burstIntervalMinMs': '（已废弃）连发间隔下限', 'social.burstIntervalMaxMs': '（已废弃）连发间隔上限',
   /* 2026-09-19：搜图的镜像站地址：反馈镜像站会换域名/镜像挂掉，所以要能自己改。
    * 这一项没登记的话 tools/audit-ui-labels.mjs 会报"未翻译键"（界面会裸奔一个英文键名）。 */
-  pixiv: '搜/发 Pixiv 插画', 'pixiv.base': 'Pixiv 镜像站地址',
+  pixiv: '搜/发 Pixiv 插画', 'pixiv.base': 'Pixiv 接口兜底站地址',
   'pixiv.refreshToken': 'Pixiv 长期登录态（自动续期写入，一般不用手填）',
   /* 2026-09-21：本次新增的三处设置（[Style] 语感行 / /token 计价 / 工具压缩档）：
    * tools/audit-ui-labels.mjs 只认这张表，登记在这里界面上才不会裸奔英文键名。 */
@@ -247,6 +270,15 @@ const TOOL_LABEL: Record<string, string> = {
   // 门禁在 tools/audit-ui-tool-names.mjs，加工具/开关时它会把这类漏登直接报出来。
   sendVoice: '发语音（说话）', transcribeVoice: '语音转文字',
   crosschat: '跨会话互知与留言', getGroupInfo: '查群主/群成员',
+  /* 2026-09-26：配置读写两个开关（qq_config_get / qq_config_set 的调用期闸门，
+   * 见 console-server.js 的 ToolEnabled('configGet'/'configSet')）。
+   * 漏登的表现和上次一样：页面上裸奔英文 key，且 tools/audit-ui-tool-names.mjs 直接报错。 */
+  configGet: '读配置（含语音页）', configSet: '改一条配置',
+  /* 2026-09-28：tools/audit-ui-labels.mjs 报出来的漏登项（qq-bridge/config.json 与 example 里都有
+   * `social.tools.sendBurst`，但标签表里没有 → 「工具与规则」页上它就是一行裸英文 key）。
+   * 查过桥侧：这个开关**已经没有任何效果**（MCP 的 qq_send_burst 工具 2026-09-24 删除，
+   * 桥里也没有 ToolEnabled('sendBurst') 门禁），所以按"已废弃"登记，说明见 HELP。 */
+  sendBurst: '（已废弃）连发多条气泡',
 };
 
 /**
@@ -298,6 +330,8 @@ const TOOL_MCP: Record<string, string> = {
   // 2026-09-19：点赞与主动私聊：桥有开关（mcp-napcat-safe.js 的 tools?.like / tools?.proactiveSend）、
   // 中文名表里也有，但这里漏了工具原名，于是「显示 MCP 工具原名」时这两行看不到映射。
   like: 'qq_like', proactiveSend: 'qq_proactive_send',
+  // 2026-09-26：配置读写（一条服务端路由 /api/agent/config 供两个工具共用）
+  configGet: 'qq_config_get', configSet: 'qq_config_set',
 };
 
 /**
@@ -321,6 +355,9 @@ const TOOLS_NO_SWITCH: string[] = [
   // 由提示词 [TOOLS] 1d 指定为唯一时钟来源）；qq_character_switch 只在会话里切角色卡，没有独立开关。
   // 漏登记的表现是页面上整行看不到它们（既开不了也关不了），tools/audit-ui-tool-names.mjs 会报出来。
   'get_time', 'qq_character_switch',
+  // 2026-09-26：音色库管理（列/建/删/设默认）。它没有独立开关 —— 它调的 /api/voice/* 由
+  // agent token + 会话准入 + trustLevelFor 把关，不额外给一个 social.tools.* 键。
+  'qq_voice_manage',
 ];
 
 /**
@@ -376,6 +413,8 @@ const MCP_LABEL: Record<string, string> = {
   // 2026-09-24：补登记三条 —— 它们先前没进中文名表，精简卡里会显示成「未登记」。
   // get_time 是桥自己实现的取时工具（裸名，提示词里的唯一时钟来源）；另两条是记忆写入与角色卡切换。
   get_time: '查看当前时间', qq_memory_remember: '记住这件事', qq_character_switch: '切换角色卡',
+  // 2026-09-26：配置读写三件（读桥配置/改一个配置字段/管音色库）。
+  qq_config_get: '读桥配置（含语音页）', qq_config_set: '改桥配置（一个字段）', qq_voice_manage: '管音色库',
 };
 
 /** 精简名单里某一行该显示的中文名；未登记时回落到「未登记」占位（绝不显示英文原名） */
@@ -428,7 +467,7 @@ function mcpLabel(fullName: string) {
     + '注意：① 仅在该类名单为空时生效，私聊名单中已填对象时以名单为准；② 拒绝名单始终优先，已拉黑者仍不能进入。',
   allowAllGroups: '群聊专属开关，语义与上一条相同，仅作用于群聊。默认两项均不勾选，即空名单时一律不放行。',
   security: '安全选项分组。',
-  'prompt.styleLine': '唤醒正文中每轮都会携带的一行语感提醒（默认 `[Style] 说人话：短、有态度，别讲课别列举`）。'
+  'prompt.styleLine': '唤醒正文中每轮都会携带的一行语感提醒（默认 `[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.`）。'
     + '单独可配的原因：系统提示词中写明「别讲课」也压不住单轮语气，小模型对最近一段上下文权重最高，此行是最后一道约束。'
     + '它每轮仅数十字符且逐轮完全相同（稳定前缀，按缓存价计费），成本可忽略。'
     + '修改要求：① 保持每轮完全相同，不要放入时间或随机数，否则会破坏前缀缓存；② 只描述「怎么说」，不要写具体规则条款（那些属于系统提示词）；③ 留空即完全不注入该行。'
@@ -463,9 +502,11 @@ function mcpLabel(fullName: string) {
     + '注意：改动后必须重启隔离 DSH 才生效（工具表只在 DSH 启动时取一次）；`social.tools.*` 那些开关只是调用时返回「工具未启用」，省不下这份描述，只有「注册期不注册」才会使其从请求中消失。',
   trustedCrossSessionUids: '允许 agent 跨会话读取或带话的 QQ 号（数组）。一般只填自己最信任的好友。',
   deepsleep: '总开关：开启后所有群聊的消息入库但不唤醒、不回复、不主动冒泡（省 token），私聊照常。拍一拍等群内事件同样被静默。主人发送 /start 可随时恢复（该命令不经过模型，始终有效）。',
-  recommendedHint: '交给模型的「潜水与唤醒行为规则」长文本。内容改动会影响唤醒判定，一般不建议新手修改。',
-  activeProbability: '「活跃模式搭话概率」：把某个群或私聊转为活跃时所用的随机搭话概率（默认 0.3，即三成）。'
-    + '此前转活跃会沿用潜水那套 0.05（每 20 条才醒一次），与潜水难以区分；本值用于区分二者：调大更活跃，调小更省额度（由「群每小时唤醒上限」兜底）。',
+  recommendedHint: '交给模型的「潜水与唤醒行为规则」长文本：随后台 `qq_get_prompt` 的 `recommended.wake` 一并给出，桥不会把它拼进每轮唤醒正文（正文里每轮带的是 `[WakeRef]` 那行概率）。'
+    + '注意：在它里面写死的概率数字会和主人的配置打架（模型会读到两个数，可能照那个旧数去设唤醒条件）——要提概率就写「按 [WakeRef] 的值」，别写具体数字。',
+  activeProbability: '「活跃模式搭话概率」：把某个群或私聊转为活跃时所用的随机搭话概率（默认 0.3，即三成）。取值范围 0~1（0.3 = 30%），填 30 会被当成 1。'
+    + '此前转活跃会沿用潜水那套 0.05（每 20 条才醒一次），与潜水难以区分；本值用于区分二者：调大更活跃，调小更省额度（由「群每小时唤醒上限」兜底）。'
+    + '注意：转成活跃后是「每条消息都唤醒」（anyMessage），这个概率只在模型收到活跃配置时作为兜底值写入，所以群里真正决定频率的是「普通消息唤醒概率」。',
   preSleepWaitMs: '转潜水前的「静默观察」窗口时长：窗口内若无人说话，即可安心进入潜水。',
   wakeThreshold: '「聊多少轮换新会话」：同一会话累计到这么多轮后，下一次唤醒切换到下一代会话（旧会话归档，记忆文件保留，不丢记忆）。'
     + '计入的只有真实来回：私聊消息、被 @、被提问、被叫名字、拍一拍、命中关键词等触发唤醒各计 1 轮，`qq_wait_for_messages` 每取回一批新消息亦计 1 轮；'
@@ -506,6 +547,11 @@ function mcpLabel(fullName: string) {
     + '代价是每次剪枝都会改写这段历史，其之前的前缀缓存随之失效——因此这是「省 token」与「少改写」之间的折中：工具结果普遍不大（数百字）时可适当调大（例如 4000），使改写更少发生、缓存更易命中，响应更稳定。'
     + 'DSH 的硬性要求：保留的头 + 标记 + 尾不得超过该字数，桥会自动按 60/20 拆分并校验。',
   'dshCompaction.enabled': '总开关。关闭即不覆盖 DSH 默认：DSH 默认要等上下文占用达窗口 80% 才压缩（等同不压缩），上下文会一直增长到轮换为止。',
+  /* 2026-09-28：这两个键只有 DSH 侧在读（摘要用哪个服务商/模型，留空即用全局主模型），
+   * 管理端不渲染它们，但 tools/audit-config-help.mjs 按"每个键都要有说明"审计 —— 补上，
+   * 让审计保持全绿（红着的审计等于没有审计）。 */
+  'dshCompaction.summarizationProvider': '摘要用哪个服务商（写服务商 id，留空 = 用全局「语言模型服务商」）。摘要是一次独立的模型调用，走这条设置；不填即与主对话同一个服务商。',
+  'dshCompaction.summarizationModel': '摘要用哪个模型（留空 = 用该服务商的默认模型）。想省钱可指定便宜的模型；摘要质量直接影响被压缩掉的那段历史还能不能读懂，别用太弱的。',
   contextWindow: '「首轮带入历史条数」：新会话首次唤醒时向提示中贴入最近多少条聊天记录（每个会话仅贴这一次，此后各轮只发一行哨兵，不再重贴）。'
     + '下限 6，普通首轮上限 24，填 30 也只按 24 执行；若要让轮换后的第一轮看到更长历史，须同时调整「轮换后首轮带入条数」。'
     + '本项决定新会话开局掌握多少上下文，越大越懂但越贵（这段窗口之后每一步都会被重读计价）。桥里默认 12。',
@@ -534,6 +580,11 @@ function mcpLabel(fullName: string) {
   'social.send.linearJitterRatio': '「打字速度抖动」：每条打字时间上下浮动的比例（默认 0.25，即 ±25%）。真人的速度不会每条一致，填 0 即完全机械。',
   'social.send.linearResetMs': '「静默后重新秒回」：安静达到该时长后计数归零，下一条回复重新从「第 1 条气泡立即发出」开始。',
   'social.send.linearEnabled': '「按字数打字节拍」：开启时自第 2 条气泡起按字数等待（第 1 条始终立发）；关闭时完全不等，多条气泡连续发出。',
+
+  // ── 音乐卡片（2026-09-28 补登记：此前 LABEL / HELP 都没有，界面显示「未登记名称的配置项」）──
+  'social.send.musicCardStyle': '音乐分享卡的版式。`share` = 与 QQ 真·分享卡同版式（tuwen/news），手机端会画封面（当前配置就是这一档）；`music` = QQ 内播形态，但不画封面、也不省「将要访问」中转页；`native` = 原生音乐段。也可用环境变量 `QQBRIDGE_MUSIC_CARD_STYLE` 覆盖本项（它优先）。注意：不论哪种版式，真卡都会被 QQ 的「将要访问」拦一层 —— 那是 QQ 对第三方链接的行为，不是版式能解决的。',
+  'social.send.musicCardOnly': '只发真卡：开启后搜歌分享**只发卡片、不发「链接兜底」**；卡片没拼出来时直接报错，宁可失败也不让一条裸链接漏出去。关掉则卡片失败时回落成链接。',
+  'social.send.neteaseUct2': '网易云 UCT2 令牌（24 位，可留空）：**只用于发给主人自己**的那条私聊音乐卡 —— 补上它，卡片才不过「将要访问」中转页。发给别人或群里一律不带（那是主人账号的令牌，不能外发）。留空只是私聊卡多一层中转页，不影响能不能发。过期或长度不对时按「没有」处理，不会静默拼进别人的卡里。',
   'social.wait.minQuietAfterNewMs': '「新消息后最短静默」：群内刚有人发言时至少安静这么久再插话，防止抢话、刷屏或显得急促。',
   'social.typing.enabled': '「私聊等对方打完字」：开启后，私聊中检测到对方正在输入（QQ 输入状态）便等其打完再回，不抢话。等待期间到达的消息全部排队：无论模型是否正在回复，都不会中途逐条塞入，待其打完才合并为一次（对话中只出现一个 [Mid-turn] 块，机器人只回一次）。关闭即不参考输入状态，按正常节奏回复。',
   'social.typing.holdMaxMs': '「最多等多久」：对方持续输入时，最多等这么久（默认 12000 毫秒）即插话，避免遇到始终「输入中」的对象而永不作答。',
@@ -724,8 +775,8 @@ function mcpLabel(fullName: string) {
   'napcat.wsUrl': 'NapCat 的 OneBot WebSocket 地址（桥用于接收消息事件）。本机部署通常为 ws://127.0.0.1:3001。填错的表现是「连接成功但收不到任何消息」。',
 
   // ── Pixiv ──
-  'pixiv.base': 'Pixiv 第三方镜像站地址，仅在官网直连失败时兜底（官方 ajax 接口实际免登录可用；镜像站较慢，同一张图 2.7~5.7 秒）。留空即使用内置默认 https://x.pixigraph.xyz。',
-  'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID）：仅用于按画师名字搜人（官网用户搜索接口对匿名请求一律返回 400）。免费账号即可；填一次即可长期使用：每解出一个画师号都会落盘缓存（state/pixiv-artists.json），cookie 此后过期，已查询过的名字仍可用；真正过期时桥会自检并主动在 QQ 中提醒。不填也可使用 authorId（画师号，如 1554775）或作品链接。安全说明：只发送给 pixiv 自身域名，绝不发送给镜像站；写入请使用 tools/set-pixiv-cookie.mjs（从文件读取、写完删除文件、仅回显掩码）。',
+  'pixiv.base': 'Pixiv 的**接口兜底站**地址：只有「官方 app-api 与 www.pixiv.net/ajax 两条线都失败」时才会用到它（走 {这个地址}/api/search.php 与 /api/detail.php）。**取图完全不经过这个字段**：取图是内置的「直联 i.pximg.net（带 referer）→ i.muxmus.com → pximg.cocomi.eu.org → i.pixiv.re」，首推 i.muxmus.com（2026-09-28 本机实测 0.28~1.29 秒、还带 Content-Length）。所以别把纯图床反代（i.muxmus.com / cocomi / i.pixiv.re 这类）填到这里 —— 它们对 /api/* 一律 404，填了这条兜底线就废了。留空即用内置默认 https://pixigraph.online（2026-09-28 起）。优先级：config.json 的 pixiv.base > 环境变量 QQBRIDGE_PIXIV_BASE > 内置默认，改完不用重启。',
+  'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID）：仅用于按画师名字搜人（官网用户搜索接口对匿名请求一律返回 400）。免费账号即可；**贴进这一项就是全部动作**（2026-09-28 起）：桥下次启动时若发现有 cookie 却没有长期令牌，会自己拿它换一次，成功即落盘 state/pixiv-token.json 并每 50 分钟自动轮换（此后这一项可以清空；失败只记一行日志、不重试）。填一次即可长期使用：每解出一个画师号都会落盘缓存（state/pixiv-artists.json），cookie 此后过期，已查询过的名字仍可用；真正过期时桥会自检并主动在 QQ 中提醒。不填也可使用 authorId（画师号，如 1554775）或作品链接。安全说明：只发送给 pixiv 自身域名，绝不发送给镜像站。**写入方式（2026-09-28 起）**：直接在「常用设置 → Pixiv（镜像站与登录 cookie）」卡的「登录 cookie」一项里填（保存即写回配置；服务端目标保存时管理端会顺手换一次长期令牌，结果见保存回执的步骤列表）；不想经过界面时，也可在桥的机器上跑 tools/set-pixiv-cookie.mjs --file <文件>（从文件读取、写完删除文件、仅回显掩码）。',
 
   // ── 工具开关（逐个写明开启后模型可做什么）──
   'social.tools.getPrompt': '读提示词（qq_get_prompt）：模型主动重新读取当前生效的人设、发言规则与工具说明。一般无需调用，但可让模型自查「我现在的人设是什么」。',
@@ -760,6 +811,11 @@ function mcpLabel(fullName: string) {
   'social.tools.faceList': 'QQ 原生表情表（qq_face_list）：列出可用的 QQ 大表情与小表情及其含义，以便挑选发送。',
   'social.tools.sendQqFace': '发 QQ 原生表情（qq_send_qq_face）：发送内置大表情（比自行书写 emoji 自然得多）。',
   'social.tools.musicSearch': '点歌搜索（qq_music_search）：按关键词搜歌，取得 musicId 后用 qq_send_rich 发送音乐卡片。',
+  /* 2026-09-28：tools/audit-config-help.mjs 报"缺说明"的三个开关（都能在「工具与规则」页关掉，
+   * 关掉即模型调不动对应的工具 —— 说明写在这里，界面上的 ⓘ 才会给出解释）。 */
+  'social.tools.sendBurst': '（已废弃）「连发多条气泡」：MCP 侧的 qq_send_burst 工具已于 2026-09-24 删除，桥里也找不到任何 ToolEnabled(\'sendBurst\') 门禁 —— 勾选或取消都不改变行为（勾了不生效）。一次回复里的多条气泡现在由「发送节奏与间隔 → 按字数打字节拍」直接分条发出。这个键留着只为兼容老配置，可以从 config.json 里删掉。',
+  'social.tools.sendVoice': '发语音（qq_send_voice）：让机器人用本地/云端语音引擎合成语音条。关掉后只能发文字；本地引擎那套角色音色也随之不可用。',
+  'social.tools.transcribeVoice': '语音转文字（qq_transcribe_voice）：把收到的语音条转成文字再交给模型。关掉后语音消息不进上下文。',
   'social.tools.sendRich': '发卡片或音乐（qq_send_rich）：音乐卡（网易云、QQ 音乐）、名片、骰子等富消息。音乐卡只传 musicId，标题、封面与音频由桥自行拼装，手写 JSON 会导致手机端显示空白卡。',
   'social.tools.imageSearch': '联网找图（qq_image_search）：按关键词搜索图片（Bing、百度），并可直接把结果图发送出去，适用于不知该用什么图的场合。',
   'social.tools.videoSearch': '视频解析（qq_video_parse）：把 B 站、抖音等分享链接解析为可发送的内容（B 站会发小程序卡片）。',
@@ -782,7 +838,8 @@ function mcpLabel(fullName: string) {
   'social.wake.sleepMaxMs': '允许的最长沉睡时长（毫秒）：0 = 不限制（可睡至无限期）。',
   'social.wake.recommendedSleepMinMs': '推荐沉睡时长下限（毫秒）：写入提示词，引导模型不要过于频繁地唤醒。',
   'social.wake.recommendedSleepMaxMs': '推荐沉睡时长上限（毫秒）：写入提示词。',
-  'social.wake.recommendedProbability': '推荐「随机被唤醒」概率：模型沉睡时，普通消息将其叫醒的概率。0.05 = 二十分之一。',
+  'social.wake.recommendedProbability': '推荐「随机被唤醒」概率：模型沉睡时，普通消息将其叫醒的概率。取值范围 0~1（不是百分数）：0.15 = 15%（约每 7 条醒一次），0.05 = 二十分之一；填 15 会被当成 1（每条消息都醒）。'
+    + '生效值在唤醒正文的 `[WakeRef]` 行里逐轮告知模型（「主人配置的…／当前生效=／来源=owner|model」）；来源是 model 表示模型按语境自己定过一个值，界面上改完保存即会被主人的值覆盖回来。',
   'social.wake.recommendedAtMention': '推荐开关：被 @ 时唤醒。建议保持开启。',
   'social.wake.recommendedNameMention': '推荐开关：消息中叫到机器人名字时唤醒。',
   'social.wake.recommendedQuestion': '推荐开关：有人提问时唤醒。',
@@ -813,7 +870,7 @@ function mcpLabel(fullName: string) {
 /** 与 LABEL 分开维护：这里只补"历史上漏登记中文名"的键 */
 const LABEL_EXTRA: Record<string, string> = {
   'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID，只用于按画师名字搜人）',
-  'pixiv.base': 'Pixiv 镜像站地址',
+  'pixiv.base': 'Pixiv 接口兜底站地址',
   // 工具开关的中文名：官方审计工具（tools/audit-ui-labels.mjs）要求"每个键都要有中文标签"，
   // 这些是 2026-09-19 补说明文时一并补上的（原来只有 TOOL_LABEL 里的一部分）。
   'social.tools.faceList': 'QQ 原生表情表', 'social.tools.sendQqFace': '发 QQ 原生表情',
@@ -833,7 +890,24 @@ const LABEL_EXTRA: Record<string, string> = {
   'tokenCost.pOut': '输出单价（¥/百万 tok）',
   'tokenCost.peakMult': '高峰时段倍率',
   'tokenCost.peakHours': '高峰小时（北京时）',
+  /* 2026-09-28：这三项的中文名本来只在 TOOL_LABEL 里，而 tools/audit-config-help.mjs 只看
+   * LABEL / LABEL_EXTRA —— 于是它把「工具与规则」页的三个开关报成"连中文标签都没有"。
+   * 名称与 TOOL_LABEL 保持一致地登记一份，审计与界面从此看同一份事实。 */
+  'social.tools.sendBurst': '（已废弃）连发多条气泡',
+  'social.tools.sendVoice': '发语音（说话）',
+  'social.tools.transcribeVoice': '语音转文字',
+  /* 2026-09-28：这两个键在 config.json 里真实存在（摘要用哪个服务商/模型），说明文已补在 HELP，
+   * 但标签表里一直没有 → tools/audit-ui-labels.mjs 一直报它们"会在界面上裸奔英文名"。
+   * 注意：它只读 LABEL / TOOL_LABEL / MCP_LABEL（不读 LABEL_EXTRA），所以这两个名字必须登记在
+   * 上面的 LABEL 表里；放在 LABEL_EXTRA 只在运行时 pretty() 生效、审计照样报红。 */
 };
+
+/** 音乐卡片三项：桥侧确实挂在 `social.send` 之下，但语义与"打字节奏"无关（2026-09-28）。
+ *  界面上一张单独的卡渲染它们，发送节奏卡用同一份名单把它们过滤掉 —— 两份名单同源，
+ *  不会出现"两边都渲染"或"两边都不渲染"。
+ *  2026-09-29 起那张单独的卡按要求隐藏（挂载点已注释），本名单**必须保留**：
+ *  发送节奏卡仍在用它做 filter，去掉这三项就会在节奏卡里以原始键名裸奔。 */
+const MUSIC_SEND_KEYS = ['musicCardStyle', 'musicCardOnly', 'neteaseUct2'];
 
 /** 开关下方的一行小字提示（按完整路径或字段名精确命中） */
 const TIP: Record<string, string> = {
@@ -921,6 +995,10 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
    *  切走再切回来时，页面上直接是上次读到的真实配置，不会再出现"先闪一下默认值"。
    *  缓存取不到时保持 null —— 此时各页签渲染空骨架且整块表单禁用，绝不拿默认值冒充桥上配置。 */
   const [cfg, setCfg] = useState<any>(() => getCachedConfig<any>(remote ? bridgeRemoteKey(remote.id) : CFG_BRIDGE_LOCAL));
+  /* 「磁盘真值」快照：只由 load() 成功读到并 setCfg(c) 的那一刻写入，草稿改动一概不动它。
+   *  用途：① 卡片里的状态行显示"磁盘上现在是什么"，而不是拿草稿算出来的数；
+   *        ② 与草稿逐字段比对，得出"有未保存的改动"。 */
+  const [diskCfg, setDiskCfg] = useState<any>(() => getCachedConfig<any>(remote ? bridgeRemoteKey(remote.id) : CFG_BRIDGE_LOCAL));
   /* 渲染用的配置视图：配置未回来时先渲染空白骨架，回来后即为真实配置。 */
   const view = cfg ?? EMPTY_CFG;
 /** 配置是否已读到（缓存命中或本轮读取成功）。未读到时：表单禁用、保存按钮禁用。 */
@@ -960,7 +1038,14 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
   const [charMsg, setCharMsg] = useState<string | null>(null);
 
   // ===== 方案（配置预设）=====
-  const [profiles, setProfiles] = useState<ConfigProfile[]>([]);
+  /* 方案列表的缓存键：方案存在管理端自己的 profiles.json（不分本机 / 服务端），故没有作用域段。
+     首帧初值取自缓存，进「方案」页签时先铺上次读到的方案，后台再静默重读。 */
+  const PROF_CACHE_KEY = 'profiles:local';
+  const profBootRef = useRef<ReturnType<typeof initialFromCache<ConfigProfile[]>> | null>(null);
+  if (!profBootRef.current) profBootRef.current = initialFromCache<ConfigProfile[]>(PROF_CACHE_KEY);
+  const profHadCache = profBootRef.current.value !== null;
+  const [profiles, setProfiles] = useState<ConfigProfile[]>(() => profBootRef.current!.value ?? []);
+  const [profLoading, setProfLoading] = useState(false);
   const [profName, setProfName] = useState('');
   const [profBusy, setProfBusy] = useState(false);
   const [profMsg, setProfMsg] = useState<string | null>(null);
@@ -1041,7 +1126,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
       /* 2026-09-21：提示词可调项：`prompt.styleLine` 是唤醒正文每轮那句语感提醒，
        * 缺键时要把输入框画出来（否则老配置打开这张卡是空的）。 */
       if (!c.prompt || typeof c.prompt !== 'object') c.prompt = {};
-      if (c.prompt.styleLine === undefined) c.prompt.styleLine = '[Style] 说人话：短、有态度，别讲课别列举';
+      if (c.prompt.styleLine === undefined) c.prompt.styleLine = '[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.';
       /* 2026-09-21：/token 计价参数（¥ / 百万 tok），默认值与管理端「学习」页实测区同源。 */
       if (!c.tokenCost || typeof c.tokenCost !== 'object') c.tokenCost = {};
       const tc = c.tokenCost;
@@ -1063,6 +1148,9 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
       const dm = (r as any).dshModels;
       DSH_MODELS = dm && typeof dm === 'object' && dm.providers && typeof dm.providers === 'object' ? dm : { providers: {} };
       setCfg(c);
+      /* 磁盘真值同步点：只有"刚读到一份新配置"这一次会写 diskCfg。
+       *  草稿改动（ch()）只动 cfg，因此 diskCfg 恒等于"磁盘上现在是什么"。 */
+      setDiskCfg(c);
       setLoadErr('');            // 读到了才清错误提示（见 load 开头那条注释）
       setAutoRetryMs(0);         // 读到了就停止自动退避重读
       /* 读到即入缓存（按 local / remote 分开存）：切走再切回这一页时，先显示这份配置再后台刷新，
@@ -1109,10 +1197,20 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
     return `服务端保存未通过：${r.message || (r.mismatched?.length ? '关键字段回读不一致：' + r.mismatched.join('、') : '未知原因')}`;
   };
 
-/** 方案列表：只在切到「方案」页签时拉一次（不需要每次进页面都请求） */
+/** 方案列表：只在切到「方案」页签时拉一次（不需要每次进页面都请求）
+ *  读取态同样改成「瞬时」：首帧先铺上次读到的方案（缓存），后台静默重读，读到原地替换；
+ *  确实没有旧值（本次会话第一次进这个页签）时才用骨架占位，不再先闪一句"尚未保存过方案"。 */
   const loadProfiles = async () => {
-    try { const r = await listProfiles(); setProfiles(Array.isArray(r.profiles) ? r.profiles : []); }
+    setProfLoading(true);
+    try {
+      const r = await listProfiles();
+      const list = Array.isArray(r.profiles) ? r.profiles : [];
+      setProfiles(list);
+      /* 只在成功回包后写缓存；失败不写（失败时保留上一次读到的旧值，并照原样报错）。 */
+      writeCacheValue(PROF_CACHE_KEY, list);
+    }
     catch (e: any) { setProfMsgKind('warn'); setProfMsg('读取方案失败：' + (e?.message || '')); }
+    finally { setProfLoading(false); }
   };
   useEffect(() => { if (tab === 'profiles') loadProfiles(); }, [tab]);
 
@@ -1153,7 +1251,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
 
   const removeProfile = async (p: ConfigProfile) => {
     setProfBusy(true); setProfMsg(null);
-    try { await deleteProfile(p.id); await loadProfiles(); setProfMsgKind('ok'); setProfMsg(`已删除方案「${p.name}」`); }
+    try { await deleteProfile(p.id); dropCacheValue(PROF_CACHE_KEY); await loadProfiles(); setProfMsgKind('ok'); setProfMsg(`已删除方案「${p.name}」`); }
     catch (e: any) { setProfMsgKind('warn'); setProfMsg('删除失败：' + (e?.message || '')); }
     finally { setProfBusy(false); }
   };
@@ -1342,12 +1440,12 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
         <div className="page-header-left">
           <button className="btn btn-sm" onClick={onBack}><ArrowLeft size={15} /> 返回</button>
           <div className="page-title-wrap">
-            <div className="page-title" title="MoonBot — 本地与服务端的拟人 QQ Bot 集成配置工具">MoonBot · 功能配置</div>
+            <div className="page-title">Kizuna · 功能配置</div>
             <div className="page-subtitle">可视化配置 · 本地与隔离 DSH 同步</div>
           </div>
         </div>
         <div className="page-actions">
-          <button title="GitHub: AbyssalQuill/MoonBot" onClick={() => window.open('https://github.com/AbyssalQuill/MoonBot', '_blank', 'noopener')}
+          <button onClick={() => window.open('https://github.com/AbyssalQuill/Kizuna', '_blank', 'noopener')}
             style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 4, borderRadius: 8, color: '#57606a', lineHeight: 0 }}
             onMouseEnter={(e) => { e.currentTarget.style.color = '#24292f'; }}
             onMouseLeave={(e) => { e.currentTarget.style.color = '#57606a'; }}>
@@ -1355,24 +1453,24 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
             </svg>
           </button>
-          <button className="btn btn-soft btn-tip" title="支持本项目：扫码请作者喝杯奶茶" onClick={() => setTipOpen(true)}
+          <button className="btn btn-soft btn-tip" onClick={() => setTipOpen(true)}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d' }}>
             <Coffee size={14} /> 请作者喝奶茶
           </button>
-          <button className="btn btn-soft" onClick={onOpenPortrait} title="群友画像 / 主人画像 · 直读本机桥记忆库">
+          <button className="btn btn-soft" onClick={onOpenPortrait} {...hoverWarm(warmPortraitPage)}>
             <Users size={14} /> 群友画像
           </button>
-          <button className="btn btn-soft" onClick={onOpenChat} title="聊天记录：查看与管理各群聊/私聊的历史消息">
+          <button className="btn btn-soft" onClick={onOpenChat} {...hoverWarm(warmChatPage)}>
             <MessageSquare size={14} /> 聊天
           </button>
-          <button className="btn btn-soft" onClick={onOpenVoice} title="语音：合成音色、音色设计/复刻、语音识别（MiMo 语音模型）">
+          <button className="btn btn-soft" onClick={onOpenVoice} {...hoverWarm(warmVoicePage)}>
             <Mic size={14} /> 语音
           </button>
-          <button className="btn btn-soft-primary" onClick={onOpenLearning} title="黑话 / 人格学习与 Token 用量统计">
+          <button className="btn btn-soft-primary" onClick={onOpenLearning} {...hoverWarm(warmLearningPage)}>
             <Activity size={14} /> 学习与用量
           </button>
           <button className="btn btn-primary" onClick={save} disabled={saving}
-            title={!cfgReady ? '配置还没读到，点保存会提示稍候；不会用界面上的默认值覆盖桥上的配置' : undefined}>
+>
             {saving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} 保存
           </button>
         </div>
@@ -1421,10 +1519,16 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
               · 卡片、开关、输入框从第一帧起一律可点（有缓存就显示缓存里的真实配置）；
               · 读不到配置时不再预先置灰，改由「保存」自己把关（save() 里 `if (!cfg)` 直接拒绝并说明原因），
                 这样"状态还没回来"不会让整页变成点不动的样子。 */}
+        {/* 2026-09-26 读取态改「瞬时」：不再整块替换成一行「正在读取…的桥配置」——
+             · 有旧值（config-cache 里上次成功读到的那份，按本机 / 服务端分存，见上面的 cfg 初值）
+               时屏上照常是它：整页可点可编辑，顶部不再挂任何进度条，只是静默在后台校准；
+             · 确实没有旧值（首次进入、或刚换了读取目标）时才用骨架占位，绝不让空白表单
+               冒充「桥上配置是空的」。
+            保存的把关仍在 save() 里（`if (!cfg)` 即拒绝写盘并说明原因），页面其余部分照常可操作。 */}
+        {/* 2026-09-26：这里原本是 `{loading && cfgReady && !loadErr && <ReadBar active />}`，
+            主人要求去掉全部加载线后整块已删除（留空的括号会直接语法报错，故连条件一起去掉）。 */}
         {loading && !cfgReady && !loadErr && (
-          <div className="notice-bar" style={{ fontSize: 12 }}>
-            正在读取{remote ? ` ${remote.name}（${remote.host}）` : '本机'}的桥配置；页面照常可操作，保存会等到读到之后才生效。
-          </div>
+          <Skeleton rows={4} />
         )}
 
         <div className="bridge-body">
@@ -1436,14 +1540,14 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
           ))}
           {/* 2026-09-12 修改要求：JSON 进阶旁边加一个「方案」页签：浅蓝，与 Token 用量面板同一支色 */}
           <button className={`btn ${tab === 'profiles' ? 'btn-tb-primary' : 'btn-tb-soft'}`} onClick={() => setTab('profiles')}
-            title="把当前配置存为命名方案，或在已存方案间套用与回退">
+>
             <Layers size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> 方案
           </button>
           <span style={{ flex: 1 }} />
-          <button className="btn btn-soft doc-open-btn" onClick={() => setCmdsOpen(true)} title="聊天里可用的全部 / 指令与解释">
+          <button className="btn btn-soft doc-open-btn" onClick={() => setCmdsOpen(true)}>
             <Terminal size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> 指令速查
           </button>
-          <button className="btn btn-soft doc-open-btn" onClick={() => setDocOpen(true)} title="每一项功能与配置的详细说明">
+          <button className="btn btn-soft doc-open-btn" onClick={() => setDocOpen(true)}>
             <BookOpen size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> 说明文档
           </button>
         </div>
@@ -1474,7 +1578,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
             真正的把关放在 save() —— `if (!cfg)` 时不写盘，只提示"配置尚未读取完成"。 */}
         {tab === 'common' && <CommonTab cfg={view} ch={ch} onHelp={setHelp} uploadStickers={uploadStickers} remote={remote} writeConfig={(next) => writeBridge({ config: next })} onCfgChange={setCfg}
           apiKeyStatus={apiKeyStatus} onClearApiKey={clearApiKey} saving={saving} target={target} />}
-        {tab === 'tools' && <ToolsTab cfg={view} ch={ch} onSave={save} target={target} remoteServerId={remote?.id} />}
+        {tab === 'tools' && <ToolsTab cfg={view} diskCfg={diskCfg} ch={ch} onSave={save} saving={saving} target={target} remoteServerId={remote?.id} />}
 
         {tab === 'persona' && (
           <div className="dp-grid">
@@ -1506,7 +1610,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 </button>
                 {/* 2026-09-20：表情包卡在「常用设置」页（挨着上面那张「表情包」卡）；这里给个入口，
                     省得用户记得"它到底在哪一页"——点它切页并滚到那张卡。 */}
-                <button className="btn btn-soft btn-sm" title="表情包库：导入包 / 给角色绑包（位于「常用设置」页）"
+                <button className="btn btn-soft btn-sm"
                   onClick={() => { setTab('common'); setTimeout(() => document.getElementById('meme-packs-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); }}>
                   <Layers size={14} /> 表情包库
                 </button>
@@ -1537,7 +1641,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 <button className="btn btn-soft btn-sm" disabled={saving} onClick={() => speechFileRef.current?.click()}>
                   <Upload size={14} /> 上传 .md
                 </button>
-                <button className="btn btn-outline-danger btn-sm" disabled={saving} onClick={resetSpeech} title="写回内置默认英文模板">
+                <button className="btn btn-outline-danger btn-sm" disabled={saving} onClick={resetSpeech}>
                   <RotateCcw size={14} /> 恢复默认
                 </button>
                 <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => saveCard('speech')}>
@@ -1554,6 +1658,10 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
             {cfg ? (
               <textarea id="bridge-json" className="textarea json-text" rows={30} spellCheck={false}
                 defaultValue={JSON.stringify(cfg, null, 2)} />
+            ) : loading && !loadErr ? (
+              /* 没有可显示的配置（首次进入、缓存里也没有）且正在读 → 骨架占位；
+                 读失败时下面的说明照旧（错误分支不改）。 */
+              <Skeleton rows={6} />
             ) : (
               <div className="lrn-inline-note">配置读取完成后，此处显示 config.json 全文。</div>
             )}
@@ -1598,7 +1706,11 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
             )}
 
             {profiles.length === 0 ? (
-              <div className="profile-empty">尚未保存过方案。调整好配置后，在上方填入名称并点「存为新方案」即可。</div>
+              /* 还没读到过任何方案（缓存里也没有）→ 骨架占位，替掉原来那句先跳出来的
+                 "尚未保存过方案"；有旧列表时走下一分支，读取期间照常显示旧列表。 */
+              profLoading && !profHadCache
+                ? <Skeleton variant="card" rows={3} />
+                : <div className="profile-empty">尚未保存过方案。调整好配置后，在上方填入名称并点「存为新方案」即可。</div>
             ) : (
               <div className="profile-list">
                 {profiles.map((p) => (
@@ -1735,9 +1847,9 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 <ul>
                   <li><code>/token</code>：报告当天 token 用量与费用。<b>由桥直接计算、不经过模型</b>，随时可用且不消耗额度。</li>
                   <li><code>/token 7</code>：报告最近 7 天合计（<code>1</code>~<code>60</code> 天，不带参数即为当天）。</li>
-                  <li>返回内容分两个口径，均逐行标注出处，与「学习」页的实测区一致：<b>今日总量</b>取<b>平台计费日</b>（北京时 08:00 换日，与提供方控制台一致）；<b>命中 / 未命中 / 输出</b>与<b>金额</b>取<b>北京自然日</b> 00:00 起的分时实测（含 00:00–08:00 段，平台将其计入前一日，故单独列一行说明）。</li>
+                  <li>返回内容为五行、一行一个口径，<b>正文不带任何口径注</b>（口径含义看这里与「学习」页）：<b>今日 ：N tok</b>（面板顶部「今日已用」，取<b>平台计费日</b>，即北京时 08:00 换日，与提供方控制台一致）；<b>自然日：N tok</b>（面板「今日 token 合计」，取<b>北京自然日</b> 00:00 起的分时实测，含 00:00–08:00 一段，平台将其计入前一日，故与上一行必然不同）；<b>命中率：…｜未命中 …｜命中 …｜输出 …</b>（只统计真正带缓存字段的请求，不反推）；<b>费用：¥…</b>（若有高峰时段的量，括号内给「谷 ¥…｜峰 ¥…」拆分）；<b>全天预估：约 N tok</b>。</li>
                   <li>单价在「常用设置 → 计价口径」中修改（命中、未命中、输出三个单价与高峰倍率），修改后 <code>/token</code> 与面板同时更新。</li>
-                  <li>「按今天的节奏，全天大概 N tok」为按时段习惯曲线外推的预估，仅供参考，不计入费用。</li>
+                  <li>「全天预估：约 N tok」为按时段习惯曲线外推的预估，仅供参考，不计入费用。</li>
                 </ul>
               </DocSection>
 
@@ -1764,7 +1876,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
             <div className="doc-dialog-body" style={{ flex: 1, overflow: 'auto', padding: '4px 22px 16px' }}>
               <DocSection title="页面与五个页签">
                 <ul>
-                  <li><b>常用设置</b>：最常用的可视化配置，按功能分卡片（模型与推理、NapCat 连接、允许与拒绝名单、唤醒与潜水、发送节奏、上下文与轮换、主动闲聊、回复停顿、表情包、静默群聊、好友信任等）。</li>
+                  <li><b>常用设置</b>：最常用的可视化配置，按功能分卡片（模型与推理、NapCat 连接、Pixiv（镜像站与登录 cookie）、允许与拒绝名单、唤醒与潜水、发送节奏、上下文与轮换、主动闲聊、回复停顿、表情包、静默群聊、好友信任等）。</li>
                   <li><b>工具与规则</b>：上卡为桥提供给模型的 QQ 工具开关（发消息、读未读、戳一戳、撤回、表情包等），关闭即不授予该工具，<b>但不省 token</b>；下卡「工具 schema 精简」才真正让工具描述不再随请求发送给模型，改完须重启隔离 DSH。</li>
                   <li><b>人设与发言规则</b>：编辑 persona.md（角色人设，初始为空，可上传 .md 或从「角色库导入」整包载入）与 speech-rules.md（言行规矩，含恢复默认）。<b>人设原样注入给模型</b>（中英文均注入），与内置规则分属两层：内置规则管安全、工具与唤醒协议，人设管「你是谁」；人设文件中自定义的规矩同样生效。</li>
                   <li><b>JSON 进阶</b>：直接编辑 config.json 全文，适合批量修改或引用新字段。</li>
@@ -1910,7 +2022,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {charList.map((c) => (
                     <button key={c.slug} className="btn" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-start', textAlign: 'left', padding: '9px 12px' }}
-                      disabled={charBusy} onClick={() => applyCharacter(c)} title={c.game || c.slug}>
+                      disabled={charBusy} onClick={() => applyCharacter(c)}>
                       <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.mainPrompt ? 'var(--nc-primary-400)' : '#d9d2e6', flexShrink: 0 }} />
                       <b style={{ fontSize: 13.5, color: '#3d2b4f', minWidth: 110 }}>{c.name}</b>
                       <span style={{ fontSize: 12, color: '#8a7f9e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.game || c.slug}</span>
@@ -1974,6 +2086,9 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
         desc="机器人与 NapCat 通信所用的地址与运行路径，本地一键启动时一般无需修改。注意：WebUI、HTTP、WS 三个令牌均不在本卡，统一在下方「NapCat 鉴权令牌」卡配置；该卡会同时写入 NapCat 自身配置与桥的配置，并重启 NapCat 生效。" />
       {/* 令牌要真正写进 NapCat 才生效：见 NapcatTokensCard 的注释 */}
       <NapcatTokensCard />
+      {/* 2026-09-28 新增：Pixiv 卡。此前这三个键只登记了中文名与说明、没有任何卡片渲染它们，
+          界面上根本填不了登录 cookie（详见 PixivCard 的注释）。 */}
+      <PixivCard cfg={cfg} ch={ch} onHelp={onHelp} />
       {/* 2026-09-30 变更要求：整张「基础与会话」卡已去除（人设预设、owner QQ、工作区与发送节奏
 /**  等基础项不再在管理端出现）。这些键仍会被读进桥：需要时可在「JSON 进阶」里改，
        *  或按下面 renderAgentPreset 那段注释把键删掉。 */}
@@ -1988,10 +2103,28 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       <GroupCard title="唤醒 · 潜水 / 活跃" path="social.wake" cfg={cfg} ch={ch} onHelp={onHelp}
         /* 不再把「默认无限潜水」作为旋钮暴露：该键仍兼容老配置，缺省已改为"潜水给有限时长"。 */
         filter={(k: string) => k !== 'recommendedDefaultInfinite'}
-        desc="默认即为活跃（每条消息都唤醒）。需要安静时设为潜水。注意：不再提供「无限期潜水」，潜水一律为有限时长，由下方「推荐潜水时长上/下限」控制，到点自动恢复活跃。" />
+        desc="默认即为活跃（每条消息都唤醒）。需要安静时设为潜水。" />
 
+      {/* 音乐卡片三项也挂在 social.send 下（桥侧的历史布局）：它们与"打字节奏"无关，
+          所以从这里过滤掉、单独一张卡渲染 —— 否则会混在节奏参数里，而且 LABEL 没登记时
+          整行显示成「未登记名称的配置项」（使用方截图反馈的那两行就是它们）。
+          注意：下面那张「音乐卡片（网易云 / QQ 音乐）」卡已按要求隐藏（见该处注释），
+          但这里的 filter 必须保留 —— 去掉它这三项就会漏进本卡、以 `musicCardStyle` 这种原始键名裸奔。 */}
       <GroupCard title="发送节奏与间隔" path="social.send" cfg={cfg} ch={ch} onHelp={onHelp}
+        filter={(k: string) => !MUSIC_SEND_KEYS.includes(k)}
         desc="连发间隔、停顿与字数上限，用于控制发消息的节奏是否接近真人打字。" />
+      {/* 2026-09-29 按要求隐藏整张卡（原话：「这块卡片隐藏」）：卡片从渲染列表里移除，
+          但**键与逻辑一处不改** —— `social.send.musicCardStyle` / `musicCardOnly` / `neteaseUct2`
+          的取值仍在 config.json 里原样生效（桥照旧读它们，见 console-server.js:3165/3239 与
+          media.js:1050-1053），只是不再从这里编辑；恢复时把注释去掉即可。
+          用「注释掉挂载点」而不是别的开关，是为了不影响 data 与页面布局（与文件里
+          「删掉一整块控件、键仍在桥里生效」的既有做法一致）。 */}
+      {/*
+      <GroupCard title="音乐卡片（网易云 / QQ 音乐）"
+        blocks={[{ path: 'social.send', only: [...MUSIC_SEND_KEYS] }]}
+        cfg={cfg} ch={ch} onHelp={onHelp}
+        desc="搜歌之后发出去的那张卡长什么样。三项存在 social.send 之下（桥侧历史布局），与打字节奏无关，故单列一张卡。改完点顶部「保存」生效。" />
+      */}
       {/* 2026-09-17 反馈问「resetWindow 是不是和唤醒轮换阈值一样的、重复了」
           不是重复项，是以前"看着像重复"：这张卡把 `social.context` 与 `social.autoReset` 的键平铺成一排，
           而 `resetWindow` 在 LABEL 里没有中文名 → 界面上直接显示原始键名，紧挨着「上下文窗口」，
@@ -2017,7 +2150,6 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
         desc="让一个会话长期使用而不堆积上下文。用法：上下文用量达到「触发比例」时，隔离 DSH 先剪掉过大的工具结果（不发起模型请求，聊天记录不变）；剪后仍超阈值，才把最旧的一段摘要为 <compacted-summary>。阈值按模型窗口的比例给出，换模型后自动缩放。注意：本卡修改即时生效（DSH 热加载该 patch），无需重启 DSH 或桥；摘要由主模型（全局语言模型服务商）生成，不提供单独的服务商与模型。" />
       <GroupCard title="主动闲聊" path="social.proactive" cfg={cfg} ch={ch} onHelp={onHelp}
         desc="冷场或长时间无人发言时，机器人是否主动找话题、主动私聊。" />
-      <MemoryCard />
       <ActivityHoursCard cfg={cfg} remote={remote} writeConfig={writeConfig} onCfgChange={onCfgChange} />
 
       <GroupCard title="等待：回复前的停顿" path="social.wait" cfg={cfg} ch={ch} onHelp={onHelp}        desc="模拟真人回复前的停顿：停多久、新消息到达后再静默多久。三项全部为 0 即秒回。" />
@@ -2037,7 +2169,7 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
           键本身仍在桥里生效（config.json 不动），只是不再从这里编辑。 */}
       <GroupCard title="提示词与语感（[Style] 行）" path="prompt" cfg={cfg} ch={ch} onHelp={onHelp}
         only={['styleLine']}
-        desc="唤醒正文每轮都会带的那一句语感提醒。它是离模型最近的一句话，对小模型的语气影响比几十 k 字符的系统提示词更直接 —— 觉得回话「像人机」就改这里。填中文短句；留空 = 不注入这一行。改完保存下一条消息就生效，不用重启桥、也不用等会话轮换。" />
+        desc="唤醒正文每轮都会带的那一句语感提醒。它是离模型最近的一句话，对小模型的语气影响比几十 k 字符的系统提示词更直接 —— 觉得回话「像人机」就改这里。默认是一句英文提醒（更短、更像人自己写的旁白）；中英皆可，留空 = 不注入这一行。改完保存下一条消息就生效，不用重启桥、也不用等会话轮换。" />
       <GroupCard title="计价口径（/token 指令）" path="tokenCost" cfg={cfg} ch={ch} onHelp={onHelp}
         only={['pHit', 'pMiss', 'pOut', 'peakMult', 'peakHours']}
         desc="QQ 里发 /token 时算钱用的单价（¥ / 百万 token）。默认值与管理端「学习」页的实测计量一致：命中按缓存价、未命中按输入价、输出按输出价，高峰时段整体乘一个倍率。改这里只影响 /token 报出来的钱，不影响计费本身。" />
@@ -2052,6 +2184,79 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
         desc="自动通过好友申请、敏感操作只信谁、允许跨会话读取的账号。" />
       <GroupCard title="Word 文档额度" path="social" only={['docx']} cfg={cfg} ch={ch} onHelp={onHelp}
         desc="AI 每天最多能生成多少 Word 文档（字数上限），防超支。" />
+    </div>
+  );
+}
+
+/* ================= Pixiv（镜像站与登录 cookie） =================
+ * 2026-09-28 使用方要求「加一个 Pixiv 卡」。
+ * 背景（这张卡存在的原因，别再删）：pixiv 的三个键（base / cookie / refreshToken）在 LABEL / HELP 里
+ * 一直有中文名与说明，但**没有任何卡片渲染它们** —— 常用设置里的卡片逐张核对过没有 pixiv，
+ * 线上构建产物里也搜不到 `path="pixiv"`；于是「按画师名字搜人」要用的登录 cookie 在界面上无处可填，
+ * 只能走「JSON 进阶」手写一段 JSON（部署自检清单里那句「补：管理端 配置→pixiv.cookie」指向的就是空的）。
+ *
+ * 为什么不直接用 <GroupCard path="pixiv">：keysOf() 只渲染 config.json 里**已经存在**的键，
+ * 而四份 config.json 一份都没有 pixiv 段 —— 那样这张卡会整张消失（avail.length === 0 → 返回 null），
+ * 又回到「找不到」的老问题。所以这里自己渲染：pixiv 段不存在时也照常给三个空输入框，
+ * 填了才落键（ch('pixiv.cookie') 走 setCfg + setVal，缺对象会自动建出来）。
+ *
+ * 落键之后谁去做交换（两条路都读过代码，未在真机跑）：
+ *   · 目标＝服务端：提交体里带 config.pixiv.cookie → server/index.js 的 bootstrapPixivOnServer
+ *     当场在服务器上跑 tools/pixiv-login.mjs --cookie-file 换长期令牌，结果进保存回执的步骤列表。
+ *   · 目标＝本机：保存只写 config.json，交换由桥下次启动时自己做
+ *     （lib/pixiv-auth.js 的 bootstrapPixivFromConfigCookie，调用点在 bridge.js 的 pixiv 启动段）。
+ * 两条路成功的结果一样：state/pixiv-token.json 落盘，此后每 50 分钟自动轮换，本卡两项可清空。
+ * 管理端读不到 state/pixiv-token.json，所以卡里只如实说「配置里填了什么」，不假装知道登录态好坏。
+ * 2026-09-28 排版返工（使用方截图反馈）：说明块一度挤在 inline-flex 的 .lrn-inline-note 里被压成竖条，
+ * cookie 与长期令牌两项的标签在半列宽里被省略号截掉 —— 现在说明块改 display:block，
+ * 这两项改整行（Field 的 wide 开关），输入框也跟着变宽。 */
+function PixivCard({ cfg, ch, onHelp }: {
+  cfg: any; ch: (p: string) => (v: any) => void; onHelp: (h: any) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  const p = (cfg && isObj(cfg.pixiv)) ? cfg.pixiv : {};
+  const s = (k: string) => (typeof p[k] === 'string' ? p[k] : '');
+  const hasCookie = s('cookie').trim().length > 0;
+  const hasToken = s('refreshToken').trim().length > 0;
+  return (
+    <div className="cfg-card">
+      <div className="cfg-card-title">Pixiv（镜像站与登录 cookie）</div>
+      <div className="cfg-card-desc">
+        按画师<b>名字</b>搜人必须有登录态（官网用户搜索接口对匿名请求一律返回 400）；按画师号或作品链接发原图不需要。
+        凭证只发给 pixiv 自己的域名，绝不发给镜像站。
+      </div>
+      <div className="cfg-fields">
+        <Field path="pixiv.base" val={s('base')} label={pretty('base')} ch={ch} onHelp={onHelp} cfg={cfg} />
+        <Field path="pixiv.cookie" val={s('cookie')} label={pretty('cookie')} ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
+        <Field path="pixiv.refreshToken" val={s('refreshToken')} label={pretty('refreshToken')} ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
+      </div>
+      {/* 【2026-09-28 二次返工：说明精简重排】上一版把说明塞进 .lrn-inline-note（inline-flex，
+          会被压成竖条，已改 display:block 救回来），但两段连续长文仍是"一堵墙"。
+          现在拆成"三条要点 + 一行状态 + 一行操作"，事实一条不少、每行只讲一件事。
+          下面不再用 .lrn-inline-note（那个类的默认布局就是 inline-flex），一律用块级容器。 */}
+      <ul className="cfg-card-desc" style={{ display: 'block', margin: '8px 0 4px', paddingLeft: 18, lineHeight: 1.75 }}>
+        <li><b>填了 cookie 之后</b>：点「保存」只把这一项写进 config.json；换长期令牌的时机看目标 —— 服务端＝保存时顺手换一次（结果写在保存回执的步骤列表里），本机＝桥下次启动自己换。</li>
+        <li><b>换成功之后</b>：令牌落盘 <code>state/pixiv-token.json</code>，此后每 50 分钟自动轮换，<b>本卡后两项都可以清空</b>。</li>
+        <li><b>画师号缓存</b>：每解出一个就落盘 <code>state/pixiv-artists.json</code>；cookie 过期后，查过的名字照样能搜到。</li>
+      </ul>
+      <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.75 }}>
+        <div>
+          {(!hasCookie && !hasToken)
+            ? '当前没有登录态：按画师名字搜人不可用（画师号 / 作品链接不受影响）。'
+            : hasCookie
+              ? '已填 cookie：保存后由桥换长期令牌（服务端＝保存时立刻换；本机＝桥下次启动时换）。'
+              : '已填长期令牌：桥直接用它，不必再填 cookie。'}
+        </div>
+        <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-tb-soft" onClick={() => setReveal((v) => !v)}>
+            {reveal ? '隐藏凭证' : '显示凭证'}
+          </button>
+          <span style={{ fontSize: 12, opacity: 0.85 }}>
+            cookie 三种写法都认：整条 cookie 串、<code>PHPSESSID=xxxx</code>、或只贴会话值本身。
+            不想经过界面：<code>node tools/set-pixiv-cookie.mjs --file /root/.pixiv-cookie.txt</code>（从文件读、写完删文件、只回显掩码）。
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2113,6 +2318,8 @@ function GroupCard({ title, path, blocks, cfg, ch, onHelp, filter, only, desc, c
  *  桥的 /api/social/targets（允许名单 ∪ 已建会话 ∪ 已设时段的键，附群名）→ 点哪一行就展开设哪一行。
  *  时段数据不在 config.json，而在桥的 state/activity-windows.json（按会话存，支持跨午夜如 09:00-01:00）。
  *  「添加群号」：会同时补进允许名单（配置由本卡整份写回），否则机器人根本不处理那个群。 */
+/** 本卡旧值缓存的形状：对象清单 + 静默群聊那几项（一起回包，一起当旧值渲染） */
+type ActivityBoot = { targets: ActivityTarget[]; meta: { deepsleep: boolean; deepsleepGroups: string[] } };
 function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
   cfg: any;
   remote?: { id: string; name?: string } | null;
@@ -2121,49 +2328,81 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
   onCfgChange: (next: any) => void;
 }) {
   const scope = remote ? 'remote' : 'local';
-  const [targets, setTargets] = useState<ActivityTarget[]>([]);
-  const [meta, setMeta] = useState<{ deepsleep: boolean; deepsleepGroups: string[] }>({ deepsleep: false, deepsleepGroups: [] });
+  /* 对象清单的缓存键带作用域：本机与服务端是两份不同的清单（接口本身就按 scope 取），
+     共用一份旧值等于把本机清单显示成服务端的；服务端再带上实例 id，换服务器不会串。 */
+  const cacheKey = `bridge:objects:${remote ? `remote:${remote.id}` : 'local'}`;
+  /* 首帧初值取自缓存（只在挂载时读一次，不在每次渲染时调 initialFromCache）：
+     有旧值就先把旧清单渲染出来，后台再静默重读；确实没有旧值才走骨架占位。 */
+  const bootRef = useRef<ReturnType<typeof initialFromCache<ActivityBoot>> | null>(null);
+  if (!bootRef.current) bootRef.current = initialFromCache<ActivityBoot>(cacheKey);
+  const [targets, setTargets] = useState<ActivityTarget[]>(() => bootRef.current!.value?.targets ?? []);
+  const [meta, setMeta] = useState<{ deepsleep: boolean; deepsleepGroups: string[] }>(() => bootRef.current!.value?.meta ?? { deepsleep: false, deepsleepGroups: [] });
   const [openKey, setOpenKey] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [showPrivate, setShowPrivate] = useState(false);
   const [newGid, setNewGid] = useState('');
 
+  /* 2026-09-26 ④：去掉「刷新列表」按钮 —— 改成 30 秒静默轮询（列表数据本来就在变，
+     主人不该为了看新群聊去点按钮）。用 ref 捎带最新一次 refresh，定时器只挂一次。 */
+  const refreshRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const iv = window.setInterval(() => { void refreshRef.current(); }, 30000);
+    return () => window.clearInterval(iv);
+  }, []);
   const refresh = async () => {
     setLoading(true);
     try {
       const r = await getActivityTargets({ scope, serverId: remote?.id });
       const list = Array.isArray(r.targets) ? r.targets : [];
+      const nextMeta = { deepsleep: !!r.deepsleep, deepsleepGroups: Array.isArray(r.deepsleepGroups) ? r.deepsleepGroups : [] };
       setTargets(list);
-      setMeta({ deepsleep: !!r.deepsleep, deepsleepGroups: Array.isArray(r.deepsleepGroups) ? r.deepsleepGroups : [] });
+      setMeta(nextMeta);
       setDrafts((prev) => {
         const next = { ...prev };
         for (const t of list) if (next[t.key] === undefined) next[t.key] = t.windows || '';
         return next;
       });
+      /* 只在成功回包后写缓存（失败不写，免得把"读失败"当成旧值反复渲染）。 */
+      if (r.ok) writeCacheValue(cacheKey, { targets: list, meta: nextMeta });
       setMsg(r.ok ? '' : (r.message || '读取失败'));
     } catch (e) { setMsg('读取失败：' + (e as Error).message); }
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [scope, remote?.id]);
 
+  /* 读取目标在挂载期间被换掉（连上服务器 / 断开 / 换服务器）时，改用该目标自己的旧值重新起底：
+     有它自己的缓存就显示它，没有就清空等骨架 —— 绝不拿另一侧的清单顶替（那比空白更误导）。
+     effect 顺序在下面的 refresh 之前：先换旧值，再发这次读取。 */
+  refreshRef.current = refresh;   // 每次渲染捎带最新一次 refresh（下面的静默轮询用）
+  const bootKeyRef = useRef(cacheKey);
+  useEffect(() => {
+    if (bootKeyRef.current === cacheKey) return;
+    bootKeyRef.current = cacheKey;
+    const v = initialFromCache<ActivityBoot>(cacheKey);
+    setTargets(v.value?.targets ?? []);
+    setMeta(v.value?.meta ?? { deepsleep: false, deepsleepGroups: [] });
+  }, [cacheKey]);
+
   /* 2026-09-19 修改要求：这张表只列白名单内的对象：
    * 原来把"桥认识但不在允许名单里"的会话也列出来了（行上标一句"不在允许名单"），
    * 于是列表里混着一堆设了也没用的行。现在按桥给的门禁结论过滤（`allowed === false` 一律不显示），
-   * 并把被隐藏的数量写出来 —— 用户想给它设时段，第一步应该是先把它加进允许名单。 */
+   * 【2026-09-28 变更要求】不再显示"已隐藏 N 个不在允许名单里的对象"这一句：
+   * 门禁过滤照旧（`allowed === false` 的对象仍然不列），但不再把被隐藏的**数量**写出来。 */
   const allowedTargets = targets.filter((t) => t.allowed !== false);
-  const hiddenCount = targets.length - allowedTargets.length;
   const groups = allowedTargets.filter((t) => t.kind === 'group');
   const privates = allowedTargets.filter((t) => t.kind === 'private');
   const visible = showPrivate ? allowedTargets : groups;
 
-/** 保存单个对象的时段（留空 = 不限） */
-  const saveOne = async (key: string) => {
+/** 保存单个对象的时段（留空 = 不限）
+ *  `rowWindows` = 该行当前显示（或上次读到）的时段：草稿还没被 refresh 填上时用它兜底，
+ *  免得"先渲染旧清单"的那一小段时间里点保存把有值的时段写成空的。两者都没有才是"不限"。 */
+  const saveOne = async (key: string, rowWindows: string) => {
     setBusy(true); setMsg('');
     try {
-      const r = await saveActivityHours([{ key, windows: drafts[key] ?? '' }], { scope, serverId: remote?.id });
+      const r = await saveActivityHours([{ key, windows: drafts[key] ?? rowWindows }], { scope, serverId: remote?.id });
       const one = (r.results ?? [])[0];
       if (!one?.ok) { setMsg(`保存未成功：${one?.error || r.message || '未知原因'}`); return false; }
       setMsg(`已保存${remote ? '到服务端' : ''}：${key.replace(':', ' ')} = ${one.windows || '不限（全天随意）'}`);
@@ -2216,6 +2455,8 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
 
   return (
     <div className="cfg-card">
+      {/* 读取中不再整块替换成一行「正在读取对象清单」：有旧值时下面的列表照常显示，
+          卡顶不再挂任何进度条，只是静默在后台重读。 */}
       <div className="cfg-card-title">群聊活跃时段{remote ? '（服务端）' : ''}</div>
       <div className="cfg-card-desc">
         列表由机器人当前认识的对象自动生成（允许名单与已建会话），点其中一行即可单独设置该对象的时段。
@@ -2243,29 +2484,24 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '6px 0', flexWrap: 'wrap' }}>
         {/* 2026-09-24：刷新按钮不再因"正在读"而置灰（主人要求：不要不能点的卡片状态机）；
             按钮上的转圈只表示这一份读取还在飞，重复点只是多发一次请求，没有副作用。 */}
-        <button type="button" className="btn btn-sm" onClick={refresh}>
-          {loading ? <Loader2 size={14} className="spin" /> : <RotateCcw size={14} />} 刷新列表
-        </button>
         <label style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
           <input type="checkbox" checked={showPrivate} onChange={(e) => setShowPrivate(e.target.checked)} />
           连私聊一起列（{privates.length}）
         </label>
         <span style={{ fontSize: 12, opacity: 0.7 }}>群 {groups.length} 个</span>
-        {hiddenCount > 0 && (
-          <span style={{ fontSize: 12, color: '#d9822b' }} title="这些会话桥认识、但不在允许名单里（或当前模式不允许），设了时段也不会生效，所以不列出来">
-            已隐藏 {hiddenCount} 个不在允许名单里的对象
-          </span>
-        )}
       </div>
 
       {!visible.length ? (
-        <div className="cfg-card-desc">
-          {loading
-            ? '正在读取对象清单，读取期间可继续编辑本卡以外的内容。'
-            : hiddenCount > 0
-              ? `允许名单里还没有对象（另有 ${hiddenCount} 个不在允许名单里的会话已隐藏）。先在「允许名单」里加群，或点下面的「添加群」，后者会同时把群写入允许名单。`
+        /* 屏上确实没有可显示的对象（首次进入、且缓存里也没有旧清单）→ 骨架占位，
+           替掉原来那句「正在读取对象清单…」；有旧值渲染时列表分支会照常显示，走到这里的
+           只可能是"缓存里是空的"或"这次真读回了空"。 */
+        loading && !targets.length ? <Skeleton variant="card" rows={3} /> : (
+          <div className="cfg-card-desc">
+            {targets.length > 0
+              ? '允许名单里还没有对象（机器人认识的对象都不在允许名单里）。先在「允许名单」里加群，或点下面的「添加群」，后者会同时把群写入允许名单。'
               : '桥尚未识别任何对象。在下方填入群号添加，或先在「允许名单」里加群。'}
-        </div>
+          </div>
+        )
       ) : (
         <div className="cfg-fields">
           {visible.map((t) => {
@@ -2284,7 +2520,6 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
                       名字过长由下面那层 maxWidth: 100% + 省略号兜住，行内元素用 gap 对齐。 */}
                   <button
                     type="button" className="btn btn-sm"
-                    title={t.name ? `${t.name}（${t.id}）` : t.id}
                     style={{ maxWidth: '100%', overflow: 'hidden', justifyContent: 'flex-start' }}
                     onClick={() => setOpenKey(open ? '' : t.key)}
                   >
@@ -2308,10 +2543,13 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
                     <input
                       className="input" style={{ maxWidth: 260 }}
                       placeholder="如 09:00-01:00 ，留空=不限"
-                      value={drafts[t.key] ?? ''}
+                      /* 草稿还没被 refresh 填上时，用这一行自己的时段当值 —— 恰好就是 refresh 会填进去的
+                         那个值（`next[t.key] = t.windows || ''`）。这样"先渲染旧清单、回包再校准"的窗口
+                         里，输入框显示的是真实时段，点「保存这个」也不会把本来有值的时段存成"不限"。 */
+                      value={drafts[t.key] ?? t.windows ?? ''}
                       onChange={(e) => setDrafts((p) => ({ ...p, [t.key]: e.target.value }))}
                     />
-                    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void saveOne(t.key)}>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void saveOne(t.key, t.windows ?? '')}>
                       {busy ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存这个
                     </button>
                     <button
@@ -2340,7 +2578,7 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
           value={newGid} onChange={(e) => setNewGid(e.target.value)}
         />
         <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={addGroup}
-          title="添加群（并加入允许名单）：加群的同时把它写进允许名单，否则桥不处理该群">
+>
           <Users size={14} /> 添加群
         </button>
         {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
@@ -2406,11 +2644,21 @@ const MEME_SOURCE_LABEL: Record<string, string> = { factory: 'meme 目录', glob
  * 上传不在前端拼目录：原样把文件交给管理端（POST /api/bridge/meme-packs/upload，base64-in-JSON），
  * 由后端校验图片 → 落临时目录 → 用桥里的规整脚本重排目录并重建 index.db → 再整体 rename 就位。
  * 故"收到几个文件、入库几张、跳过哪些、有无备份旧包"一律以后端报告为准，界面只如实显示，不自行推算。 */
+/** 包目录旧值缓存的形状：包清单 + 角色↔包绑定（同一个回包，一起当旧值渲染） */
+type MemeBoot = { packs: MemePackEntry[]; bindings: Record<string, string[]> };
 function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | null }) {
   const zipRef = useRef<HTMLInputElement>(null);
   const dirRef = useRef<HTMLInputElement>(null);
-  const [packs, setPacks] = useState<MemePackEntry[]>([]);
-  const [bindings, setBindings] = useState<Record<string, string[]>>({});
+  /* 包目录的缓存键：`/api/bridge/meme-packs` 没有 scope 参数，读的永远是本机运行目录
+     （见本卡说明"本卡读取的是本机目录"），故作用域段恒为 local —— 不按当前目标分键，
+     免得把同一份本机数据标成"服务端"的那一份。 */
+  const MEME_CACHE_KEY = 'bridge:emoji:local';
+  /* 首帧初值取自缓存（只在挂载时读一次，不在每次渲染时调 initialFromCache）。 */
+  const bootRef = useRef<ReturnType<typeof initialFromCache<MemeBoot>> | null>(null);
+  if (!bootRef.current) bootRef.current = initialFromCache<MemeBoot>(MEME_CACHE_KEY);
+  const hadCache = bootRef.current.value !== null;
+  const [packs, setPacks] = useState<MemePackEntry[]>(() => bootRef.current!.value?.packs ?? []);
+  const [bindings, setBindings] = useState<Record<string, string[]>>(() => bootRef.current!.value?.bindings ?? {});
   const [libRoles, setLibRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -2432,8 +2680,12 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
     try {
       const r = await memePacks();
       if (!r.success) { setLoadErr(r.message || '管理端没给出原因'); setPacks([]); setBindings({}); return; }
-      setPacks(Array.isArray(r.packs) ? r.packs : []);
-      setBindings(r.bindings ?? {});
+      const list = Array.isArray(r.packs) ? r.packs : [];
+      const b = r.bindings ?? {};
+      setPacks(list);
+      setBindings(b);
+      /* 只在成功回包后写缓存；失败（上面的分支与 catch）不写。 */
+      writeCacheValue(MEME_CACHE_KEY, { packs: list, bindings: b });
     } catch (e: any) { setLoadErr(e?.message || '请求失败'); setPacks([]); setBindings({}); }
     finally { setLoading(false); }
   };
@@ -2515,6 +2767,9 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
       if (!r.success) { setMsg(r.message || `未能删除「${p.id}」`); return; }
       const restartNote = r.restart?.ok ? '，桥接已重启' : (r.restart?.message ? `；${r.restart.message}` : '');
       setMsg(`已删除「${p.id}」${r.trash ? `（未彻底删除，目录保留在 ${r.trash}）` : ''}${restartNote}`);
+      /* 删包改变了内容：先作废旧值再重读 —— 万一紧接着这次重读失败，下次进页面也不会把
+         刚删掉的包当成"上次读到的清单"又渲染出来。 */
+      dropCacheValue(MEME_CACHE_KEY);
       await load();
     } catch (e: any) { setMsg('删除失败：' + (e?.message || '')); }
     finally { setBusy(false); }
@@ -2534,6 +2789,8 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
 
   return (
     <div className="cfg-card" id="meme-packs-card">
+      {/* 读取中不再整块替换成一行「正在读取表情包目录」：有旧清单时照常显示旧清单，
+          卡顶不再挂任何进度条，只是静默在后台重读。上传/绑定的进行中提示（stage）另有其位，不受影响。 */}
       <div className="cfg-card-title">表情包库（meme-packs）</div>
       <div className="cfg-card-desc">
         包内的图按<b>分类</b>取材（开心 / 生气 / 无奈…），机器人按聊天语境挑选发送，比 QQ 收藏表情更易检索。
@@ -2548,19 +2805,21 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
       {/* ---------- ① 包列表 ---------- */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0' }}>
         <b style={{ fontSize: 13 }}>现有包（{packs.length}）</b>
-        <button className="btn btn-sm" onClick={() => void load()}>
-          {loading ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />} 重新读取
-        </button>
       </div>
-      {loading && <div className="lrn-inline-note"><Loader2 size={13} className="spin" /> 正在读取表情包目录；下方上传与角色绑定不受影响。</div>}
+      {/* 原来这里是一条「正在读取表情包目录…」，且下面空列表处还会再写一遍 —— 两处都去掉：
+          读取中不再有任何进度条，只是静默刷新，屏上保留旧清单；只有缓存里也没有旧值时才走骨架。 */}
       {loadErr && (
         <div className="lrn-inline-note" style={{ color: '#b3261e' }}>
           <AlertTriangle size={13} /> 读不到包列表：{loadErr}
-          <span>（本卡为按需读取：点上方「重新读取」可再取一次）</span>
+          <span>（本卡为按需读取：上传或删除后会自动重读）</span>
         </div>
       )}
       {!loadErr && packs.length === 0 && (
-        <div className="lrn-inline-note">{loading ? '正在读取表情包目录。' : '尚无表情包。用下方「选 zip 上传」或「选文件夹上传」传入一份即可使用。'}</div>
+        /* 有旧值（上次读到的清单，哪怕是空清单）就照实说"尚无表情包"；第一次进来、缓存里没有
+           任何清单时才用骨架占位 —— 不让"还没读到"看起来像"一个包都没有"。 */
+        loading && !hadCache
+          ? <Skeleton variant="card" rows={3} />
+          : <div className="lrn-inline-note">尚无表情包。用下方「选 zip 上传」或「选文件夹上传」传入一份即可使用。</div>
       )}
       {!loadErr && packs.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '4px 0 8px' }}>
@@ -2576,7 +2835,7 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
                 : <span style={{ fontSize: 12, color: '#6b5f80' }}>
                     {p.count} 张 · {p.tags.length} 个分类{p.imageCount !== p.count ? `（磁盘上 ${p.imageCount} 张，与索引不一致）` : ''}
                   </span>}
-              <span style={{ fontSize: 11.5, color: '#a99fc0', marginLeft: 'auto', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.dir}>{p.dir}</span>
+              <span style={{ fontSize: 11.5, color: '#a99fc0', marginLeft: 'auto', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.dir}</span>
               {p.source === 'factory'
                 ? <span style={{ fontSize: 12, color: '#a99fc0' }}>位于 meme 目录，本页不可删除</span>
                 : <button className="btn btn-outline-danger btn-sm" disabled={busy} onClick={() => void del(p)}><Trash2 size={13} /> 删除</button>}
@@ -2634,7 +2893,6 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
       <div style={{ marginTop: 10 }}>
         <div
           role="button" tabIndex={0} aria-expanded={bindOpen}
-          title={bindOpen ? '收起「哪个角色用哪些包」' : '展开「哪个角色用哪些包」'}
           onClick={() => setBindOpen((v) => !v)}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBindOpen((v) => !v); } }}
           style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}
@@ -2650,7 +2908,11 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
               一个都不勾 = 该角色不绑定专属包，仅参与公共包的检索。
             </div>
             {roleRows.length === 0 ? (
-              <div className="lrn-inline-note">尚无可用角色：先到「人设」页用「角色库导入」放入角色，或在上传时把「谁都能用」改为指定角色。</div>
+              /* 首次进入、缓存里也没有清单时，角色行同样是"还没读到"而不是"没有角色" →
+                 用骨架占位，别让这句话在读取期间先把人唬住（有旧清单时这里走下一分支）。 */
+              loading && !hadCache
+                ? <Skeleton rows={2} />
+                : <div className="lrn-inline-note">尚无可用角色：先到「人设」页用「角色库导入」放入角色，或在上传时把「谁都能用」改为指定角色。</div>
             ) : (
               /* 角色卡列表固定高度内滚（角色多也不会把卡片顶高）：
                  maxHeight 240 是照上面「表情包」卡量的 —— 那张卡的字段块（social.sticker 十来个字段，
@@ -2689,7 +2951,7 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
   );
 }
 
-function ToolsTab({ cfg, ch, onSave, target, remoteServerId }: { cfg: any; ch: (p: string) => (v: any) => void; onSave: () => Promise<void>; target?: string; remoteServerId?: string }) {
+function ToolsTab({ cfg, diskCfg, ch, onSave, saving, target, remoteServerId }: { cfg: any; diskCfg: any; ch: (p: string) => (v: any) => void; onSave: () => Promise<void>; saving: boolean; target?: string; remoteServerId?: string }) {
   const v = get(cfg, 'social.tools');
   // MCP 工具原名（qq_send_message 等英文标识符）默认不显示：界面上统一用中文名；
   // 需要与 config.json 中 social.tools.* 逐字比对时再勾选该开关。
@@ -2720,7 +2982,7 @@ function ToolsTab({ cfg, ch, onSave, target, remoteServerId }: { cfg: any; ch: (
         </div>
         <div className="switch-grid">
           {keys.map((k) => (
-            <label key={k} className="switch-row" title={LABEL[k] || undefined}>
+            <label key={k} className="switch-row">
               <input type="checkbox" checked={isOn(k)} onChange={() => ch('social.tools.' + k)(!isOn(k))} />
               <span style={{ minWidth: 0 }}>
                 {prettyTool(k)}
@@ -2774,7 +3036,7 @@ function ToolsTab({ cfg, ch, onSave, target, remoteServerId }: { cfg: any; ch: (
         </div>
       </div>
 <ToolCompressorCard cfg={cfg} ch={ch} onSave={onSave} target={target} remoteServerId={remoteServerId} />
-      <SlimToolsCard cfg={cfg} ch={ch} onSave={onSave} />
+      <SlimToolsCard cfg={cfg} diskCfg={diskCfg} ch={ch} onSave={onSave} saving={saving} />
     </div>
   );
 }
@@ -2841,69 +3103,6 @@ function readSlimSchemes(raw: any): Record<string, string[]> {
   }
   return out;
 }
-/** 「长期记忆」：卡（记忆架构升级后）——只读，不改数据。
- *
- * 记忆此前不可见（写入 SQLite 后无从核对），分层（永久/长期/短期）与全文索引上线后须可查：
- *   · 永久层（）每轮出现在唤醒正文的 `[Recall]` 中，写错会一直错，应点开核对；
- *   · `chat_fts` / `mem_fts` 为检索用全文索引，显示 -1 表示该库无 FTS5 或索引尚未建立
- *     （检索自动退回模糊匹配：可用，但较慢且无相关性排序）。
- * 数据来自 manager 只读打开的 qq-bridge/state/memory.db。 */
-function MemoryCard() {
-  const [s, setS] = useState<MemoryStats | null>(null);
-  const [msg, setMsg] = useState('');
-  useEffect(() => {
-    let alive = true;
-    getMemoryStats()
-      .then((r) => { if (!alive) return; if (r?.ok) { setS(r); setMsg(''); } else setMsg(r?.message || '读不到记忆库'); })
-      .catch((e: any) => { if (alive) setMsg(String(e?.message ?? e)); });
-    return () => { alive = false; };
-  }, []);
-  const tierLabel: Record<string, string> = { permanent: '永久（每轮都注入）', durable: '长期（默认）', working: '短期（会过期）' };
-  return (
-    <div className="card">
-      <div className="card-title">长期记忆与档案（SQLite）</div>
-      {s ? (
-        <>
-          <div style={{ fontSize: 13, lineHeight: 1.9 }}>
-            档案 <b>{s.profiles}</b> 人 · 记忆条目 <b>{s.entries}</b> 条（其中永久 <b>{s.permanent}</b> 条）· 聊天记录 <b>{(s.chat || 0).toLocaleString()}</b> 条
-            <br />
-            分层：{(s.tiers || []).map((t) => `${tierLabel[t.tier] || t.tier} ${t.count} 条`).join(' · ') || '（空）'}
-            <br />
-            全文索引：聊天 <b>{s.fts?.chat_fts === -1 ? '未建（检索退回模糊匹配）' : (s.fts?.chat_fts ?? 0).toLocaleString()}</b>
-            {' · '}记忆 <b>{s.fts?.mem_fts === -1 ? '未建' : (s.fts?.mem_fts ?? 0)}</b>
-            {s.ftsRebuiltAt ? ` · 最近重建 ${new Date(s.ftsRebuiltAt).toLocaleString()}` : ''}
-          </div>
-          {s.top && s.top.length > 0 ? (
-            <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.8 }}>
-              <b>永久层（= 每轮都会出现在模型眼前的条目，写错会一直错）</b>
-              <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
-                {s.top.map((e) => (
-                  <li key={e.id}>[{e.category}] {e.content}</li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--nc-foreground-400)' }}>
-              尚无永久记忆条目。在 QQ 中对机器人说「记住：……」并由它调用 <code>qq_memory_remember</code> 写入永久层即可。
-            </div>
-          )}
-          <div style={{ marginTop: 10, fontSize: 12, color: 'var(--nc-foreground-400)', lineHeight: 1.7 }}>
-            记忆存于桥的 <code>state/memory.db</code>：聊天记录永久保存且逐条进入全文索引，
-            模型称"看不到更早的消息"时可直接检索回来；永久层条目每轮注入，长期与短期按闲置时间淡出。
-            本卡只读，不改动任何数据。
-          </div>
-        </>
-      ) : (
-        <div style={{ fontSize: 13, color: 'var(--nc-foreground-400)', lineHeight: 1.7 }}>
-          {msg ? `读不到记忆库：${msg}` : '正在读取记忆库。'}
-          <br />
-          记忆存于桥的 <code>state/memory.db</code>，由管理端只读打开；数据未到达时本卡不阻塞其他设置。
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** 「工具压缩代理」：卡（2026-09-21 按要求新增）：接开源的 mcp-compressor 当代理。
  *
  * 它与下面那张「工具 schema 精简」是两层不同的压缩：
@@ -3002,7 +3201,7 @@ function ToolCompressorCard({ cfg, ch, onSave, target, remoteServerId }: { cfg: 
   );
 }
 
-function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: any) => void; onSave: () => Promise<void> }) {
+function SlimToolsCard({ cfg, diskCfg, ch, onSave, saving }: { cfg: any; diskCfg: any; ch: (p: string) => (v: any) => void; onSave: () => Promise<void>; saving?: boolean }) {
   const denyRaw = get(cfg, 'social.slimTools.deny');
   const deny: string[] = Array.isArray(denyRaw) ? denyRaw.filter((x: any) => typeof x === 'string') : [];
   const enabled = get(cfg, 'social.slimTools.enabled') === true;
@@ -3028,8 +3227,13 @@ function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: a
   /* 2026-09-23：桥只在 `social.slimTools.level === 'custom'` 时读取手写名单（lib/tool-tiers.js 的
    * resolveToolTier），其余档位一律忽略 allow/deny。本卡即手写名单的唯一入口，故挂载时即把
    * level 写为 custom；此后每次改动名单与载入方案也一并写入（见 setDeny）。 */
+  /* 2026-09-29 修：这里原来是「只要 level !== 'custom' 就在挂载时改写为 custom」——于是打开本卡
+   * 看都不看，草稿就被改成 custom（磁盘上可能是 low），"只勾选框"的假象正是这么来的。
+   * 现在只在配置里**根本没有这个档位键**、或值不是字符串（脏值）时才补 custom；
+   * 已有档位一律原样显示，由档位选择器显式改动（选择器一出现，本卡就不再强制 custom）。 */
   useEffect(() => {
-    if (String(get(cfg, 'social.slimTools.level') ?? '') !== 'custom') ch('social.slimTools.level')('custom');
+    const raw = get(cfg, 'social.slimTools.level');
+    if (typeof raw !== 'string' || raw === '') ch('social.slimTools.level')('custom');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3102,7 +3306,118 @@ function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: a
     finally { setBusy(''); }
   };
 
-  const effectiveKept = enabled ? keptCount : all.length;
+  /* ───────────────────────── 2026-09-29 新增：档位选择器 + 「磁盘真值」状态行 ─────────────────────────
+   * 起因（使用方确认要修）：本卡原来既没有档位选择器（唯一控件是一个复选框），状态行又是拿**草稿**算的，
+   * 于是出现两种假象：① 界面上说"后端注册 94 个（全部）"，磁盘上却可能是别的档位；
+   * ② 只勾一个复选框、不点保存，看不出"根本没落盘"。现在：
+   *   · 档位选择器写 `social.slimTools.level`（完整 = off，语义与桥侧 lib/tool-tiers.js 逐字一致）；
+   *   · 选档位即同时把 `enabled` 写对（off⇒false，其余⇒true），复选框反过来写 level，两侧永不自相矛盾；
+   *   · 状态行只读**磁盘真值**（GET /bridge/config 的 social.slimTools）+ 实测注册数
+   *     （state/tool-schema-stats.json，经 GET /bridge/tool-schema-stats），草稿另起一行并带"未保存"角标。 */
+  /* 桥侧档位表（与 qq-bridge/src/lib/tool-tiers.js 的 TIERS 一致）：id 即写进配置的取值，
+   * 文案用中文，取值原样显示在圆括号里便于与 config.json 逐字比对。 */
+  const TIER_OPT: Array<{ id: string; label: string }> = [
+    { id: 'off', label: '完整（全部工具都注册）' },
+    { id: 'low', label: '轻度裁剪' },
+    { id: 'medium', label: '中度裁剪' },
+    { id: 'high', label: '高度裁剪' },
+    { id: 'extreme', label: '极致裁剪' },
+    { id: 'custom', label: '自定义名单（按下方勾选）' },
+  ];
+  const TIER_DESC: Record<string, string> = {
+    off: '不裁剪：桥把全部工具都注册给模型（本档下下面那张勾选名单不生效）。',
+    low: '轻度：只裁掉一批冷门工具，核心能力全留。',
+    medium: '中度：裁掉不常用的一整批，工具表明显变短。',
+    high: '高度：只留常用工具，模型看不到其余工具。',
+    extreme: '极致：只留最少几个工具，最省 token、也最容易"这个功能没工具可用"。',
+    custom: '自定义：名单由下方勾选决定（写进 social.slimTools.deny 的工具不注册）。',
+  };
+  const draftLv = String(get(cfg, 'social.slimTools.level') ?? 'off');
+  const draftKnown = TIER_OPT.some((t) => t.id === draftLv);
+  /** 选择器当前值：配置里是未知档位时显示空，避免"显示完整、其实配的是别的值"这种假象。 */
+  const selVal = draftKnown ? draftLv : '';
+
+  /* 档位选择器（唯一入口）。写 level 的同时把 enabled 写对，保证两个字段永远不打架：
+   *   · 选「完整」⇒ enabled=false，level 写成 'custom'（**不写 'off'**）
+   *   · 选具体档位 ⇒ enabled=true + 该档位（桥按档位注册）
+   * 为什么「完整」不写 level='off'：桥侧 enabled=false 时 level 一律不看，off 与 custom 行为逐字相同；
+   * 而 'custom' 会**保留**盘上原本的名单档位设置（用户原本配的是 low，切回"完整"后配置里仍是 low），
+   * 只动了 enabled 一个字段，回滚/复查时一目了然。已有的 deny / schemes / allow 一个都不动。 */
+  const pickLevel = (v: string) => {
+    ch('social.slimTools.enabled')(v !== 'off');
+    ch('social.slimTools.level')(v === 'off' ? 'custom' : v);
+  };
+  /* 复选框反过来写：勾上 = 启用裁剪（从"完整"切到"自定义名单"，即本卡下方勾选生效的那个档）；
+   * 取消勾选 = 完整（enabled=false，level 同样保留为 custom）。原来的单选状态因此变成联动，
+   * "复选框说没开、level 说 low"不会再出现。 */
+  const setEnabledFlag = (on: boolean) => {
+    ch('social.slimTools.enabled')(on);
+    ch('social.slimTools.level')(on ? (draftLv === 'off' || draftLv === 'custom' || !draftKnown ? 'custom' : draftLv) : 'custom');
+  };
+
+  /* 磁盘真值：social.slimTools 取自 getBridgeConfig() 读到的 config.json；注册数取自实测
+   * state/tool-schema-stats.json。这份快照只在「保存后」与「挂载时」刷新，草稿改动不刷新它 ——
+   * 所以屏幕上"磁盘当前值"这一行永远说的是盘上的事实，不是草稿。 */
+  const [diskSlim, setDiskSlim] = useState<{ level: string; enabled: boolean } | null>(null);
+  const [stats, setStats] = useState<ToolSchemaStats | null>(null);
+  const [diskMsg, setDiskMsg] = useState('');
+  const [diskAt, setDiskAt] = useState(0);
+  const reloadDisk = async () => {
+    try {
+      const [br, st] = await Promise.all([getBridgeConfig(), getToolSchemaStats()]);
+      const slim = (br as any)?.config?.social?.slimTools;
+      if (slim && typeof slim === 'object') {
+        setDiskSlim({
+          level: String((slim as any).level ?? ''),
+          enabled: (slim as any).enabled === true,
+        });
+      }
+      setStats(st);
+      setDiskAt(Date.now());
+      setDiskMsg('');
+    } catch (e: any) {
+      setDiskMsg('读取磁盘真值失败：' + (e?.message || ''));
+    }
+  };
+  useEffect(() => { void reloadDisk(); /* 挂载时先读一次，页面一打开就是盘上的事实 */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* 保存：沿用既有 onSave（页面顶部那条通路：写 config.json → 重载），保存完成后再读一次磁盘真值 + 实测注册数。
+   * 保存失败/没读到都不谎报 —— 失败时明确说"磁盘真值未刷新"。 */
+  const saveCard = async () => {
+    setBusy('save'); setMsg(null);
+    try {
+      await onSave();
+      await reloadDisk();
+      setMsg('已保存到 config.json。工具表只在隔离 DSH 启动时取一次，要让注册数跟着变请点「保存并重启隔离 DSH」。');
+    } catch (e: any) {
+      setDiskMsg('保存后未能刷新磁盘真值：' + (e?.message || ''));
+      setMsg('保存失败：' + (e?.message || ''));
+    } finally { setBusy(''); }
+  };
+
+  /* ── 草稿 vs 磁盘：逐字段算出"有未保存的改动" ──────────────────────────────
+   * 用稳定序列化比对（键排序、数组保持顺序），比"逐字段手写"更不容易漏字段。 */
+  const stable = (v: any): string => JSON.stringify(v, (_k, x) => {
+    if (x && typeof x === 'object' && !Array.isArray(x)) {
+      const o: Record<string, any> = {};
+      for (const k of Object.keys(x).sort()) o[k] = x[k];
+      return o;
+    }
+    return x;
+  });
+  const slimDraft = get(cfg, 'social.slimTools');
+  const slimDisk = get(diskCfg, 'social.slimTools');
+  /* diskCfg 为 null（配置还没读到）时不显示"未保存"——否则首帧会误报一次。 */
+  const dirty = slimDisk === null || slimDisk === undefined
+    ? false
+    : stable(slimDraft ?? {}) !== stable(slimDisk);
+
+  /* 草稿档位下的工具计数（仅 custom 档有意义；其余档位由桥按档位表决定，界面不拿草稿猜注册数）。 */
+  const maxKeptOf = stats?.tiers?.off?.keptCount ?? stats?.available ?? 0;
+  const curTierKept = stats?.tiers?.[draftLv]?.keptCount;
+  const curTierDropped = stats?.tiers?.[draftLv]?.droppedCount;
 
   return (
     <div className="card">
@@ -3115,16 +3430,39 @@ function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: a
         再把当前名单存为命名方案，日后可一键载入、改名或删除。载入方案会立即把方案内的名单写入当前名单，
         勾选状态与计数随之同步，无需等待保存。
         <br />
-        注意：本卡使用<b>自定义名单（<code>social.slimTools.level = 'custom'</code>）</b>——
-        桥只在 custom 档下读取手写名单，其余档位一律忽略手写名单，故本卡在挂载、改动名单与载入方案时都会把该档位写回 custom。
+        注意：本卡下方手写名单只在<b>自定义名单档</b>（<code>social.slimTools.level = 'custom'</code>）下生效 ——
+        桥在其余档位一律忽略手写名单，故改动名单与载入方案时都会把档位写回自定义。
+        用上面的「工具注册档位」选择器切到某个预设档，即以该档为准、下面的勾选不参与。
         工具表只在隔离 DSH 启动时取一次，改动后必须点下方按钮重启隔离 DSH，只重启桥不生效。
         <code>social.tools.*</code> 那组开关在调用时才返回「工具未启用」，省不下这份描述。
       </div>
 
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>工具注册档位</span>
+        <Dropdown className="input" id="slim-tier-picker" style={{ maxWidth: 380 }} value={selVal} onChange={pickLevel} placeholder="（配置里是未知档位）"
+          options={TIER_OPT.map((t) => ({ value: t.id, label: `${t.label}（${t.id}）` }))} />
+        {!draftKnown && (
+          <span style={{ fontSize: 12.5, color: '#c0392b' }}>
+            配置里的档位值是「{draftLv || '(空)'}」，不在桥认识的六档之内 —— 选一个档位即可修正。
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--nc-foreground-400)', lineHeight: 1.7, marginBottom: 10 }}>
+        {TIER_DESC[draftKnown ? draftLv : 'off']}
+        改动只写进本页草稿，点上方的<b>保存</b>才落进 <code>config.json</code>；
+        注册数只在<b>隔离 DSH 启动时取一次</b>，故要让注册数跟着变，须点<b>保存并重启隔离 DSH</b>。
+      </div>
+
       <label className="switch-row" style={{ marginBottom: 10 }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => ch('social.slimTools.enabled')(e.target.checked)} />
-        <span>启用名单裁剪（取消勾选 = 所有工具都注册）</span>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabledFlag(e.target.checked)} />
+        <span>启用名单裁剪（取消勾选 = 所有工具都注册 = 完整档）</span>
       </label>
+      {!enabled && draftKnown && draftLv !== 'off' && (
+        <div style={{ fontSize: 12.5, color: '#c0392b', marginBottom: 10 }}>
+          当前「启用名单裁剪」未勾选 —— 桥侧按<b>「未启用」</b>处理，会注册全部工具，上面选的那个档位不生效。
+          勾上该复选框即按所选档位注册。
+        </div>
+      )}
 
       {/* ── 自定义预设方案 ────────────────────────────────────────
           一份方案 = 一份「要精简的工具名单」，即 social.slimTools.deny 的取值。
@@ -3176,12 +3514,58 @@ function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: a
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 10 }}>
-        <span style={{ fontSize: 13 }}>
-          后端注册：<b>{effectiveKept}</b> 个工具（全部 {all.length} 个）· 本卡已精简{' '}
-          <b>{enabled ? all.length - keptCount : 0}</b> 个
-          {enabled ? '' : '（「启用名单裁剪」未勾选，名单暂不生效）'}
-        </span>
+      {/* ── 状态行：只读磁盘真值 + 草稿状态（2026-09-29 重做）────────────────────────
+          原来是 `effectiveKept = enabled ? keptCount : all.length` —— 拿**草稿**算出来的数，
+          显示成"后端注册 94 个（全部）"时磁盘上可能根本不是这个档位（本轮就是这么发现的）。
+          现在分两行：① 磁盘当前值（GET /bridge/config 读回 + 实测注册数）；
+                      ② 本页草稿（与磁盘不一致时给「有未保存的改动」角标）。 */}
+      <div style={{ marginBottom: 10 }}>
+        {diskMsg && (
+          <div style={{ fontSize: 12.5, color: '#c0392b', marginBottom: 6 }}>{diskMsg}</div>
+        )}
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          磁盘当前值：
+          {diskSlim ? (
+            <>
+              <b>{diskSlim.enabled === false ? '完整' : (TIER_OPT.find((t) => t.id === diskSlim.level)?.label ?? diskSlim.level)}</b>
+              <span style={{ color: 'var(--nc-foreground-400)' }}>
+                （<code>social.slimTools.enabled = {String(diskSlim.enabled)}</code>、
+                <code>social.slimTools.level = "{diskSlim.level}"</code>）
+              </span>
+              <br />
+              <span style={{ color: 'var(--nc-foreground-400)' }}>
+                · 桥侧实测注册 <b style={{ color: 'inherit' }}>{typeof stats?.registered === 'number' ? stats.registered : '未知'}</b> 个
+                （可用 {typeof stats?.available === 'number' ? stats.available : '未知'} 个）·
+                来源 <code>{stats?.source || '无'}</code>
+                {diskAt ? ` · 读到于 ${new Date(diskAt).toLocaleTimeString()}` : ''}
+              </span>
+            </>
+          ) : (
+            <span style={{ color: 'var(--nc-foreground-400)' }}>（尚未读到）</span>
+          )}
+        </div>
+        <div style={{ fontSize: 13, lineHeight: 1.8, marginTop: 2 }}>
+          本页草稿：<b>{enabled ? (TIER_OPT.find((t) => t.id === draftLv)?.label ?? draftLv) : '完整'}</b>
+          <span style={{ color: 'var(--nc-foreground-400)' }}>
+            （名单裁剪{enabled ? '已启用' : '未启用'}
+            {enabled ? <>、档位 <b style={{ color: 'inherit' }}>{draftLv}</b></> : null}
+            {draftLv === 'custom' && enabled ? <> · 手写名单已排除 <b style={{ color: 'inherit' }}>{deny.length}</b> 个工具</> : null}）
+          </span>{' '}
+          {dirty ? (
+            <span style={{
+              fontSize: 12, padding: '1px 6px', borderRadius: 6, marginLeft: 4,
+              color: '#fff', background: '#c0392b', whiteSpace: 'nowrap',
+            }}>有未保存的改动</span>
+          ) : (
+            <span style={{ fontSize: 12, color: 'var(--nc-foreground-400)', marginLeft: 4 }}>· 与磁盘一致</span>
+          )}
+        </div>
+        {draftLv === 'custom' && curTierKept !== undefined && (
+          <div style={{ fontSize: 12.5, color: 'var(--nc-foreground-400)', marginTop: 2 }}>
+            自定义档实测：完整 {maxKeptOf} 个 → 本卡保留 {curTierKept} 个
+            {curTierDropped !== undefined ? `（裁掉 ${curTierDropped} 个）` : ''}
+          </div>
+        )}
       </div>
 
       {/* ── 勾选清单（本卡主体控件，不折叠）──────────────────────────────────
@@ -3207,7 +3591,7 @@ function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: a
             const on = denySet.has(n);
             const core = SLIM_CORE_TOOLS.has(n);
             return (
-              <label key={n} className="switch-row" title={core ? '核心工具：关掉机器人基本就失能了' : undefined}>
+              <label key={n} className="switch-row">
                 <input type="checkbox" checked={on} onChange={() => toggle(n)} />
                 <span style={{ minWidth: 0 }}>
                   <span style={{ fontSize: 12.5, color: core ? '#c0392b' : undefined }}>
@@ -3240,11 +3624,17 @@ function SlimToolsCard({ cfg, ch, onSave }: { cfg: any; ch: (p: string) => (v: a
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
-        <button className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => saveAndRestart('both')}>
+        {/* 2026-09-29 新增「保存（不重启）」：原来本卡只有三个"保存并重启"按钮 —— 想"先落盘、
+         *  稍后再重启"没有入口，于是"只勾选框"就成了唯一看起来像生效的动作。
+         *  它走的是同一条 onSave（写 config.json + 重载），不重启任何进程；保存后刷新磁盘真值与实测注册数。 */}
+        <button className="btn btn-soft btn-sm" disabled={!!busy || saving} onClick={saveCard}>
+          {busy === 'save' ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存（只落盘，不重启）
+        </button>
+        <button className="btn btn-primary btn-sm" disabled={!!busy || saving} onClick={() => saveAndRestart('both')}>
           {busy === 'both' ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存并重启（推荐）
         </button>
-        <button className="btn btn-soft btn-sm" disabled={!!busy} onClick={() => saveAndRestart('dsh')}>只重启隔离 DSH</button>
-        <button className="btn btn-soft btn-sm" disabled={!!busy} onClick={() => saveAndRestart('bridge')}>只重启 Core</button>
+        <button className="btn btn-soft btn-sm" disabled={!!busy || saving} onClick={() => saveAndRestart('dsh')}>只重启隔离 DSH</button>
+        <button className="btn btn-soft btn-sm" disabled={!!busy || saving} onClick={() => saveAndRestart('bridge')}>只重启 Core</button>
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
       </div>
     </div>
@@ -3407,7 +3797,6 @@ function renderLockedOrSelect(
     return (
       <span
         className={opts?.lockedClassName ?? 'input'}
-        title="只有一个可选值，已锁定"
         style={{
           cursor: 'default',
           color: 'var(--nc-foreground-400, #9a8fb0)',
@@ -3432,11 +3821,44 @@ function renderLockedOrSelect(
   );
 }
 
-function Field({ path, val, label, ch, onHelp, cfg }: {
+/* 输入框宽度分档（2026-09-30 主人要求「有的输入框不要太长，但是间隔不变」）：
+ * 按**字段语义**给控件补一个 class（.is-short / .is-mid，样式在 src/styles/app.css 的
+ * 「输入框宽度分档」一段），max-width 只作用在控件本身，不碰 .cfg-fields 的列宽与 gap ——
+ * 字段间隔、两列对齐、换行位置全都不变，只是控件在列内左对齐、右侧留白。
+ *   · is-short = 极短内容（固定枚举/档位这类，取值只有几个字符）
+ *   · is-mid   = 中等内容（请求地址 / 密钥 / 令牌 / 路径）
+ * 名单之外一律不加 class（保持拉满）：长自由文本（提示词、语感行、唤醒建议、备注）本就不该收窄。
+ * 数值型字段（下面的 NumInput）统一按短字段收窄：config.json 里的数字无一例外是毫秒 / 条数 /
+ * 次数 / 概率 / 端口 / QQ 号这类短内容，而 NumInput 渲染出来的是 inputMode="decimal"，吃不到
+ * app.css 里给 inputmode="numeric" 的那条兜底规则，所以在这里显式打标。
+ * 下拉框（Dropdown）不打标：它按「最长一项的实测宽度」自定宽（见 components/Dropdown.tsx），
+ * 短选项本来就只有 130px 上下，打标不会更窄，反而会把长选项（如「模型服务商」）截成省略号。 */
+const FIELD_WIDTH: Record<string, string> = {
+  // 极短：取值是固定枚举，只有几个字符
+  'napcat.imageFileMode': 'is-short',
+  // 中等：请求地址 / 密钥 / 令牌 / 路径
+  'dsh.baseUrl': 'is-mid', 'dsh.visionBaseUrl': 'is-mid',
+  'dsh.apiKey': 'is-mid', 'dsh.visionApiKey': 'is-mid',
+  'napcat.wsUrl': 'is-mid', 'napcat.httpUrl': 'is-mid',
+  'napcat.launcherPath': 'is-mid', 'napcat.homeDir': 'is-mid', 'napcat.tmpDir': 'is-mid',
+  /* 2026-09-28：只给镜像站地址（URL）收窄；cookie 与长期令牌是上百字符的长串、且各占一整行，
+     不设宽度上限，让输入框铺满一行更好用（见 Field 的 wide 开关）。 */
+  'pixiv.base': 'is-mid',
+};
+
+function Field({ path, val, label, ch, onHelp, cfg, secret, wide }: {
   path: string; val: any; label: string;
   ch: (p: string) => (v: any) => void;
   onHelp: (h: any) => void;
   cfg?: any;
+  /* 2026-09-28：凭证型字段（pixiv 登录 cookie / 长期令牌）默认遮成圆点。
+     只由 PixivCard 显式传 true —— 不按字段名做全局正则，免得某天某个普通字段
+     突然变成密码框、或者反过来某个凭证继续裸奔。 */
+  secret?: boolean;
+  /* 2026-09-28：整行占满两列（`field-row full`）。给「标签长 + 内容长」的字段用：
+     挤在半列里时标签会被省略号截掉（实测 pixiv cookie 标签 337px 塞进 235px），
+     而 cookie / 长期令牌本身就是上百字符的长串，输入框越宽越好用。 */
+  wide?: boolean;
 }) {
   const [txt, setTxt] = useState<string>(Array.isArray(val) ? val.join('\n') : '');
   // 切服务商时给的提示（"模型列表跟着换了"）
@@ -3449,7 +3871,7 @@ function Field({ path, val, label, ch, onHelp, cfg }: {
   const helpText = HELP[path] ?? HELP[last] ?? (registered ? undefined : unnamedHelp(path, val));
   const tipText = TIP[path] ?? TIP[last];
   const helpBtn = helpText ? (
-    <button type="button" className="icon-btn help-dot" title="点击查看说明"
+    <button type="button" className="icon-btn help-dot"
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); onHelp({ key: last, title: labelText, text: helpText }); }}>
       <HelpCircle size={14} />
     </button>
@@ -3475,7 +3897,7 @@ function Field({ path, val, label, ch, onHelp, cfg }: {
         {renderLabel()}
         {/* 2026-09-12：改成纯输入：没有上下箭头、可以整个删空（保存/失焦时才按 0 落值），
             不再出现"删到最后还剩一个 0 得挪光标去删"的情况。 */}
-        <NumInput className="input" value={val} onCommit={(n) => ch(path)(isProb ? Math.max(0, Math.min(1, n)) : n)} />
+        <NumInput className="input is-short" value={val} onCommit={(n) => ch(path)(isProb ? Math.max(0, Math.min(1, n)) : n)} />
       </label>
     );
   }
@@ -3544,9 +3966,13 @@ function Field({ path, val, label, ch, onHelp, cfg }: {
     }
     // 其余字符串字段：普通输入框（主模型/识图模型在上面已由 ModelField 处理）
     return (
-      <label className="field-row">
+      <label className={'field-row' + (wide ? ' full' : '')}>
         {renderLabel()}
-        <input className="input" value={val} onChange={(e) => ch(path)(e.target.value)} />
+        <input className={'input' + (FIELD_WIDTH[path] ? ' ' + FIELD_WIDTH[path] : '')} value={val}
+          type={secret ? 'password' : 'text'}
+          autoComplete={secret ? 'new-password' : undefined}
+          spellCheck={secret ? false : undefined}
+          onChange={(e) => ch(path)(e.target.value)} />
       </label>
     );
   }
@@ -3580,4 +4006,52 @@ function DocSection({ title, children }: { title: string; children: ReactNode })
       <div style={{ fontSize: 13.5, lineHeight: 1.8, color: '#5d5370' }}>{children}</div>
     </div>
   );
+}
+
+/* ================= 读取预热（2026-09-26） =================
+ * 主人反馈："没正在读取了但是有时候切换，内容还是有延迟显示"。延迟来自"本次会话还没读过这一页"——
+ * 首帧只能给骨架。所以把读取提前到"鼠标停在入口按钮上"这一步：点下去时缓存里已经有值，
+ * 走的就是那条瞬时路径。120ms 延时是为了不让鼠标扫过就发请求。
+ * 模块级一个定时器够用：同一时刻只可能悬停在一个按钮上。 */
+let hoverWarmTimer: ReturnType<typeof setTimeout> | null = null;
+function hoverWarm(fn: () => Promise<void>) {
+  return {
+    onMouseEnter: () => {
+      if (hoverWarmTimer) clearTimeout(hoverWarmTimer);
+      hoverWarmTimer = setTimeout(() => { hoverWarmTimer = null; void fn(); }, 120);
+    },
+    onMouseLeave: () => { if (hoverWarmTimer) { clearTimeout(hoverWarmTimer); hoverWarmTimer = null; } },
+  };
+}
+
+/** 预热本页那几张卡要用的读数。桥配置本体不在这里预热：它走 config-cache（落盘 localStorage），
+ *  本来首帧就有值；对象清单 / 表情包目录 / 记忆库 / 方案列表才是进页面时还得等的那几份。
+ *  remote 传当前目标（连上服务器时传服务端那套），null / 省略 = 本机。
+ *  形状必须与各卡成功回包后 writeCacheValue 写的完全一致，否则预热进去的旧值首帧会渲染成错的。 */
+export async function warmBridgePage(remote?: { id: string; name?: string; host?: string } | null): Promise<void> {
+  const scope = remote ? 'remote' : 'local';
+  await Promise.all([
+    /* 活跃时段卡 */
+    warmCache(`bridge:objects:${remote ? `remote:${remote.id}` : 'local'}`, async () => {
+      const r = await getActivityTargets({ scope, serverId: remote?.id });
+      if (!r?.ok) return null;
+      return {
+        targets: Array.isArray(r.targets) ? r.targets : [],
+        meta: { deepsleep: !!r.deepsleep, deepsleepGroups: Array.isArray(r.deepsleepGroups) ? r.deepsleepGroups : [] },
+      };
+    }),
+    /* 表情包目录（接口无 scope，恒读本机运行目录） */
+    warmCache('bridge:emoji:local', async () => {
+      const r = await memePacks();
+      if (!r?.success) return null;
+      return { packs: Array.isArray(r.packs) ? r.packs : [], bindings: r.bindings ?? {} };
+    }),
+    /* 方案列表（存在管理端 ~/.qb-manager/profiles.json，不分作用域） */
+    warmCache('profiles:local', async () => {
+      const r = await listProfiles();
+      return Array.isArray(r?.profiles) ? r.profiles : null;
+    }),
+    /* NapCat 令牌现状那一卡（挂在本页里，读的还是本机 NapCat） */
+    warmNapcatTokens(),
+  ]);
 }
