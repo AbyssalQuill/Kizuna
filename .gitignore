@@ -45,6 +45,10 @@ tsconfig.tsbuildinfo
 /qq-bridge/python/.venv/
 /qq-bridge/python/GenieData/
 /qq-bridge/python/models/
+# 角色模型里的 tts_models/ 全是 fp16/fp32 权重（每个角色 ~322MB，三个角色合计 ~963MB，
+# 单文件最大 153MB，超 GitHub 100MB 硬限，也没有版本化的必要），由 genie-setup.mjs 现场装回来；
+# 同一层目录下的 character.json / prompt_wav(.json) 不进忽略（是否入库另行决定）。
+/qq-bridge/python/CharacterModels/**/tts_models/
 /qq-bridge/python/.cache/
 /qq-bridge/python/**/__pycache__/
 **/state/
