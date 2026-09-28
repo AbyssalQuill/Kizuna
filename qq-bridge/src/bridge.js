@@ -79,7 +79,7 @@ import { sendToQQ, sendMessages, initQqSendCore, setQqSendBot } from './core/qq-
 // Pixiv 登录态自检：登录态失效时主动发一条私聊提醒（长期令牌 + 旧 cookie 两条路），见 core/pixiv-watch.js
 import { startPixivCookieWatch } from './core/pixiv-watch.js';
 // Pixiv 长期令牌自动轮换（PHPSESSID 换一次 refresh_token 之后，桥自己每小时换 access_token）
-import { startPixivTokenRefresh, pixivAuthState } from './lib/pixiv-auth.js';
+import { startPixivTokenRefresh, pixivAuthState, bootstrapPixivFromConfigCookie } from './lib/pixiv-auth.js';
 import { redactKnownTokensOnly, sweepMessageArtifacts, stripMessageArtifacts, cleanOutboundText } from './lib/outbound-text.js';
 import { planSocialTimeline, isDirectedAtAi, withTimeText, findCjkSpaceWarning, findSplitBoundaryWarning } from './lib/social-timeline.js';
 import { createMediaDomain } from './core/media.js';
@@ -440,6 +440,14 @@ async function main() {
     log('[pixiv] 登录态看护启动失败（不影响主流程）:', error?.message ?? error);
   }
 
+  /* Pixiv「粘贴一次就自动轮换」的最后一公里（2026-09-28）：配置里贴了 cookie、但还没有长期令牌时，
+   * 桥自己拿这份 cookie 去换一次 refresh_token（≡ tools/pixiv-login.mjs 那一步）。
+   * 现场：主人在管理端贴了 PHPSESSID 却一直没有登录态 —— 因为改配置从不触发 OAuth 交换，
+   * 而填进配置的 cookie 只打开旧的"每次请求都带 cookie"那条路，且随时会过期/被覆盖。
+   * 异步发起：pixiv 不可达时最多等一个请求超时，不阻塞桥起来；失败只记一行日志、不重试。 */
+  void bootstrapPixivFromConfigCookie({ logger: (m) => log(m) })
+    .catch((error) => log('[pixiv] 用配置里的 cookie 引导登录态异常（不影响主流程）:', error?.message ?? error));
+
   /* Pixiv 长期令牌自动轮换：每 50 分钟看一眼，access_token 快过期就换，并把轮换后的 refresh_token 落盘。
    * 只有手里真的有 refresh_token 才说这句话 —— 没配的时候不该在启动日志里假装有个登录态。 */
   try {
@@ -786,19 +794,29 @@ async function main() {
   await pumpMux();
 }
 
+/* 本地语音引擎（Genie / GPT-SoVITS sidecar，2026-09-28）是桥拉起的**子进程**：
+ * 桥被 Ctrl+C / 被管理器停掉时，它不会自己退出，会一直占着那几百 MB 内存挂在后台。
+ * 所以两条退出路径都要顺手带走它（用同步版：退出回调里 await 已经没人等了）。
+ * 动态 import + try：语音模块缺失/加载失败绝不能影响桥的退出。 */
+function shutdownLocalVoiceEngine() {
+  import('../lib/genie-tts.js').then((m) => m.killServerSync()).catch(() => {});
+}
+
 process.on('SIGINT', () => {
   log('退出中…');
+  shutdownLocalVoiceEngine();
   saveState();
   releaseLock();
   process.exit(0);
 });
 process.on('SIGTERM', () => {
+  shutdownLocalVoiceEngine();
   saveState();
   releaseLock();
   process.exit(0);
 });
 process.on('unhandledRejection', (error) => log('未处理异常:', error?.message ?? error));
-process.on('exit', () => releaseLock());
+process.on('exit', () => { shutdownLocalVoiceEngine(); releaseLock(); });
 
 // 2026-09-12 保命护栏：stdout/stderr 的管道断了（管理器被重启/被 Electron 壳 taskkill 之后就是这种情况）
 // 会让下一次 console.log 抛 EPIPE —— Node 对 stdout 的未处理 error 直接打死进程，

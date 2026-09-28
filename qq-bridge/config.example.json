@@ -29,12 +29,12 @@
     "dockerPathMap": []
   },
   "pixiv": {
-    "base": "https://x.pixigraph.xyz",
+    "base": "https://pixigraph.online",
     "cookie": "",
     "refreshToken": "",
-    "_cookieNote": "可选的 pixiv 登录态。**2026-09-20 起只需要给一次**：贴一个 PHPSESSID，桥用它换长期 refresh_token（落到 state/pixiv-token.json），之后每 50 分钟自动轮换 access_token，不用再管。填法三种都认：整条 cookie 串、`PHPSESSID=xxxx`、或者只贴会话值本身。**推荐的做法是跑一次引导命令**：`node tools/pixiv-login.mjs --cookie \"PHPSESSID=xxxx\"`（会打印每一步的实测结果，失败时能看到 pixiv 的原始 HTTP 状态/响应体）。留给这个键的意义：旧安装兼容 + 令牌彻底坏掉时的应急。三条约束：① 只发给 pixiv 自己的域名，**绝不发给镜像站**（第三方）；② 只从本地配置读，永不写进返回值/日志/QQ 消息；③ 没登录态时「按名字搜画师」会明确说不支持，不会偷偷退化成关键词搜。自检：node tools/pixiv-login.mjs --status；缓存验证：node tools/pixiv-cache 相关看 tools/test-pixiv-cache.mjs。",
+    "_cookieNote": "可选的 pixiv 登录态。**2026-09-20 起只需要给一次**：贴一个 PHPSESSID，桥用它换长期 refresh_token（落到 state/pixiv-token.json），之后每 50 分钟自动轮换 access_token，不用再管。填法三种都认：整条 cookie 串、`PHPSESSID=xxxx`、或者只贴会话值本身。**推荐的做法是跑一次引导命令**：`node tools/pixiv-login.mjs --cookie \"PHPSESSID=xxxx\"`（会打印每一步的实测结果，失败时能看到 pixiv 的原始 HTTP 状态/响应体）。留给这个键的意义：**2026-09-28 起它就是\"贴一次\"本身** —— 桥启动时若发现有 cookie 却没有长期令牌，会自己拿这份 cookie 换一次（`bootstrapPixivFromConfigCookie`），成功即落盘并进入自动轮换，此后这个键可以删掉；失败只记一行日志、不重试。旧安装兼容 + 令牌彻底坏掉时的应急。三条约束：① 只发给 pixiv 自己的域名，**绝不发给镜像站**（第三方）；② 只从本地配置读，永不写进返回值/日志/QQ 消息；③ 没登录态时「按名字搜画师」会明确说不支持，不会偷偷退化成关键词搜。自检：node tools/pixiv-login.mjs --status；缓存验证：node tools/pixiv-cache 相关看 tools/test-pixiv-cache.mjs。",
     "_tokenNote": "长期令牌（一般**不用手填**：由 tools/pixiv-login.mjs 引导或桥自动轮换写入 state/pixiv-token.json）。真要在配置里覆盖时填这里，优先级比文件高（环境变量 QQBRIDGE_PIXIV_REFRESH_TOKEN 又比它高）。注意：这个值等价于账号权限，别提交进仓库、别贴给别人。轮换间隔 50 分钟、距过期 10 分钟内才换；换失败只记 last_error，不会把桥搞挂。",
-    "_note": "Pixiv 搜图/发图走的第三方镜像站地址。**2026-09-20 定稿的来源顺序**：官方 app-api（OAuth 长期令牌）→ pixiv web ajax（匿名可用）→ **这个镜像站兜底**（它慢得多：同一张图 2.7~5.7s，偶发 15~25s 超时）。换站只改这一行的域名，不用动代码；留空或删掉这个键 = 用内置默认 https://x.pixigraph.xyz。优先级：config.json 的 pixiv.base > 环境变量 QQBRIDGE_PIXIV_BASE > 内置默认（与 dsh.baseUrl 同一套规则，每次调用现读，改完不用重启）。⚠️ 任何来源都**只发给 pixiv 自己的域名**带 cookie/Bearer，镜像站永远拿不到凭证。镜像站搜索接口实测只认 keyword 和 page（mode/s_mode/order/bl/type 全部被忽略），所以 qq_pixiv_search / qq_send_pixiv 的标签/作者/构图/尺寸/AI/时间排序筛选都在桥本地做（三个来源先归一成同一行形状），并支持 scanPages 自动翻页，细节与实测依据见 qq-bridge/src/lib/pixiv.js。"
+    "_note": "Pixiv 的**接口兜底站**地址（只影响 search/detail/native 三条接口线；**取图不看这个键**）。**2026-09-20 定稿的来源顺序**：官方 app-api（OAuth 长期令牌）→ pixiv web ajax（匿名可用）→ **这个兜底站**（它慢得多，接口本身 1~2s）。⚠️ 只能填带 `/api/search.php`、`/api/detail.php` 的 **API 站**：纯图床反代（i.muxmus.com / pximg.cocomi.eu.org / i.pixiv.re，取图链用的就是它们）对 `/api/*` 一律 404，填进来这条兜底线就废了 —— 取图与它无关，代码里固定是 直联 i.pximg.net → i.muxmus.com → pximg.cocomi.eu.org → i.pixiv.re（首推 i.muxmus.com）。换站只改这一行的域名，不用动代码；留空或删掉这个键 = 用内置默认 https://pixigraph.online（2026-09-28 起；此前是同族的 x.pixigraph.xyz，已按要求从默认与界面里去掉）。优先级：config.json 的 pixiv.base > 环境变量 QQBRIDGE_PIXIV_BASE > 内置默认（与 dsh.baseUrl 同一套规则，每次调用现读，改完不用重启）。⚠️ 任何来源都**只发给 pixiv 自己的域名**带 cookie/Bearer，兜底站永远拿不到凭证。搜索接口实测只认 keyword 和 page（mode/s_mode/order/bl/type 全部被忽略），所以 qq_pixiv_search / qq_send_pixiv 的标签/作者/构图/尺寸/AI/时间排序筛选都在桥本地做（三个来源先归一成同一行形状），并支持 scanPages 自动翻页，细节与实测依据见 qq-bridge/src/lib/pixiv.js。"
   },
   "ownerQQ": 0,
   "guard": {
@@ -69,8 +69,8 @@
   "consolePort": 3100,
   "consoleToken": "",
   "prompt": {
-    "_note": "提示词可调项（2026-09-21，管理端 Core 设置的「提示词与语感」卡可改）。styleLine = 唤醒正文每轮带的那一行语感提醒，默认 `[Style] 说人话：短、有态度，别讲课别列举`。它是**离模型最近**的一句话，对小模型的语气影响比几十 k 字符的系统提示词更直接。要求：每轮**完全相同**（别放时间/随机数，否则会打掉前缀缓存）；描述「怎么说」而不是写具体条款；留空 = 不注入这一行。保存后下一条消息生效（热加载，无需重启）。",
-    "styleLine": "[Style] 说人话：短、有态度，别讲课别列举"
+    "_note": "提示词可调项（2026-09-21，管理端 Core 设置的「提示词与语感」卡可改）。styleLine = 唤醒正文每轮带的那一行语感提醒，默认 `[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.`。它是**离模型最近**的一句话，对小模型的语气影响比几十 k 字符的系统提示词更直接。要求：每轮**完全相同**（别放时间/随机数，否则会打掉前缀缓存）；描述「怎么说」而不是写具体条款；留空 = 不注入这一行。保存后下一条消息生效（热加载，无需重启）。",
+    "styleLine": "[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it."
   },
   "tokenCost": {
     "_note": "QQ 里发 /token 时算钱用的单价（¥ / 百万 token，2026-09-21）。默认值与管理端「学习」页的实测计量同源：命中按缓存价、未命中按输入价、输出按输出价，高峰时段（peakHours，北京时）整体乘 peakMult。改这里只影响 /token 报出来的钱，不影响提供方的实际计费。/token [天数] 也可以看近 N 天。",
@@ -173,7 +173,7 @@
       "recommendedNameMention": true,
       "recommendedQuestion": true,
       "recommendedPoke": true,
-      "recommendedHint": "如果你要潜水，推荐先调用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话就可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看 newMessages，判断不需要你参与可直接沉睡，若参与了则下次想睡需再等观察窗口。潜水时长推荐 5~120 分钟，普通消息概率 0.05；@/名字/关键词/提问唤醒建议保持开启。需要等特定某人/某几人时，可额外设置 triggers.speakerIds。",
+      "recommendedHint": "如果你要潜水，推荐先调用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话就可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看 newMessages，判断不需要你参与可直接沉睡，若参与了则下次想睡需再等观察窗口。潜水时长推荐 5~120 分钟；普通消息概率一律按唤醒正文 [WakeRef] 行里的主人配置来，不要在这里写死任何概率数字。@/名字/关键词/提问唤醒建议保持开启。需要等特定某人/某几人时，可额外设置 triggers.speakerIds。",
       "batchWindowMs": 8000,
       "maxWakePerMinute": 1,
       "maxWakePerHour": 12,
@@ -197,7 +197,11 @@
       "linearCapMs": 4000,
       "linearJitterRatio": 0.25,
       "linearResetMs": 20000,
-      "_linearNote": "打字节拍只有这一种（按字数）：同一条回复里第 1 条气泡立即发，第 2 条起等 本条字数 × linearPerCharMs 毫秒（上下浮动 linearJitterRatio，夹在 linearMinMs~linearCapMs 之间）。linearEnabled=false = 完全不等。这些项都可以在 QQ 里用自然语言让机器人改（仅 owner 私聊可用）。旧的 linearBaseMs/linearStepMs/gapBaseMs/gapPerCharMs/gapJitterRatio 已废弃，写了也不生效。"
+      "_linearNote": "打字节拍只有这一种（按字数）：同一条回复里第 1 条气泡立即发，第 2 条起等 本条字数 × linearPerCharMs 毫秒（上下浮动 linearJitterRatio，夹在 linearMinMs~linearCapMs 之间）。linearEnabled=false = 完全不等。这些项都可以在 QQ 里用自然语言让机器人改（仅 owner 私聊可用）。旧的 linearBaseMs/linearStepMs/gapBaseMs/gapPerCharMs/gapJitterRatio 已废弃，写了也不生效。",
+      "musicCardStyle": "share",
+      "musicCardOnly": false,
+      "neteaseUct2": "",
+      "_musicNote": "音乐分享卡三项（界面上是单独的「音乐卡片（网易云 / QQ 音乐）」卡）：musicCardStyle = 卡片版式（share = 与 QQ 真·分享卡同版式、手机端画封面；music = QQ 内播形态但不画封面；native = 原生音乐段），也可用环境变量 QQBRIDGE_MUSIC_CARD_STYLE 覆盖；musicCardOnly = 只发真卡、卡片没拼出来就报错（不发链接兜底），本机实测最好的一档是 true 配 24 位 neteaseUct2；neteaseUct2 = 网易云令牌，只用于发给主人自己的私聊卡（补上它私聊卡才不过「将要访问」中转页），发给别人/群一律不带。"
     },
     "wait": {
       "defaultMs": 30000,

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = 'D:\\MoonBot\\resources\\runtime\\qq-bridge';
+const ROOT = 'D:\\Kizuna\\resources\\runtime\\qq-bridge';
 
 const cfg = JSON.parse(readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 console.log('config social.send =', JSON.stringify(cfg.social.send));

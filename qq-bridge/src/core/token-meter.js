@@ -757,15 +757,25 @@ export function getTokenReport(days = 7, opts) {
   const sinceStart = (((bjMinutes(nowTs) - startBjMinutes) % 1440) + 1440) % 1440;
   const elapsedFraction = Math.max(0, Math.min(1, sinceStart / 1440));
   const base = today.total + today.estTotal;
-  /* 线性外推（老口径）：把"当前速率"当成全天速率 —— 机器人夜里几乎不用，这个值系统性偏高，保留只为对照 */
-  const todayLinearEstimatedTotal = elapsedFraction <= 0.05 ? base : Math.round(base / elapsedFraction);
+  /* 2026-09-26：slotNow 提前到这里 —— 线性外推与时段法都要用。 */
+  const slotNow = slotOf(nowTs);
+  /* "今天的实时速度" = 最近 1~2 个计费时段的平均用量（取自 meter.slotByDay 里今天那一行）。 */
+  const todaySlots = (slotNow >= 0 ? meter.slotByDay.get(todayKey) : null) || null;
+  const slotAt = (s) => (Array.isArray(todaySlots) ? Number(todaySlots[s]) || 0 : 0);
+  const recentRate = slotNow >= 1 ? (slotAt(slotNow) + slotAt(slotNow - 1)) / 2 : slotAt(slotNow);
+  /* 线性外推（老口径）：把"当前速率"当成全天速率 —— 机器人夜里几乎不用，这个值系统性偏高。
+   * 2026-09-26 给它加一道上限：不超过"今天最近速度 × 剩余时段数 × 0.6"（0.6 = 入夜后会变冷的折扣），
+   * 于是深夜时它不会再把当天用量放大好几倍；习惯曲线够用时本来也不会走这条路。 */
+  const remainingSlotCount = Math.max(0, 24 - Math.max(0, slotNow) - 1);
+  const todayLinearEstimatedTotal = elapsedFraction <= 0.05
+    ? base
+    : Math.min(Math.round(base / elapsedFraction), Math.round(base + recentRate * remainingSlotCount * 0.6));
   /* 2026-09-19 修"今日预计虚高"：按同一时段的近 7 天平均估剩余时段：
    *   · 时段槽 = 计费日内的第几个小时（0 = 换日那一刻，默认北京 08:00）；
    *   · 历史取最近 7 个计费日里、该槽的平均用量（不含今天）；
    *   · 剩余槽的预估之和 + 今日已用 = 预计；
    *   · 历史不足（新装/刚清过日志）时退回线性外推，并在 note 里说明用了哪种。
    * 实测差异：本机 2026-09-18 那天按线性外推 18:00 得到 1.9 亿，按时段平均只有 6 千多万（对数）。 */
-  const slotNow = slotOf(nowTs);
   let remainingEstimate = 0;
   let remainingSlots = 0;
   let slotSamples = 0;
@@ -781,12 +791,50 @@ export function getTokenReport(days = 7, opts) {
     if (pastDays.length) remainingEstimate = remainingEstimate * (pastDays.length / Math.max(1, pastDays.length));
   }
   const shapeUsable = slotSamples >= 3 && remainingSlots > 0;
-  /* 时段法只在"有历史 + 今天确实在按同样的节奏走"时更可信：
-   * 若今日已用已远超"历史同时段"的水平（异常大的一天），两者取大，别把明显更多的一天报小。 */
+  /* 2026-09-26：时段法只看历史，会在"今天明显比往常忙"时把剩余报小。补一个热度比：
+   *   已过去的时段里，今天的"每活跃时段平均用量" ÷ 历史同期的同一个值 = heat。
+   *   heat>1（今天更忙）时按比例放大剩余（上限 ×4，防单日尖峰失真）；heat≤1 不动 ——
+   *   宁可略高，也不要在冷清的一天把预计压小。 */
+  let heat = 1;
+  if (slotNow > 0) {
+    const heatDays = [...meter.slotByDay.entries()].filter(([k]) => k < todayKey);
+    let tSum = 0, tCnt = 0, hSum = 0, hCnt = 0;
+    for (let s = 0; s <= slotNow; s += 1) {
+      const tv = slotAt(s);
+      if (tv > 0) { tSum += tv; tCnt += 1; }
+      for (const [, arr] of heatDays) { const hv = Number(arr?.[s]) || 0; if (hv > 0) { hSum += hv; hCnt += 1; } }
+    }
+    if (tCnt > 0 && hCnt > 0) heat = (tSum / tCnt) / (hSum / hCnt);
+  }
+  /* 2026-09-26 调整：热度不再无上限地放大预计 —— 一律先按"今天的实时速度走完剩余时段"封顶。
+   *   · 计费日预计 = min(历史时段法外推, base + 最近速度 × 剩余时段数 × 0.8)；
+   *   · 自然日"到 24:00 为止"的剩余另算（restOfDayEstimate），共用同一把尺子。
+   * 0.8 = 入夜后活跃度通常低于傍晚那两小时的折扣。 */
+  const paceCap = Math.round(base + recentRate * remainingSlotCount * 0.8);
   const todayEstimatedTotal = shapeUsable
-    ? Math.max(base, Math.round(base + remainingEstimate))
-    : todayLinearEstimatedTotal;
+    ? Math.min(Math.max(base, Math.round(base + remainingEstimate)), Math.max(base, paceCap))
+    : Math.min(todayLinearEstimatedTotal, Math.max(base, paceCap));
   const projectedBy = shapeUsable ? 'shape' : (elapsedFraction <= 0.05 ? 'none' : 'linear');
+
+  /* 自然日口径：从现在到北京 24:00 还剩几个计费时段槽 = 23 - 当前北京小时（槽 0 = 北京 08:00 换日，
+   * 槽与小时一一对应，所以 (slotNow + k) % 24 就是接下来第 k 个小时的那个槽）。
+   * 不能直接用 remainingSlotCount：那是"到明天换日"，含次日 00:00–08:00，属于明天的自然日。 */
+  const bjH = bjHourOf(nowTs);
+  const slotsToMidnight = Math.max(0, 24 - bjH - 1);
+  let restOfDayEstimate = 0;
+  if (slotNow >= 0 && slotsToMidnight > 0) {
+    const restDays = [...meter.slotByDay.entries()].filter(([k]) => k < todayKey);
+    let histRest = 0;
+    for (let k = 1; k <= slotsToMidnight; k += 1) {
+      const s = (slotNow + k) % 24;
+      let sum = 0, cnt = 0;
+      for (const [, arr] of restDays) { const v = Number(arr?.[s]) || 0; if (v > 0) { sum += v; cnt += 1; } }
+      if (cnt > 0) histRest += sum / cnt;
+    }
+    if (heat > 1) histRest *= Math.min(heat, 2);          // 今天更忙：最多按 2 倍放大
+    const paceRest = recentRate * slotsToMidnight * 0.8;   // 上限：按今天的实时速度
+    restOfDayEstimate = Math.max(0, Math.round(Math.min(histRest, paceRest)));
+  }
 
   const nowHour = bjHourOf(nowTs);
   const todayHourly = [];
@@ -807,14 +855,14 @@ export function getTokenReport(days = 7, opts) {
   const windowText = `计费日口径：北京时 ${dayWindow.startBj} 换日（对齐提供方控制台${meter.dayOffsetMin === 480 ? '，即 UTC 自然日' : ''}）；分时图仍按北京自然日`;
   const note = base > 0
     ? `${windowText}。${projectedBy === 'shape'
-      ? '「今日预计」按最近 7 天同一时段的平均用量估算剩余时段（机器人夜里几乎不烧 token，线性外推会明显偏高）'
+      ? '「今日预计」按最近 7 天同一时段的平均用量估剩余，并按今天的实时速度封顶（不会因为最近很忙就无限外推）'
       : projectedBy === 'linear'
-        ? '习惯曲线还没攒够（缺少近 7 天同时段数据），「今日预计」暂按当前速率线性外推，仅供参考、偏高的可能性大'
+        ? '习惯曲线还没攒够（缺少近 7 天同时段数据），「今日预计」按当前速率线性外推，并按今天的实时速度设了上限'
         : '今日记录尚少（<5% 时间），暂不外推，直接显示当前值'}`
     : `${windowText}。今日暂无用量记录（尚未收到 usage 帧或可估算的 transcript）`;
 
   return {
-    dates, today, todayEstimatedTotal, todayLinearEstimatedTotal, projectedBy, todayHourly, note, dayWindow,
+    dates, today, todayBase: base, restOfDayEstimate, todayEstimatedTotal, todayLinearEstimatedTotal, projectedBy, todayHourly, note, dayWindow,
     reconcile: tokenReconcileStatus(),
   };
 }

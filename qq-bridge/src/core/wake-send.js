@@ -340,7 +340,30 @@ function wakeRefLine(key) {
   return `[WakeRef] 主人配置的普通消息插话概率=${ownerProb}（当前生效=${cur}，来源=${src}）`
     + (src === 'model'
       ? '；qq_set_wake_config 时若不特别指定，请改回主人的值。'
-      : '；qq_set_wake_config 时把 triggers.probability 填成这个值。');
+      : '；qq_set_wake_config 时把 triggers.probability 填成这个值。')
+    + deepsleepLine(key);
+}
+
+/**
+ * 「群聊全程静默」这一行（2026-09-26）。
+ * 主人反馈「群聊唤醒坏了」，实情是被 `social.deepsleep` 总开关掐着，而模型对此一无所知：
+ * 主人让它去群里恢复说话，它既看不到状态、也想不起自己手里有 qq_deepsleep 这个工具
+ * （工具一直在，只是从没在正文里出现过名字）。静默开启时群聊不产生唤醒，所以这行主要出现在
+ * 私聊轮 —— 正好是主人问「群里怎么不理我」的那一轮；单群静默名单同理如实报出。
+ */
+function deepsleepLine(key) {
+  const master = cfgRef.social?.deepsleep === true;
+  const silent = Array.isArray(cfgRef.social?.deepsleepGroups) ? cfgRef.social.deepsleepGroups.map(String) : [];
+  const gpId = key.startsWith('group:') ? key.slice('group:'.length) : '';
+  const inSilentList = !!gpId && silent.includes(gpId);
+  if (!master && !inSilentList) return '';
+  if (master) {
+    return '\n[Deepsleep] 群聊全程静默=开启（主人设的总开关）：所有群聊消息都不唤醒你、也不许主动回群，私聊照常。'
+      + '主人若让你恢复群聊，直接调 qq_deepsleep(enabled=false) 关掉它；'
+      + '主人在群里发 /start 也能恢复（这条由桥直接处理、不经过你，所以静默期间不代表他发不出去）。';
+  }
+  return `\n[Deepsleep] 本群在「单群静默名单」里（${gpId}）：群里消息不唤醒你、也不许主动回群，私聊照常。`
+    + '这个名单归主人管，你改不了；主人要恢复时提醒他在管理器的静默群聊里改。';
 }
 
 /* 2026-09-20 唤醒正文补 [Session] 行 —— 修「pixiv 发图发错群」的根因：
@@ -358,21 +381,22 @@ const sessionLine = (key) => `[Session] ${key}\n`;
  * 这是教科书腔（定义句式 + 步骤腔 + 并列清单），正是"像人机"的主因。
  * 系统提示词里已经有 [SPEECH RULES] 的 TEACHER MODE 与 [COMPREHEND] 3b，但小模型对最近那段上下文
  * 的权重最高：模板化的规则藏在几十 k 字符的系统提示词里，往往压不住这一轮正文的语气。
- * 所以正文里带一句 34 字符的提醒（每轮固定 = 稳定前缀，按缓存读计价，成本可忽略）。
+ * 所以正文里带一句很短的提醒（每轮固定 = 稳定前缀，按缓存读计价，成本可忽略）。
  *
  * 2026-09-21 需求「[style] 提示词也要支持管理端 Core 设置界面编辑」：
  * 文案改走 config.json 的 `prompt.styleLine`（管理端 Core 设置可改，保存后下一条唤醒即生效）。
- * 默认值仍与 1.2.4 定稿逐字一致；置空 = 不注入这一行。
+ * 默认值 = 2026-09-26 主人要求改成的那句英文（更拟人）；置空 = 不注入这一行。
  * 读的时候剥掉控制字符与换行（它会被拼进正文的一行里，混进换行会撑破唤醒正文的结构），
  * 并缓存住上一次的结果字符串 —— 保证同一轮配置下拼出来的正文逐字节相同（前缀缓存友好）。 */
-const DEFAULT_STYLE_LINE = '[Style] 说人话：短、有态度，别讲课别列举';
+const DEFAULT_STYLE_LINE = '[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.';
 let styleLineCache = { key: null, text: '' };
 export function currentStyleLine() {
   const raw = cfgRef?.prompt?.styleLine;
   const text = raw === undefined || raw === null ? DEFAULT_STYLE_LINE : String(raw);
   const key = text;
   if (styleLineCache.key === key) return styleLineCache.text;
-  const clean = text.replace(/[\r\n\u0000-\u001f]+/g, ' ').trim().slice(0, 200);
+  /* 截断上限 200 → 400（2026-09-26）：默认那行英文提醒就有 255 字符，200 会把它切半。 */
+  const clean = text.replace(/[\r\n\u0000-\u001f]+/g, ' ').trim().slice(0, 400);
   styleLineCache = { key, text: clean ? `${clean}\n` : '' };
   return styleLineCache.text;
 }
@@ -510,14 +534,11 @@ export function buildWakePrompt(key, reason) {
   }
   if (lastMsg) statusBits.push(`last from ${speakerTag(lastMsg)}[${fmtBeijing(Number(lastMsg.time) || 0)}]: ${String(lastMsg.text || lastMsg.plain || '').slice(0, 20)}`);
   if (lastAiMin != null) statusBits.push(`said ${lastAiMin}min ago`);
-  /* 2026-09-24 需求：去掉唤醒正文里的时间行（原 `[Now] YYYY-MM-DD 周X HH:MM (Beijing, epochMs=…)`）。
-   * 原话："那个不准"。确实不准：这一行是这份正文被拼出来的那一刻，而模型真正读到、思考、
-   * 动手时已经过去一段时间（排队、多步工具调用、重发都要时间），模型把它当"现在"就会答错时刻。
-   * 现在"现在几点"一律由工具现取：get_time（北京时间、到分钟，与本系统消息行/工具结果同口径，见
-   * src/mcp-napcat-safe.js + lib/time.js 的 fmtBeijing）。epochMs 也一并去掉 —— 它同样只是"生成那一刻"，
-   * 留着还会诱导模型拿它去减消息时间戳算出错误的"多久之前"。
-   * 保留 [Status]（未读数/最后说话的人/潜水模式等）—— 那些是过去发生的事实，不会过期。 */
+  /* 2026-09-24 曾去掉这一行（理由：拼正文的时刻 ≠ 模型读到的时刻）；2026-09-26 结论相反 —— 去掉了更糟：
+   * 模型干脆不调 get_time，直接凭感觉答，"现在几点/几号/周几"经常错（晚上聊到半夜还说白天）。
+   * 现在给回一个"发出时刻"，并当场说明它可能已经过期、要精确就用 get_time —— 有基准可校，模型不会瞎猜。 */
   const nowMs = Date.now();
+  const nowLine = `[Now] ${fmtBeijing(nowMs)}（北京时间；这是本轮唤醒发出的时刻，若你已经做了多步工具调用，请用 get_time 重新取）\n`;
   const statusLine = `[Status] ${statusBits.join('; ')}\n\n`;
   const wc = st.wakeConfig || {};
   const wcTr = wc.triggers || {};
@@ -535,7 +556,7 @@ export function buildWakePrompt(key, reason) {
       // 2026-09-12 规则搬家：原 rulesShort（12 条：跨会话读取/转达/@/提醒/撤回/长文 docx/
       // 收尾与配额/owner 私聊收尾/活跃时段/系统配置键，共 4,274 字符）已整段搬进系统提示词
       // （agent.cordis.yml 的 [RULES] 段）——唤醒注入不再每轮重复塞一遍，省的是长期驻留的上下文。
-  const base = tokenLine + statusLine + wakeLine + voiceTurnHint(key) + memeTurnHint(key) + memoryLine + participationLine + (gInfoText ? gInfoText + '\n' : '') + (groupListText ? groupListText + '\n\n' : (gInfoText ? '\n' : ''));
+  const base = tokenLine + nowLine + statusLine + wakeLine + voiceTurnHint(key) + memeTurnHint(key) + memoryLine + participationLine + (gInfoText ? gInfoText + '\n' : '') + (groupListText ? groupListText + '\n\n' : (gInfoText ? '\n' : ''));
   // 2026-09-12 规则搬家：原 protocolNote（2,886 字符的「回合协议」：➤ 哨兵含义、读/发/收尾步骤、
   // 步数预算、等待工具禁令）已整段搬进系统提示词的 [WAKE DATA] / [WAKE TYPES] 两段。
   // 现在唤醒正文只留数据行：[Token] + [Wake ...]/[Unread n]/[Mid-turn]/[Note]...，不再携带规则散文。
@@ -1765,12 +1786,12 @@ export async function sendWakePrompt(key, reason) {
      * 同一处还带上 [WakeRef]（用户配的插话概率）——见 wakeRefLine 的说明，它必须每轮都在。 */
     const diceLines = voiceTurnHint(key) + memeTurnHint(key);
     const diceBlock = `\n${wakeRefLine(key)}${diceLines ? '\n' + diceLines.replace(/\n+$/, '') : ''}`;
-    /* 2026-09-24 需求：哨兵轮也不再带时间行（这里原来补 `[Now] …`，理由曾是"省一步查历史"）。
-     * 现由 get_time 工具现取，正文里一个时间数字都不留 —— 正文里任何"现在"都只是拼装时刻，会过期。
-     * 历史注释（保留以便理解当初为什么加）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，
-     * 模型想算"这条多久之前"只能再花一步调 qq_get_recent_messages；而 [Now] 每轮变化不影响前缀缓存
-     * （这份正文就是本轮新加的 user 消息，整条本来就不在缓存里）。现在这条取舍反过来了：
-     * 与其给一个会过期的数字，不如让模型在真需要时花一步取一次准的。 */
+    /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，
+     * 实测模型常常不调 get_time 就直接猜时刻/星期，所以基准行必须每轮都在；要更准再用 get_time 取一次。
+     * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
+     * 只能再花一步调 qq_get_recent_messages；而 [Now] 每轮都变，但这份正文本身就是本轮新增的 user 消息，
+     * 本来就不在前缀缓存里，所以不影响缓存命中。 */
+    const nowSentinel = `[Now] ${fmtBeijing(Date.now())}（北京时间；这是本轮的发出时刻，若已多步工具调用请用 get_time 重取）\n`;
 
     // 工具全关的兜底（几乎不会发生）：没有 unread 工具就回退到两行说明版，避免哨兵悬空。
     const tools = cfgRef.social?.tools;
@@ -1778,7 +1799,7 @@ export async function sendWakePrompt(key, reason) {
     if (!hasAnyTool) {
       const unread = (st.unread || []).length;
       const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck' };
-      promptText = `[Token] ${st.agentToken}\n[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     } else {
       // 哨兵轮 prompt 每轮都带当前令牌：模型不必凭记忆/跨轮次查找 token，
       // 杜绝"上下文轮换后 token 抄错 → 工具全 403 → 模型看不到消息 → 空唤醒乱回"链路。
@@ -1800,7 +1821,7 @@ export async function sendWakePrompt(key, reason) {
        * 实测（state/tool-calls.jsonl 1966 次调用）qq_send_sticker 只有 5 次（≈1/54 条消息），
        * 而配置的概率是 0.6 —— 低 15~20 倍，正是"每会话只掷一次骰"的形状。
        * 抽签函数本身是纯的（只读配置 + Math.random，不写任何状态），所以每轮都掷没有副作用。 */
-      promptText = `[Token] ${st.agentToken}\n${ownerTag}${trustedHereTag}${notOwnerTag}\n[Session] ${key}\n${currentStyleLine()}[Wake ${reasonTag}]${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}\n[Session] ${key}\n${currentStyleLine()}[Wake ${reasonTag}]${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。

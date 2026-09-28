@@ -5,7 +5,7 @@
 //   14:28:15 group:868756515 atUserId=874987121 ← 同样命中当时 recentMessages 里的 messageId
 // 两者都 → NapCat `Get Uid Error` → 工具统一发送**部分成功 1/2 条** → 模型重发整批 → 已送到的那条双发。
 //
-// 本测试用的 id / QQ 号**全部取自 D:\MoonBot\resources\runtime\qq-bridge\state\social-state.json 的真实现场数据**，
+// 本测试用的 id / QQ 号**全部取自 D:\Kizuna\resources\runtime\qq-bridge\state\social-state.json 的真实现场数据**，
 // 其中包括同一个 9 位数值既可能是 messageId（874987121）也可能是真 QQ 号（878281653）——
 // 这条正是"为什么不能用长度/位数当判据"的硬证据。
 //

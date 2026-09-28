@@ -22,6 +22,7 @@ import { readJsonSafe, atomicWriteJson, atomicWriteText } from '../lib/json-fs.j
 import { dshReady } from './dsh-session.js';
 import { learnerSessions, learnerWaiters, learnerCollectors, markPersistentLearner, unmarkPersistentLearner, isLearnerSessionGone } from './slang.js';
 import { initMemoryDb, setProfileField, getProfile, profileDisplayName } from './memory.js';
+import { initChatDb } from './chat-db.js';
 import { ensureLearningToken } from './learning-token.js';
 import { composePersonaProfile } from './persona-text.js';
 
@@ -220,8 +221,12 @@ function cleanSampleText(rawContent) {
  *  兼容两种调用：collectTargetSamples(uid, days)（数字=回看天数）或
  *  collectTargetSamples(uid, { days?, windowMs? })（自动间隔用 windowMs 拉 [now-windowMs, now]）。 */
 export function collectTargetSamples(uid, opts = {}) {
-  const db = initMemoryDb();
-  if (!db) return { ok: false, error: '记忆库不可用', samples: [] };
+  /* 2026-09-26 修「人格学习样本一条都取不到」：2026-09-24 聊天记录从 memory.db 搬到 state/chat.db
+   * （core/chat-db.js），这里却还在向 memory 库要 chat_messages —— 线上每 30 分钟一轮的自动间隔学习
+   * 一直报 `no such table: chat_messages`（2026-09-26 12:48-13:00 实测三轮），两个查询全灭、样本恒为空，
+   * 人格学习等于空转。换成 chat.db 的句柄即可：列名一致（conv_key / sender_* / ts / ts_ms / direction / kind 都在）。 */
+  const db = initChatDb();
+  if (!db) return { ok: false, error: '聊天记录库不可用', samples: [] };
   let windowMs = AUTO_WINDOW_DEFAULT_MS;
   if (typeof opts === 'number') {
     windowMs = Math.max(1, Number(opts) || 30) * 86400000;
@@ -296,6 +301,7 @@ Analyze this person's language style, personality, habits, and how an AI assista
   "personality": ["性格推断 1", "性格推断 2"], 
   "chatHabits": "活跃时段/回复风格/话题开启方式",
   "topics": ["偏好话题 1", "偏好话题 2"],
+  "tags": ["短标签 1", "短标签 2"],
   "taboos": ["ta 不喜欢/忌讳的内容，可推断才写，否则省略"],
   "relationshipAdvice": "小鲸鱼与 ta 日常相处的建议（聊天节奏、称呼、雷区）",
   "personaEn": "ONE English persona paragraph (see the personaEn rule below; this is the only field written in English, NOT Chinese)"
@@ -315,7 +321,9 @@ ${chatLines}`;
 // 避免已存在的学习会话揣着旧说明、与新提醒的格式对不上。
 // v5：payload 新增英文字段 personaEn（要能直接当机器人人设用的英文正文）——老会话必须重注入，
 //     否则它们会一直按 v4 的字段表产出、永远交不出 personaEn。
-export const PERSONA_BRIEF_VERSION = 5;
+// v6：payload 新增 tags（给主人画像页当标签用；2026-09-26 主人要求「标签由人格学习时自动加上，
+//     别再拿记忆高频词兜底」）。同样必须重注入，否则老会话永远交不出 tags、标签栏会一直空着。
+export const PERSONA_BRIEF_VERSION = 6;
 /** 本轮提醒的开头标记，首轮说明里引用同一个串；改它必须同时改 PERSONA_BRIEF_VERSION。 */
 export const PERSONA_RUN_MARKER = '[PERSONA RUN]';
 /**
@@ -357,11 +365,16 @@ The payload JSON object (keys exactly as written; values in Simplified Chinese �
   "personality": ["性格推断 1", "性格推断 2"],
   "chatHabits": "活跃时段/回复风格/话题开启方式",
   "topics": ["偏好话题"],
+  "tags": ["短标签，3-8 个"],
   "taboos": ["不喜欢/忌讳的内容，能推断才写"],
   "relationshipAdvice": "小鲸鱼与 ta 相处建议（节奏、称呼、雷区）",
   "personaEn": "ONE English persona passage - the only field written in English, see the rule below"
 }
 Rules: personality 2-4 items; arrays at most 10 items; omit any field you cannot infer.
+tags: 3-8 short labels for this person (2-6 Chinese characters each, noun or topic words such as
+「三角洲行动」「写代码」「深夜聊天」). They are shown as chips in the owner panel, so do NOT write
+sentences, do NOT use punctuation or commas, do NOT repeat what topics already says, and omit the
+field entirely when you cannot infer anything - an empty list is better than filler words.
 
 personaEn (required - this is why the run exists):
 - Write a persona the assistant 小鲸鱼 can put on directly, rewritten from this person's way of talking: who you are, how you speak, what you care about, what tone you hold, and what you must avoid.
@@ -417,6 +430,9 @@ export function normalizePersona(raw) {
     personality: '',
     chatHabits: str(raw.chatHabits).slice(0, 400),
     topics: strArr(raw.topics, 10),
+    // 标签：人格学习产出（主人画像页的 chips 唯一来源）。只做长度与去空收尾，
+    // 2 字以下丢弃（通常是「的」「嗯」这类残词），最多 10 个。
+    tags: strArr(raw.tags, 10).map((x) => x.slice(0, 12)).filter((x) => x.length >= 2),
     taboos: strArr(raw.taboos, 10),
     relationshipAdvice: str(raw.relationshipAdvice).slice(0, 600),
     // 英文人设正文：这一轮唯一要求"纯英文"的字段（要拿它覆盖机器人自己的人设）。
@@ -532,6 +548,8 @@ export function persistPersonaResult(uid, parsed, sampleCount) {
     personality: parsed.personality || prev.personality || '',
     chatHabits: parsed.chatHabits || prev.chatHabits || '',
     topics: parsed.topics.length ? parsed.topics : (prev.topics || []),
+    // 标签同 topics：本轮没交就沿用上一次的，绝不清空（清空等于把主人已经看惯的标签抹掉）
+    tags: parsed.tags.length ? parsed.tags : (prev.tags || []),
     taboos: parsed.taboos.length ? parsed.taboos : (prev.taboos || []),
     relationshipAdvice: parsed.relationshipAdvice || prev.relationshipAdvice || '',
     profile: profileText || prev.profile || '',
@@ -574,7 +592,7 @@ export function recordPersonaSubmit(uid, payload, sampleCount) {
   // 至少要有一个有效字段，避免模型交空壳把旧档案抹了（personaEn 也算有效：
   // 有些轮次只想要那段英文正文）
   const meaningful = parsed.personality || parsed.nickname || parsed.style || parsed.chatHabits
-    || parsed.topics.length || parsed.catchphrases.length || parsed.addressTerms || parsed.relationshipAdvice
+    || parsed.topics.length || parsed.tags.length || parsed.catchphrases.length || parsed.addressTerms || parsed.relationshipAdvice
     || parsed.personaEn;
   if (!meaningful) return { ok: false, error: 'payload 没有任何可落库的字段（全部为空）' };
   const count = Math.max(0, Math.min(100000, Number(sampleCount) || 0));

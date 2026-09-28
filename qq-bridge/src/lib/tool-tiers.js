@@ -100,6 +100,28 @@ const PROMPT_NAMED = [
   'qq_get_file_content',
 ];
 
+/** 远程救援通道（2026-09-26 加）：全是"主人不在电脑前也能让机器人自救"的那几件小工具。
+ *
+ *  事故现场：线上档位是 `low`，而 `qq_deepsleep` 当时**正躺在 low 的 drop 名单里** ——
+ *  于是主人让机器人"把群聊解封"，模型在工具表里根本找不到这个工具，只能说"我调不到"。
+ *  同一天还发现 medium / high 是 keep 白名单语义，这三件一个都没进名单 → 一旦主人为了省钱
+ *  切到 medium，救援通道会**静默消失**（这类故障在真机上极难定位：模型只会说"工具不存在"）。
+ *
+ *  判据不是"可能有用"，而是：① 体积小（三条 schema 合计约 1.6 千字符，占全量 2%）；
+ *  ② 没有替代路径 —— 关掉全程静默、加群白名单、授权管理员这三件事，只有主人本人能远程触发，
+ *  工具被砍掉时主人只能回到电脑前用管理器。extreme 档只保前两条（解封群聊的两件事）。 */
+const MANAGEMENT = [
+  'qq_deepsleep',           // 关/开全程群静默（唯一的远程解封手段）
+  'qq_whitelist',           // 加/移群白名单（机器人在那个群能不能说话）
+  'qq_admin_set',           // 授权/取消管理员（不在 extreme 档保留）
+  /* 2026-09-26 加：配置读写三件（主人要求「让机器人可以调桥配置的所有配置，包括语音页面」）。
+   * 同样是"主人不在电脑前也能改"的那一类：读一条值、改一条值、管音色库。
+   * 与上面三件同理，medium/high 是 keep 白名单，不加进来就会在换档时静默消失。 */
+  'qq_config_get',          // 读桥配置/语音页配置（密钥打码）
+  'qq_config_set',          // 改一个配置点路径（服务端读真值改写，密钥类拒绝）
+  'qq_voice_manage',        // 音色库：列/建（文字设计或复刻已有音色）/删/设默认
+];
+
 export const TOOL_TIERS = {
   off: { label: '不裁剪', note: '全部工具都注册（默认；与改动之前行为一致）', keep: null },
   low: {
@@ -114,7 +136,9 @@ export const TOOL_TIERS = {
       'qq_get_sticker_image', 'qq_sticker_note', 'qq_set_sticker_remark',
       'qq_history_delete', 'qq_history_clear',
       'qq_memory_append', 'qq_memory_remove', 'qq_memory_clear',
-      'qq_deepsleep', 'qq_remove_friend', 'qq_report_feedback',
+      /* 2026-09-26 撤出 drop 名单（主人明确要求「让 bot 也能知道并修改全程静默」）：
+       * 它的 schema 只有一个布尔，留着不省几个 token，砍掉的却是主人唯一能远程解封群聊的手段。 */
+      'qq_remove_friend', 'qq_report_feedback',
       'qq_persona_learn_start', 'qq_persona_learn_stop', 'qq_persona_learn_status',
       /* 2026-09-22 撤出名单（当时判"零调用"，实际在用）：留着它们，否则会静默砍掉在用的能力：
        * qq_send_pixiv / qq_pixiv_search（画画）、qq_music_search（点歌）、qq_send_rich（卡片）、
@@ -128,12 +152,12 @@ export const TOOL_TIERS = {
   medium: {
     label: '中',
     note: '协议必需 + 实测用到的 + 提示词点名的两条 + 一圈便宜的小工具（群成员/群档案/群历史/活跃时段/撤回/语音转写/黑话查询…）；不要 pixiv、富卡片、角色卡、点歌、定时、空间、文档、转发、管理类',
-    keep: [...ESSENTIAL, ...OBSERVED_USED, ...CHEAP_EXTRA, ...GROUP_AWARENESS, ...PROMPT_NAMED],
+    keep: [...ESSENTIAL, ...OBSERVED_USED, ...CHEAP_EXTRA, ...GROUP_AWARENESS, ...PROMPT_NAMED, ...MANAGEMENT],
   },
   high: {
     label: '高（实测用到的全留）',
     note: '协议必需 + 实测被调用过的工具 + 提示词点名要求调用的两条 + 群里认人那三条：不丢任何被调用过的能力（发米姆、语音、查记忆、看历史图、读对方发来的文件都在），砍掉的都是实测零调用的大块头。这是"不丢功能"前提下的地板',
-    keep: [...ESSENTIAL, ...OBSERVED_USED, ...GROUP_AWARENESS, ...PROMPT_NAMED],
+    keep: [...ESSENTIAL, ...OBSERVED_USED, ...GROUP_AWARENESS, ...PROMPT_NAMED, ...MANAGEMENT],
   },
   extreme: {
     label: '极限（会丢功能）',
@@ -145,6 +169,13 @@ export const TOOL_TIERS = {
       /* 2026-09-24：get_time 补进极限档 —— 提示词 [TOOLS] 1d 规定"正文不带时钟，问时间就调 get_time"，
        * 而 [RULES] 7b（深夜提醒）也以它为前提。421 字符，占全量 0.43%，比砍掉它造成的错答便宜得多。 */
       'get_time',
+      /* 2026-09-26：极限档也保「关静默 + 群白名单」两件 —— 它们是主人不在电脑前时唯一的
+       * 解封手段（合计约 1.1 千字符）；授权管理员（qq_admin_set）在极限档仍砍掉。 */
+      'qq_deepsleep', 'qq_whitelist',
+      /* 同一天再加：读配置 + 改一个配置点路径。极限档的意义就是"主人还能远程救火"，
+       * 而"改一条配置"（例如把语音概率调回来、把某个开关关掉）正是救火本体；
+       * 音色库（qq_voice_manage）比较大且不是救火项，极限档砍掉。 */
+      'qq_config_get', 'qq_config_set',
     ],
   },
   custom: { label: '自定义名单', note: '用下面的「白名单 / 黑名单」两张表（老行为）', keep: null },

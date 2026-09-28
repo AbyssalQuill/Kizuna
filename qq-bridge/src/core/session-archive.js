@@ -67,7 +67,7 @@ const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 /** 「本桥工作区」的 slug 前缀：`<state 目录>`（不含最后一段）。
  *  主聊天是 state/agents，学习任务是 state/slang-agent、state/persona-agent……
  *  它们**同属本桥**，都该被巡检归档；而 `--C-Users-...--`（本机桌面跑测试留下的）
- *  `--D-MoonBot-...--` 这类别的机器的残留**不属于**这里，绝不能碰。 */
+ *  `--D-Kizuna-...--` 这类别的机器的残留**不属于**这里，绝不能碰。 */
 export function bridgeWorkspaceSlugPrefix() {
   return norm(path.dirname(sessionWorkspaceDir()));
 }
@@ -165,7 +165,7 @@ export function dshSessionsDir() {
  * DSH 把工作区路径编码成 `--root-qq-bridge-state-agents--` 这种 slug，
  * 这里用「只留字母数字」的归一化比较，避免复刻它的编码规则（规则一变就失效）。
  * 只认 `<state 目录>` 前缀下的工作区 ⇒ 本机桌面跑测试留下的 `--C-Users-...--` /
- * `--D-MoonBot-...--` 那种残留永远不会被当成"本桥工作区"。
+ * `--D-Kizuna-...--` 那种残留永远不会被当成"本桥工作区"。
  * @param {string} sessionsRoot
  * @param {{all?: boolean}} [opts] all=true 时返回 sessions 下**全部**工作区目录（一次性清理残留用）
  */

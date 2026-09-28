@@ -889,18 +889,27 @@ export function searchChatMessages(opts = {}) {
   if (opts.maxTs) { where.push('ts_ms < ?'); params.push(Number(opts.maxTs)); }
   if (opts.direction) { where.push('direction = ?'); params.push(opts.direction === 'out' ? 'out' : 'in'); }
   const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : '';
-  const limit = Math.min(200, Math.max(1, Number(opts.limit) || 50));
+  /* 2026-09-26 记忆检索灵活化（主人：不要写死翻页数）：
+   * 这里原来把一页压在 200（路由那层更狠，压到 60），模型于是只能"翻页、翻页、翻页"，
+   * 而真正保护上下文的是路由那层的逐条截断 + 总量封顶（TRIM_CONTENT / MAX_RESULT_CHARS），
+   * 不是页大小 —— 页压小了只会多翻几次，反而更贵。现在这里只留一个"一次拉爆库"的宽上限，
+   * 页大小交给调用方按需要定，并把 total/hasMore 如实回给模型：**要不要接着翻由数据说话，不由常数说话**。 */
+  const limit = Math.min(1000, Math.max(1, Number(opts.limit) || 50));
   const offset = Math.max(0, Number(opts.offset) || 0);
   try {
     if (useFts) {
-      // FTS 分支：不数总数（MATCH 下 COUNT 要再扫一遍索引，模型侧也不需要这个数）
+      /* FTS 分支：原来 total = 本页条数，于是上层算出的 more 永远是 false —— 模型根本没法知道
+       * 后面还有没有，只能靠"再问一次"去试。2026-09-26 起照实数一遍（这个库只有几千条，
+       * MATCH 的 COUNT 开销可忽略）；万一数不出来就用本页条数，绝不因为数不出总数让整次检索失败。 */
       const rows = db.prepare(`SELECT chat_messages.* FROM chat_messages${joinSql}${whereSql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`).all(...params, limit, offset);
-      return { ok: true, total: rows.length, limit, offset, ranked: true, messages: rows.map(rowToSearchMessage) };
+      let total = rows.length;
+      try { total = Number(db.prepare(`SELECT COUNT(*) AS c FROM chat_messages${joinSql}${whereSql}`).get(...params)?.c || 0); } catch { /* 数不出来就退回本页条数 */ }
+      return { ok: true, total, count: rows.length, limit, offset, hasMore: offset + rows.length < total, ranked: true, messages: rows.map(rowToSearchMessage) };
     }
     const total = Number(db.prepare(`SELECT COUNT(*) AS c FROM chat_messages${whereSql}`).get(...params)?.c || 0);
     const rows = db.prepare(`SELECT * FROM chat_messages${whereSql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`).all(...params, limit, offset);
     const messages = rows.map(rowToSearchMessage);
-    return { ok: true, total, limit, offset, messages };
+    return { ok: true, total, count: messages.length, limit, offset, hasMore: offset + messages.length < total, messages };
   } catch (error) {
     log(`[chat-history] 搜索失败: ${error?.message ?? error}`);
     return { ok: false, error: error?.message ?? String(error), total: 0, messages: [] };

@@ -1,6 +1,6 @@
 // 回归测试：reset 之后同一条回复不能发两遍（2026-09-16 真机事故）
 //
-// 现场（logs/bridge-local.log，UTC；桥跑在 D:\MoonBot\resources\runtime\qq-bridge）：
+// 现场（logs/bridge-local.log，UTC；桥跑在 D:\Kizuna\resources\runtime\qq-bridge）：
 //   14:11:54 [send-chain] 已取消 group:*** 的待发任务（会话重置/隔离）          ← reset
 //   14:12:12 新会话 group:*** -> session-0e99aedd-…
 //   14:12:34 qq_send_message messages=["喵什么喵","又不是猫娘"]（atUserId 传成了 messageId）

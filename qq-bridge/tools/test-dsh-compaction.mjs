@@ -24,7 +24,13 @@ function check(name, fn) {
   catch (e) { console.log(`  FAIL  ${name}\n        ${e?.message ?? e}`); failed += 1; }
 }
 
-const DSH = 'C:/Users/17367/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai';
+/* 本机装的 dsh 的包根（第 ⑤ 组"与真实 DSH 对齐"要读它的源码；读不到就 SKIP）。
+ * 【2026-09-28】这里原本写死构建者的绝对路径 `C:/Users/<用户名>/AppData/Roaming/npm/…`：
+ * 这个文件是随 payload 的 `tools/` 一起发出去的工具，于是**把构建者的 Windows 用户名带进了安装包**
+ * （实测在产物 `resources\runtime\qq-bridge\tools\test-dsh-compaction.mjs:27` 命中）。
+ * 改成"按当前用户推导 + 允许环境变量覆盖"：构建机上解析结果与原来一字不差，包本体不再有明文用户名。 */
+const DSH = process.env.KIZUNA_DSH_PKG_ROOT
+  || path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai');
 
 console.log('== ① 归一化：永远守住 DSH 的硬约束 ==');
 {

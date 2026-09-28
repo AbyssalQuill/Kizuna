@@ -63,28 +63,43 @@ await check('① 空数据说人话，不吐 NaN/¥0.0000', () => {
 await check('① 有数据时正文包含总量与钱数，且估算行不并进钱里', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v13-tok-'));
   try {
-    const now = Date.now();
+    /* 时刻钉死（2026-09-26 加）：北京 2026-09-22（周二）20:00 —— 谷时，且 4 行真实数据都落在同一个
+     * 小时桶里，于是"钱"可以逐位复算，不受挂钟与"周末/节假日整日谷价"规则影响。 */
+    const NOW = Date.parse('2026-09-22T20:00:00+08:00');
     const rows = [];
-    for (let i = 0; i < 4; i++) rows.push({ tsMs: now - i * 60_000, sessionId: 's', convKey: 'group:1', prompt: 1000, completion: 50, total: 201050, est: false, cacheRead: 200000, cacheWrite: 0 });
-    rows.push({ tsMs: now - 30_000, sessionId: 's2', convKey: null, prompt: 800, completion: 80, total: 880, est: true, promptChars: 1440, completionChars: 176 });
+    for (let i = 0; i < 4; i++) rows.push({ tsMs: NOW - i * 60_000, sessionId: 's', convKey: 'group:1', prompt: 1000, completion: 50, total: 201050, est: false, cacheRead: 200000, cacheWrite: 0 });
+    rows.push({ tsMs: NOW - 30_000, sessionId: 's2', convKey: null, prompt: 800, completion: 80, total: 880, est: true, promptChars: 1440, completionChars: 176 });
     fs.writeFileSync(path.join(dir, 'token-usage.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8');
-    initTokenMeter({ stateDir: dir });
+    initTokenMeter({ stateDir: dir, nowMs: NOW });
     initTokenReportCore({ tokenCost: { ...DEFAULT_TOKEN_COST } });
-    const rep = getTokenReport(1);
-    const r = buildTokenReportText({ days: 1 });
+    const rep = getTokenReport(1, { nowMs: NOW });
+    const r = buildTokenReportText({ days: 1, nowMs: NOW });
     const billed = Number(rep.today.billedTotal);
     assert.ok(billed > 0, `billedTotal=${billed}`);
-    // 2026-09-22：第一行是"平台计费日"口径，数字带千分位（跟面板顶部「今日已用」逐位对得上）
+    /* 2026-09-28 契约变更（主人给的版式：「报告写成这种类型」，见 src/core/token-report.js:219-243）：
+     * 五行、一行一个口径 —— 今日 / 自然日 / 命中率（含未命中·命中·输出）/ 费用（谷·峰）/ 全天预估；
+     * 标签后用全角冒号、同行多个数值用「｜」分隔、数值带 tok。第 1 行**不带口径注**（同日主人明确
+     * 「我没让你带括号里的废话，计费日换日」，所以这里反过来钉住"没有那句括号"）；估算数仍在
+     * data.est / todayEst 里。断言随契约对齐，但钉住的实质没变：总量带千分位、两个日界各自带标签、
+     * 钱数在、估算不进钱。 */
     assert.ok(r.text.includes(Number(billed).toLocaleString('en-US')), r.text);
-    assert.match(r.text, /平台计费日/);
-    assert.match(r.text, /¥\d/);
-    assert.match(r.text, /另有估算/);
+    const dayLines = r.text.split('\n');
+    assert.equal(dayLines.length, 5, r.text);
+    assert.match(dayLines[0], /^今日 ：[\d,]+ tok$/, dayLines[0]);
+    assert.match(dayLines[1], /^自然日：[\d,]+ tok$/, dayLines[1]);
+    assert.match(dayLines[2], /^命中率：\d+\.\d%｜未命中 [\d,]+｜命中 [\d,]+｜输出 [\d,]+$/, dayLines[2]);
+    assert.match(dayLines[3], /^费用：¥\d+\.\d{4}$/, dayLines[3]);   // 20:00 谷时：不分谷/峰，所以没有括号
+    assert.match(dayLines[4], /^全天预估：约 [\d,]+ tok$/, dayLines[4]);
     // 估算行绝不进 billedTotal
     assert.equal(billed, 4 * (1000 + 50 + 200000));
+    /* 估算行也绝不进钱：4 行真实数据 = 4×(200000×0.02 + 1000×1 + 50×4)/1e6 = ¥0.0208（20:00 谷时无倍率）。
+     * 若那行估算（800+80 tok）混进金额，这里立刻不等 —— 比旧版"正文里有「另有估算」四个字"更硬。 */
+    const money = (r.text.match(/费用：¥(\d+\.\d+)/) || [])[1];
+    assert.equal(money, '0.0208', r.text);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-await check('① 两个日界口径必须分行标注（计费日 vs 北京自然日），不许混在一行里', () => {
+await check('① 两个日界口径都必须带标签标注（计费日 vs 北京自然日），数字带千分位', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v13-tok2-'));
   try {
     // 造"跨换日"的数据：今天（计费日，北京 08:00 起）只有一点点，而北京自然日 00:00 起有一大堆
@@ -109,8 +124,12 @@ await check('① 两个日界口径必须分行标注（计费日 vs 北京自�
     assert.ok(natural > Number(rep.today.billedTotal), `自然日 ${natural} 应大于计费日 ${rep.today.billedTotal}`);
     assert.ok(r.text.includes(Number(rep.today.billedTotal).toLocaleString('en-US')), `缺计费日数字: ${r.text}`);
     assert.ok(r.text.includes(Number(natural).toLocaleString('en-US')), `缺自然日数字: ${r.text}`);
-    assert.match(r.text, /自然日 00:00 起/);
-    assert.match(r.text, /平台算在昨天/);
+    /* 2026-09-28 契约变更：五行版把两个日界拆回各自一行（「今日 ：…」一行、「自然日：…」一行，
+     * 都不带括号注）。旧断言 /自然日 00:00 起/ 与 /平台算在昨天/ 钉的是更早的排版和解释词。
+     * 改口径不等于放水：这里要求两个数字各自带着自己的标签**分行**出现（无标签的裸数字、
+     * 或两者又合回一行互相挨着，都算失败），而上面两条已经钉住了"这两个数确实是各自口径的真值"。 */
+    assert.match(r.text, /^今日 ：[\d,]+ tok$/m, r.text);
+    assert.match(r.text, /^自然日：[\d,]+ tok$/m, r.text);
     assert.ok(!/NaN|undefined/.test(r.text), r.text);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -129,7 +148,7 @@ await check('① 近 N 天报的是"整段窗口"的总量，不是只算今天�
     initTokenReportCore({ tokenCost: { ...DEFAULT_TOKEN_COST } });
     const r = buildTokenReportText({ days: 7 });
     assert.match(r.text, /近 7 天/);
-    const shown = Number((r.text.match(/近 7 天 ([\d,]+) tok/) || [])[1]?.replace(/,/g, '') || 0);
+    const shown = Number((r.text.match(/近 7 天：([\d,]+) tok/) || [])[1]?.replace(/,/g, '') || 0);
     assert.ok(shown >= 1_000_000, `近 7 天总量应含窗口内每一天，实际=${shown}`);
     assert.ok(shown <= 4_000_000, `不应超过窗口内实际用量，实际=${shown}`);
     assert.ok(!/NaN|undefined/.test(r.text), r.text);
@@ -184,7 +203,11 @@ await check('② low 档走"不要"名单：名单外一律保留（新增工具
   assert.equal(toolAllowedByTier('qq_send_rich', r), true, '富卡片主人在用');
   assert.equal(toolAllowedByTier('qq_send_qzone', r), true, '发说说主人在用');
   assert.equal(toolAllowedByTier('qq_character_list', r), false, '角色卡四件是实测零调用的大块头，仍然砍');
-  assert.equal(toolAllowedByTier('qq_deepsleep', r), false);
+  /* 2026-09-26 契约变更（依据 src/lib/tool-tiers.js:139-141 那条注释）：qq_deepsleep 已撤出 low 的
+   * drop 名单 —— 线上的 low 档曾把它砍掉，主人让机器人"把群聊解封"时模型只能说"工具不存在"。
+   * low 仍是黑名单语义，所以它现在是 true；qq_whitelist 同理（远程解封的两件事都不许砍）。 */
+  assert.equal(toolAllowedByTier('qq_deepsleep', r), true, '2026-09-26 起 low 档保留全程静默开关（唯一远程解封手段）');
+  assert.equal(toolAllowedByTier('qq_whitelist', r), true, '同理：群白名单不在 low 的 drop 名单里');
   assert.equal(toolAllowedByTier('qq_send_message', r), true);
   assert.equal(toolAllowedByTier('qq_某个将来才会有的工具', r), true, '黑名单语义：不在名单里就该保留');
 });

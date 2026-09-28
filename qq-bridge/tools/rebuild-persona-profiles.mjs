@@ -15,7 +15,7 @@
  * 用法（桥可以开着，SQLite WAL 允许并发写；改完 JSON 后重启桥让它重载库文件）：
  *   node qq-bridge/tools/rebuild-persona-profiles.mjs <bridgeDir> [--dry]
  * 例：
- *   node qq-bridge/tools/rebuild-persona-profiles.mjs "D:\MoonBot\resources\runtime\qq-bridge"
+ *   node qq-bridge/tools/rebuild-persona-profiles.mjs "D:\Kizuna\resources\runtime\qq-bridge"
  */
 import fs from 'node:fs';
 import path from 'node:path';

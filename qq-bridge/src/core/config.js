@@ -96,10 +96,11 @@ export function loadConfig() {
     /* ── 2026-09-21 提示词类的可调项（管理端「Core 设置」可改，即时生效）─────────────
      * styleLine：唤醒正文每轮那一行语感提醒（1.2.4 加入的「[Style] 说人话」）。
      *   做成可配置的原因：它是离模型最近、对语气影响最大的一句话，应当能不依赖发版自行改词。
-     *   默认值与 1.2.4 定稿逐字一致 —— 改默认值等于改语感，不要随意修改。
+     *   默认值 = 2026-09-26 定的那句英文提醒（原文是 1.2.4 的中文短句，主人要求转英文并更拟人）。
+     *   改默认值等于改语感，不要随意修改。
      *   空串 = 不注入这一行（完全交给系统提示词时使用）。 */
     prompt: {
-      styleLine: '[Style] 说人话：短、有态度，别讲课别列举',
+      styleLine: '[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.',
       ...(file.prompt ?? {})
     },
     /* ── 2026-09-21 /token 指令的计价参数（¥ / 百万 tok）─────────────────────────────
@@ -187,7 +188,7 @@ export function loadConfig() {
         recommendedNameMention: true,
         recommendedQuestion: true,
         recommendedPoke: true,
-        recommendedHint: 'When thinking about diving, judge smartly instead of waiting blindly: if the other person said goodnight / the topic is over / you already answered everything needed, wrap up right away (qq_set_wake_config / qq_mark_read). Only wait briefly when you want to confirm whether the other person is done (qq_wait_for_messages, within 30s). Recommended dive length 5-120 minutes, normal-message probability 0.05. Keep @ / name / keyword / question wake triggers on. To wait for a specific person, add triggers.speakerIds.',
+        recommendedHint: 'When thinking about diving, judge smartly instead of waiting blindly: if the other person said goodnight / the topic is over / you already answered everything needed, wrap up right away (qq_set_wake_config / qq_mark_read). Only wait briefly when you want to confirm whether the other person is done (qq_wait_for_messages, within 30s). Recommended dive length 5-120 minutes. For the ordinary-message wake probability, always use the owner value printed in the [WakeRef] line of the wake body; never invent or hardcode a probability number of your own. Keep @ / name / keyword / question wake triggers on. To wait for a specific person, add triggers.speakerIds.',
         batchWindowMs: 8000,
         maxWakePerMinute: 1,
         maxWakePerHour: 12,

@@ -44,7 +44,7 @@ let token = '';
 let ownerKey = '';
 try {
   const fs = await import('node:fs');
-  const LIVE = 'D:\\MoonBot\\resources\\runtime\\qq-bridge';
+  const LIVE = 'D:\\Kizuna\\resources\\runtime\\qq-bridge';
   const social = JSON.parse(fs.readFileSync(path.join(LIVE, 'state', 'social-state.json'), 'utf8'));
   let ownerQQ = '';
   try {

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 用 fileURLToPath 而不是手撕 URL.pathname：仓库路径里有空格（"MoonBot Public"），
+// 用 fileURLToPath 而不是手撕 URL.pathname：仓库路径里有空格（"Kizuna Public"），
 // pathname 会把空格留成 %20，拼出来的路径直接 ENOENT。
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');

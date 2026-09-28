@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { log } from '../lib/log.js';
 import { STATE_DIR } from '../lib/paths.js';
-import { initMemoryDb } from './memory.js';
+import { initChatDb } from './chat-db.js';
 import { personaLearnTargets, personaLearnStop, personaLearnStatus } from './persona-learn.js';
 
 export const LEARNING_CONFIG_FILE = path.join(STATE_DIR, 'learning-config.json');
@@ -81,8 +81,10 @@ export function resolvePortraitCfg() {
 
 /** 从聊天记录里筛出符合条件的群成员 uid（按发言数降序） */
 export function eligiblePortraitTargets(cfg = resolvePortraitCfg()) {
-  const db = initMemoryDb();
-  if (!db) return { ok: false, error: '记忆库不可用', targets: [] };
+  /* 2026-09-26 同 persona-learn：chat_messages 已在 2026-09-24 搬到 state/chat.db，
+   * 画像学习的候选筛选却还在向 memory 库要 → `no such table: chat_messages`，永远筛不出目标。 */
+  const db = initChatDb();
+  if (!db) return { ok: false, error: '聊天记录库不可用', targets: [] };
   const since = Date.now() - cfg.windowHours * 3600000;
   try {
     const rows = db.prepare(

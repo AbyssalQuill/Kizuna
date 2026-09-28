@@ -24,6 +24,10 @@ import {
   pixivIllustDetail, pixivIllustOriginals, pixivImageSources, pixivUserWorkIds,
   resolvePixivAuthor, pixivLoggedIn,
   planPixivSend, pixivTierSizeVerdict,
+  // 2026-09-28：直联 i.pximg 不通时改走镜像代理（见 lib/pixiv.js 的「修 pixiv 代理挂了」段）
+  pixivPrioritizeCandidates, PIXIV_IMAGE_DIRECT_TIMEOUT_MS, PIXIV_PROXY_TIMEOUT_MS, PIXIV_DIRECT_DEAD_TTL_MS, markPixivDirectDead,
+  // 2026-09-28：直联可达性**探测**（带 10 分钟缓存）+ 直联成功即判活（见 lib/pixiv.js 同名段）
+  pixivDirectReachable, markPixivDirectAlive, pixivWarmupDirectProbe,
 } from './lib/pixiv.js';
 import { safeFetchBuffer, MAX_IMAGE_FETCH_BYTES, verifyImageComplete } from './safe-fetch.js';
 // 发送前要拿"实际拿到的像素"跟档位对账（见 qq_send_pixiv 的档位闸门）：只用它的头部嗅探，纯函数、无副作用。
@@ -1262,7 +1266,7 @@ registerTool(
 
 registerTool(
   'qq_deepsleep',
-  'Global master switch for GROUP silence: enabled=true silences all group chats - messages are stored but never woken on, answered or collected (biggest token saver) - while private chat keeps working normally; enabled=false restores all groups. /start always revives the bot, run by the bridge without the model. Use true for deep sleep / silence all groups / master switch; false for wake up / restore / unsilence.',
+  'Global master switch for GROUP silence: enabled=true silences all group chats - messages are stored but never woken on, answered or collected (biggest token saver) - while private chat keeps working normally; enabled=false restores all groups. /start always revives the bot, run by the bridge without the model. Use true for deep sleep / silence all groups / master switch; false for wake up / restore / unsilence. The wake body shows a [Deepsleep] line and qq_get_prompt reports silence/allow state while it is on, so read those before telling the owner why a group went quiet.',
   {
     enabled: z.boolean().describe('true silences every group chat (private chat unaffected); false restores all groups'),
     token: z.string().describe('Session token (from the wake prompt). Required: admin-level switch, rejected unless it carries the current session token.')
@@ -2396,6 +2400,122 @@ registerTool(
   }
 );
 
+// ── 配置读写（2026-09-26：主人要求「让机器人可以调桥配置的所有配置，包括语音页面」）──────
+/* 三个工具共用一条服务端路由 /api/agent/config（读脱敏、写在服务端读真值只改一个点路径）。
+ * 为什么不让模型"读回来再整体回写"：读到的密钥是掩码，语音配置又是"非空即覆盖"，
+ * 照抄回写会把四把密钥一起写坏。所以写路径永远只传「路径 + 新值」。 */
+function pickByPath(obj, pathStr) {
+  const segs = String(pathStr ?? '').split('.').filter((s) => s !== '');
+  let cur = obj;
+  for (const s of segs) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = cur[s];
+  }
+  return cur;
+}
+/** 模型常把数组/对象写成 JSON 文本，这里还原一次。 */
+function jsonish(v) {
+  if (typeof v !== 'string') return v;
+  const t = v.trim();
+  if (!(t.startsWith('[') || t.startsWith('{') || t.startsWith('"'))) return v;
+  try { return JSON.parse(t); } catch { return v; }
+}
+
+registerTool(
+  'qq_config_get',
+  'Read the QQ bridge configuration. target=voice → the manager 语音页 config (TTS / clone / design, defaultVoice, style, length caps, sending probability, ASR; API keys come back masked); target=social → the default-agent social section (tool switches, send beats, wake defaults); target=bridge (default) → everything else in config.json (allow/deny groups, adminQQ, wake, send, napcat, dsh…; secrets masked). Call this BEFORE changing anything — you need the current value and the exact key names. Pass path to read a single value (e.g. "voice.send.probability", "allow.groups", "wake.maxWakePerHour").',
+  {
+    key: z.string().describe('Session key (group:ID or private:QQ). Must be the owner\'s private chat, or a session where the owner/admin just spoke.'),
+    token: z.string().describe('Session token (from the wake prompt)'),
+    target: z.enum(['bridge', 'social', 'voice']).optional().describe('Which config to read; default bridge'),
+    path: z.string().optional().describe('Dot path to one value, e.g. voice.defaultVoice / allow.groups / send.linearPerCharMs; omit for the whole section')
+  },
+  async ({ key, token, target = 'bridge', path: p }) => {
+    try {
+      const data = await agentApi('/api/agent/config', { method: 'POST', body: JSON.stringify({ key, token, action: 'get', target, path: p ?? '' }) });
+      const out = p ? { ok: data.ok, target, path: p, value: data.value, note: data.note } : data;
+      return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读取配置失败：${error.message}` }], isError: true };
+    }
+  }
+);
+
+registerTool(
+  'qq_config_set',
+  'Change ONE bridge config value (bridge / voice page / default-agent social section). Only do this when the owner or an admin actually asked for that change in this session; read the current value first with qq_config_get. target=voice → 语音页 (defaultVoice, style, enabled, maxChars, dailyChars, send.probability, send.cooldownMs, send.allVoice, cacheEnabled, asrLanguage…); target=bridge → anything else (allow.groups, deny.groups, adminQQ, wake.*, send.*, napcat.*…); target=social → the default-agent section (server-validated). value = the new value; pass arrays/objects as JSON text (e.g. "[1072393236,868756515]"). API keys / tokens / passwords CANNOT be set here — the owner fills those in the manager. Setting a voice as default: prefer qq_voice_manage action=set_default.',
+  {
+    key: z.string().describe('Session key (group:ID or private:QQ). Must be the owner\'s private chat, or a session where the owner/admin just spoke.'),
+    token: z.string().describe('Session token (from the wake prompt)'),
+    target: z.enum(['bridge', 'social', 'voice']).optional().describe('Which config to write; default bridge'),
+    path: z.string().describe('Dot path of the single value to change, e.g. voice.defaultVoice / voice.send.probability / wake.maxWakePerHour / allow.groups (target=social: drop the leading "social.", e.g. wake.probability)'),
+    value: z.union([z.string(), z.number(), z.boolean(), z.array(z.any()), z.record(z.any())]).describe('New value; arrays/objects may be passed as JSON text')
+  },
+  async ({ key, token, target = 'bridge', path: p, value }) => {
+    try {
+      const v = jsonish(value);
+      let data;
+      if (target === 'social') {
+        // social 段走专门的校验接口（POST /api/social/config）：它按字段做类型/范围归一化。
+        const segs = String(p ?? '').replace(/^social\./, '').split('.').filter(Boolean);
+        if (segs.length < 1) throw new Error('target=social 时 path 要写到具体字段，例如 wake.probability');
+        const patch = {};
+        let cur = patch;
+        for (let i = 0; i < segs.length - 1; i += 1) { cur[segs[i]] = {}; cur = cur[segs[i]]; }
+        cur[segs[segs.length - 1]] = v;
+        data = await agentApi('/api/social/config', { method: 'POST', body: JSON.stringify(patch) });
+        data = { ok: data?.ok !== false, target, path: p, value: pickByPath(data?.config ?? {}, segs.join('.')), note: data?.ok === false ? '服务端拒绝' : '已写入并热加载' };
+      } else {
+        data = await agentApi('/api/agent/config', { method: 'POST', body: JSON.stringify({ key, token, action: 'set', target, path: p, value: v }) });
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `改配置失败：${error.message}` }], isError: true };
+    }
+  }
+);
+
+registerTool(
+  'qq_voice_manage',
+  'Manage the voice library (the manager 语音页 音色库). action=list → builtin voices plus every custom voice (id / name / kind=design|clone / whether its clone sample exists) and which id is the current default; create → add a voice, either designed from a text description (name + description: age/gender/timbre/pace/pitch/emotion) or cloned from an existing voice (name + fromVoiceId — this also works when the source is a text-designed voice, its sample is generated automatically); delete → remove one by id (cannot delete the current default); set_default → make an id the default voice for qq_send_voice. Voice sending must be on (qq_config_get target=voice → enabled) or nothing is spoken.',
+  {
+    key: z.string().describe('Session key (group:ID or private:QQ). Must be the owner\'s private chat, or a session where the owner/admin just spoke.'),
+    token: z.string().describe('Session token (from the wake prompt)'),
+    action: z.enum(['list', 'create', 'delete', 'set_default']).describe('list / create / delete / set_default'),
+    name: z.string().optional().describe('create: voice name shown in the manager, e.g. 御姐音·温柔版'),
+    description: z.string().optional().describe('create: text description of the voice (design mode)'),
+    fromVoiceId: z.string().optional().describe('create: clone from this existing voice id or name (design voices allowed)'),
+    id: z.string().optional().describe('delete / set_default: target voice id')
+  },
+  async ({ key, token, action, name, description, fromVoiceId, id }) => {
+    try {
+      if (action === 'list') {
+        const data = await agentApi('/api/voice/voices');
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      }
+      if (action === 'create') {
+        if (!name) throw new Error('create 需要 name');
+        if (!description && !fromVoiceId) throw new Error('create 需要 description（文字设计）或 fromVoiceId（复刻已有音色）');
+        const body = fromVoiceId ? { name, fromVoiceId } : { name, description };
+        const data = await agentApi('/api/voice/voices', { method: 'POST', body: JSON.stringify(body), timeoutMs: 120000 });
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      }
+      if (action === 'delete') {
+        if (!id) throw new Error('delete 需要 id');
+        const data = await agentApi(`/api/voice/voices?id=${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}', timeoutMs: 30000 });
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      }
+      if (!id) throw new Error('set_default 需要 id');
+      // 走 /api/agent/config：它在服务端读真配置、只改 defaultVoice 一个字段 ——
+      // 直接 PUT /api/voice/config 需要整份配置，而整份配置里带着掩码密钥，回写会把真密钥覆盖掉。
+      const data = await agentApi('/api/agent/config', { method: 'POST', body: JSON.stringify({ key, token, action: 'set', target: 'voice', path: 'defaultVoice', value: id }) });
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `音色操作失败：${error.message}` }], isError: true };
+    }
+  }
+);
+
 registerTool(
   'qq_remove_friend',
   'Delete a QQ friend (they leave your friend list and can no longer private-message you). For an extremely bad impression needing a complete break; ownerQQ can never be deleted. Optionally blacklist first via qq_blacklist.',
@@ -2823,7 +2943,7 @@ if (cfg.social?.tools?.sendQqFace !== false) {
 if (cfg.social?.tools?.memorySearch !== false) {
   registerTool(
     'qq_memory_search',
-    'Search the full chat history (SQLite): filter by session key, keyword, sender, date (YYYY-MM-DD) or direction (in=received, out=sent by you); omit key to search all sessions. A keyword is NOT required: pass only `key` and you get that chat\'s newest messages (the way to read the transcript back without knowing any word) - add query/date when you want to narrow. Returns timestamps, session, sender and content. Results are trimmed (lines truncated, total capped) - narrow with query/date when you need detail.',
+    'Search the full chat history (SQLite): filter by session key, keyword, sender, date (YYYY-MM-DD) or direction (in=received, out=sent by you); omit key to search all sessions. A keyword is NOT required: pass only `key` and you get that chat\'s newest messages (the way to read the transcript back without knowing any word) - add query/date when you want to narrow. Returns timestamps, session, sender and content. Results are trimmed (lines truncated, total capped) - narrow with query/date when you need detail. No fixed page size: the reply always carries total (how many match), count, limit, offset, more and nextOffset - pick the page yourself, keep paging while more is true, and stop when you have what you need. If truncated/limitCappedFrom appears, the bridge trimmed the page for context: raise selectivity (query/date/sender) or continue from nextOffset.',
     {
       key: z.string().optional().describe('Session key (group:<gid> or private:<qq>); omit to search all sessions'),
       token: z.string().describe('Session token'),
@@ -2831,7 +2951,7 @@ if (cfg.social?.tools?.memorySearch !== false) {
       sender: z.string().optional().describe('Sender (nickname or QQ number)'),
       date: z.string().optional().describe('Date YYYY-MM-DD, e.g. 2026-08-31'),
       direction: z.enum(['in', 'out']).optional().describe('in=received messages, out=messages you sent'),
-      limit: z.number().optional().describe('Max results, default 30, max 60 (keep it small - every line stays in your context)'),
+      limit: z.number().optional().describe('How many results this page returns (default 30). No fixed page size - ask for as many as the question needs: the bridge only guards against a runaway dump, and every line is truncated anyway. Page with offset while the reply says more:true'),
       offset: z.number().optional().describe('Skip count (pagination)')
     },
     async ({ key, token, query, sender, date, direction, limit, offset }) => {
@@ -3395,7 +3515,7 @@ function stageImageBytes(buf, cfg, tag) {
 }
 
 /* ── Pixiv 找图 / 发图（2026-09-18："支持搜索和下载 Pixiv 的图片，不用到官网"）──────
- * 2026-09-20 定调：官方 pixiv API 优先，第三方镜像站 x.pixigraph.xyz 只做兜底
+ * 2026-09-20 定调：官方 pixiv API 优先，第三方镜像站（默认 https://pixigraph.online）只做兜底
  *   每条能力都按 app-api（OAuth 长期令牌，见 lib/pixiv-auth.js）→ pixiv web ajax → 镜像站 的顺序试；
  *   结果里如实报出这次是谁供的数据（搜索的 source/sourcesTried、详情的 source）。细节见 lib/pixiv.js 顶部。
  * 分工与"联网找图"完全同构：qq_pixiv_search 只查不发，qq_send_pixiv 负责真发。
@@ -3507,6 +3627,10 @@ if (cfg.social?.tools?.pixiv !== false) {
                 content: [{
                   type: 'text',
                   text: `「${resolved.name}」在 Pixiv 上有 ${resolved.candidates.length} 个同名/近似画师，分不清是哪一个，没敢乱发。候选（按"名字完全相等 → 作品多"排的）：\n${lines.join('\n')}\n`
+                    + (String(resolved.source || '') === 'search'
+                      ? '（这批画师号是桥自己的搜索引擎搜出来的，**不是** pixiv 官方接口给的，作品数也可能是"未知"；'
+                        + '念的时候把主页链接一起给用户，让 ta 自己认是哪一个。）\n'
+                      : '')
                     + '把候选（尤其主页链接）念给用户确认是哪一个 —— 不要反过来问用户要画师号（号是桥自己查的）；'
                     + '用户认得主页的话，也可以让 ta 直接给一件作品链接（pixiv.net/artworks/<数字>）走 illustId。',
                 }],
@@ -3594,7 +3718,12 @@ if (cfg.social?.tools?.pixiv !== false) {
          *        ② size=original 时 1200 档只能当显式降级：原图档全失败才允许，并且打日志 + 结果里写明；
          *        ③ 每次都拿"实际像素"跟该档应有的像素对一遍（第三方代理可能拿着原图地址给你一张缩过的图，
          *           光看地址认不出来）；④ 字节完整性由 safeFetchBuffer 保证（截断的图直接抛错换下一个候选）。 */
-        const sources = pixivImageSources(work, { page: pageIdx, size: sizeEff, originals });
+        /* 2026-09-28：直联路由刚被判死时，同一张图的代理候选会被提到它前面（只换位置，档位分桶不变）。 */
+        /* 2026-09-28：排序**之前**先问一次"直联 i.pximg 到底通不通"（带 10 分钟缓存 + 进程启动预热，
+         * 见 lib/pixiv.js 的「直联可达性探测」段）。服务器上判决早已在缓存里 → 这里不花时间；
+         * 本机探测 1.5s 判死 → 下面的 pixivPrioritizeCandidates 会把镜像候选提到直联前面。 */
+        await pixivDirectReachable();
+        const sources = pixivPrioritizeCandidates(pixivImageSources(work, { page: pageIdx, size: sizeEff, originals }));
         const plan = planPixivSend(sources, { size: sizeEff });
         let got = null;
         let gotFrom = '';
@@ -3606,7 +3735,14 @@ if (cfg.social?.tools?.pixiv !== false) {
         const tryList = async (list, isFallback) => {
           for (const s of list) {
             try {
-              const r = await safeFetchBuffer(s.url, MAX_IMAGE_FETCH_BYTES, s.referer ? { referer: s.referer } : null);
+              /* 2026-09-28：两条路各自给合适的超时 —— 直联在不通的网络里是"连得上但一直不出数据"，
+               * 默认 20s 会把每张图都拖满 20s 才轮到代理（多页作品就像"挂了"），所以给 4s；
+               * 代理那边反过来是"慢但能成"（实测 2~18s，还见过 25s），20s 会把它判死，所以放宽到 45s。 */
+              const r = await safeFetchBuffer(
+                s.url, MAX_IMAGE_FETCH_BYTES,
+                s.referer ? { referer: s.referer } : null,
+                s.referer ? { timeoutMs: PIXIV_IMAGE_DIRECT_TIMEOUT_MS } : { timeoutMs: PIXIV_PROXY_TIMEOUT_MS },
+              );
               const meta = sniffImageInfo(r.buffer) || {};
               // page=0 才有权威原图尺寸（详情里的 width/height 就是第 0 页的），别的页不瞎比。
               const verdict = pixivTierSizeVerdict(s.tier, {
@@ -3624,6 +3760,8 @@ if (cfg.social?.tools?.pixiv !== false) {
               got = r;
               gotFrom = s.url;
               gotVia = s.referer ? 'pximg-direct' : 'mirror-proxy';
+              /* 2026-09-28：直联真取到字节了 ⇒ 判活（比探测更硬的证据），把可达性判决刷回"直连优先"。 */
+              if (s.referer) markPixivDirectAlive();
               gotTier = s.tier;
               gotPixels = meta.width && meta.height ? `${meta.width}x${meta.height}` : '';
               if (isFallback) {
@@ -3632,6 +3770,11 @@ if (cfg.social?.tools?.pixiv !== false) {
               return true;
             } catch (e) {
               tried.push(`${s.referer ? '[直联] ' : '[代理]'}${s.url.slice(0, 96)} → ${e?.message ?? e}`);
+              /* 直联**超时**（不是 403/404 这种服务端答了话的错）⇒ 这条路根本不通：判死一段时间，
+               * 之后的候选排序会把镜像代理放到前面。只在该状态刚变成"判死"时打一行日志，避免刷屏。 */
+              if (s.referer && e?.timeout && markPixivDirectDead()) {
+                console.error(`[napcat-safe] qq_send_pixiv：直联 i.pximg 超时（${e?.message ?? e}）→ 接下来 ${Math.round(PIXIV_DIRECT_DEAD_TTL_MS / 60000)} 分钟优先走镜像代理`);
+              }
             }
           }
           return false;
@@ -4741,5 +4884,10 @@ export {
  * 保证管理端那张卡在任何情况下都读得到实测值；exit 钩子留着只是为了覆盖"中途异常退出"。 */
 flushSchemaStats();
 if (process.env.QQB_MCP_NO_LISTEN !== '1') {
+  /* 2026-09-28：后台预热一次"直联 i.pximg 可达性"探测（不 await、不抛，见 lib/pixiv.js）。
+   * 放在这里是为了**不给服务器引入额外延迟**：进程起来就把判决写进 10 分钟缓存，
+   * 等用户真正发图时取图路径不必再等任何一次探测；本机则在此刻就已判死，第一张图直接走镜像。
+   * 只在真启动（非 QQB_MCP_NO_LISTEN=1 的测试加载）时预热，免得自测里冒出真实网络请求。 */
+  pixivWarmupDirectProbe();
   await server.connect(new StdioServerTransport());
 }
