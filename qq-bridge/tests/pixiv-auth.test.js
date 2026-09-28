@@ -18,6 +18,8 @@ const TOKEN_FILE = path.join(TMP_DIR, 'pixiv-token.json');
 // 必须先设好环境变量再 import：令牌路径与环境变量覆盖都是本模块的唯一外部输入。
 process.env.QQBRIDGE_PIXIV_TOKEN_PATH = TOKEN_FILE;
 delete process.env.QQBRIDGE_PIXIV_REFRESH_TOKEN;
+// 同理把"读哪份 config.json"也指到临时目录：本文件会自己造配置，绝不碰仓库/线上那份真配置。
+process.env.QQBRIDGE_PIXIV_CONFIG_PATH = path.join(TMP_DIR, 'config.json');
 
 const HASH_SECRET = '28c1fdd170a5204386cb1313c7077b34f83e4aaf4aa829ce78c231e05b0bae2c';
 const realFetch = globalThis.fetch;
@@ -26,6 +28,7 @@ const {
   PIXIV_CLIENT_ID, PIXIV_CLIENT_SECRET, PIXIV_APP_UA, PIXIV_OAUTH_TOKEN_URL, PIXIV_REDIRECT_URI,
   generatePixivPkce, pixivPkceChallenge, pixivAuthState, getPixivAccessToken, refreshPixivToken,
   loginWithPhpSessid, startPixivTokenRefresh, savePixivRefreshToken, pixivTokenPath, readPixivToken,
+  bootstrapPixivFromConfigCookie, configPixivCookie, pixivConfigPath,
 } = await import('../src/lib/pixiv-auth.js');
 
 /* ─────────────────────────── 小工具 ─────────────────────────── */
@@ -308,6 +311,109 @@ await t('令牌已过期 → 启动后立刻换一次，并按日志如实说明
   assert.equal(calls.length, 1);
   assert.match(logs.join('\n'), /已轮换/);
   assert.equal(readPixivToken().refresh_token, 'R-fresh');
+});
+
+/* ───────────── 八、「粘贴一次就自动轮换」（config.json 里的 cookie → 长期令牌）─────────────
+ * 这一节钉住的正是现场故障（2026-09-28）：主人在管理端贴了 PHPSESSID 却始终没有登录态 ——
+ * 当时没有任何一条自动路径会拿配置里的 cookie 去换长期令牌。所以这里逐条钉住"什么情况该换、
+ * 什么时候必须闭嘴、失败时留下什么"，尤其是"没配 ≠ 故障"（不许在日志里假装有事）与
+ * "凭证值绝不进日志"（日志会被 QQ 那边看到）。 */
+console.log('\n八、bootstrapPixivFromConfigCookie（配置贴一次 → 自动换长期令牌）');
+const CONFIG_FILE = pixivConfigPath();
+const writeConfig = (obj) => {
+  fs.mkdirSync(TMP_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(obj, null, 2));
+};
+const noToken = () => { fs.rmSync(TOKEN_FILE, { force: true }); };
+
+await t('配置里没有 cookie → 跳过：联网 0 次、日志 0 行（没配 ≠ 故障）', async () => {
+  noToken();
+  writeConfig({ pixiv: { base: 'https://mirror.example' } });
+  const calls = stubFetch(() => ({ status: 200, text: '{}' }));
+  const logs = [];
+  const r = await bootstrapPixivFromConfigCookie({ logger: (m) => logs.push(m) });
+  assert.deepEqual(r, { ok: true, skipped: 'no-cookie' });
+  assert.equal(calls.length, 0);
+  assert.equal(logs.length, 0, '没配的时候不该在启动日志里假装有个登录态');
+});
+
+await t('有 cookie、没有长期令牌 → 自动换一次并落盘；cookie 值不进日志', async () => {
+  noToken();
+  const COOKIE = 'PHPSESSID=1234567_zzzzsecretzzzz0123456789';
+  writeConfig({ pixiv: { cookie: COOKIE } });
+  const calls = stubFetch((call) => {
+    if (call.url.startsWith('https://app-api.pixiv.net/web/v1/login?')) {
+      return { status: 302, headers: { location: 'pixiv://account/login?code=BOOTCODE1234567890' }, text: '' };
+    }
+    if (call.url === PIXIV_OAUTH_TOKEN_URL) {
+      return { status: 200, text: JSON.stringify({ access_token: 'A-boot2', refresh_token: 'R-boot2', expires_in: 3600, user: { id: '77', name: '主人' } }) };
+    }
+    throw new Error(`不该请求这个地址：${call.url}`);
+  });
+  const logs = [];
+  const r = await bootstrapPixivFromConfigCookie({ logger: (m) => logs.push(m) });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.userId, '77');
+  assert.equal(calls.length, 2, '一次登录口 + 一次换 token，不该有第三个请求');
+  assert.equal(calls[0].headers.cookie, COOKIE, 'cookie 只挂登录口那一次');
+  assert.equal(calls[1].headers.cookie, undefined, '换 token 那步绝不能带 cookie');
+  assert.equal(readPixivToken().refresh_token, 'R-boot2', '长期令牌必须落盘，否则下次启动还得再贴一遍');
+  assert.equal(pixivAuthState().hasRefreshToken, true);
+  const joined = logs.join('\n');
+  assert.match(joined, /已用配置里的 cookie 换取长期令牌/);
+  assert.match(joined, /账号 77/);
+  assert.ok(!joined.includes('zzzzsecretzzzz'), `日志里不能出现 cookie 值：${joined}`);
+});
+
+await t('已经有长期令牌 → 跳过，且不碰已有令牌、不联网', async () => {
+  writeFile({ refresh_token: 'R-already', access_token: 'A-already', expires_at: Date.now() + 3600_000 });
+  const calls = stubFetch(() => ({ status: 200, text: '{}' }));
+  const logs = [];
+  const r = await bootstrapPixivFromConfigCookie({ logger: (m) => logs.push(m) });
+  assert.deepEqual(r, { ok: true, skipped: 'already-has-refresh-token' });
+  assert.equal(calls.length, 0);
+  assert.equal(logs.length, 0);
+  assert.equal(readPixivToken().refresh_token, 'R-already');
+});
+
+await t('cookie 无效（两次都拿不到 code）→ 不抛、ok:false、只留 2 行日志、不落盘令牌', async () => {
+  noToken();
+  writeConfig({ pixiv: { cookie: 'PHPSESSID=1234567_expiredcookieval0123456789' } });
+  const calls = stubFetch(() => ({ status: 400, text: '{"error":{"message":"不正确的请求。"}}' }));
+  const logs = [];
+  const r = await bootstrapPixivFromConfigCookie({ logger: (m) => logs.push(m) });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /两次尝试都没拿到 login code/);
+  assert.equal(calls.length, 2);
+  assert.equal(fs.existsSync(TOKEN_FILE), false, '换不到令牌就不该凭空造一个文件');
+  assert.equal(logs.length, 2, '只记"要换"和"换失败"两行，不刷屏、不重试');
+  assert.match(logs[1], /换长期令牌失败/);
+  assert.match(logs[1], /tools\/pixiv-login\.mjs/, '失败时要把"手工引导"这条退路指出来');
+});
+
+await t('QQBRIDGE_PIXIV_COOKIE_OFF=1 → 当作没配（可临时下线而不删配置）', async () => {
+  noToken();
+  writeConfig({ pixiv: { cookie: 'PHPSESSID=1234567_disabledcookieval012345678' } });
+  process.env.QQBRIDGE_PIXIV_COOKIE_OFF = '1';
+  const calls = stubFetch(() => ({ status: 200, text: '{}' }));
+  try {
+    const r = await bootstrapPixivFromConfigCookie({ logger: () => {} });
+    assert.deepEqual(r, { ok: true, skipped: 'no-cookie' });
+    assert.equal(calls.length, 0);
+  } finally {
+    delete process.env.QQBRIDGE_PIXIV_COOKIE_OFF;
+  }
+});
+
+await t('config.json 不存在 / 不是合法 JSON → 当没配，不抛不联网', async () => {
+  noToken();
+  fs.rmSync(CONFIG_FILE, { force: true });
+  const calls = stubFetch(() => ({ status: 200, text: '{}' }));
+  assert.equal(configPixivCookie(), '');
+  assert.equal((await bootstrapPixivFromConfigCookie({ logger: () => {} })).skipped, 'no-cookie');
+  fs.writeFileSync(CONFIG_FILE, '{ 这不是 JSON');
+  assert.equal((await bootstrapPixivFromConfigCookie({ logger: () => {} })).skipped, 'no-cookie');
+  assert.equal(calls.length, 0);
 });
 
 globalThis.fetch = realFetch;

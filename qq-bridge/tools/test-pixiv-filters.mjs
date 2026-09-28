@@ -15,6 +15,13 @@ import {
   pickPixivBase,
   pixivBase,
   pixivProxyUrl,
+  pixivProxyUrls,
+  pixivImageInnerUrl,
+  parseSearchUserHits,
+  searchHitName,
+  shapeAuthorResolution,
+  rankArtistCandidates,
+  PIXIV_IMAGE_MIRROR_HOSTS,
   PIXIV_SCAN_PAGES_DEFAULT,
   PIXIV_SCAN_PAGES_MAX,
 } from '../src/lib/pixiv.js';
@@ -312,23 +319,88 @@ async function offline() {
   eq('pickPixivBase：config.json 优先于环境变量，尾部斜杠去掉',
     pickPixivBase({ configBase: 'https://mirror.example/', envBase: 'https://env.example' }), 'https://mirror.example');
   eq('pickPixivBase：没配 config 时用环境变量', pickPixivBase({ envBase: 'https://env.example' }), 'https://env.example');
-  eq('pickPixivBase：都没配 → 内置默认', pickPixivBase({}), 'https://x.pixigraph.xyz');
-  eq('pickPixivBase：非法值一律忽略', pickPixivBase({ configBase: 'not-a-url', envBase: 'ftp://x' }), 'https://x.pixigraph.xyz');
+  eq('pickPixivBase：都没配 → 内置默认', pickPixivBase({}), 'https://pixigraph.online');
+  eq('pickPixivBase：非法值一律忽略', pickPixivBase({ configBase: 'not-a-url', envBase: 'ftp://x' }), 'https://pixigraph.online');
   const before = process.env.QQBRIDGE_PIXIV_BASE;
   process.env.QQBRIDGE_PIXIV_BASE = 'https://env-only.example/';
   eq('环境变量能改实际生效地址', pixivBase(), 'https://env-only.example');
-  ok('代理地址跟着 BASE 走', pixivProxyUrl('https://i.pximg.net/x.jpg').startsWith('https://env-only.example/api/image.php?url='), pixivProxyUrl('https://i.pximg.net/x.jpg'));
+  /* 2026-09-28：图片源从"API 式代理"换成"host 重写式镜像"；同一天主人要求**移除**老的
+   * `x.pixigraph.xyz/api/image.php` 图片源 —— 取图不再经它，非 pximg 地址一律原样返回
+   * （那个站现在只剩 search / detail 两条接口线在用）。同一天稍后：内置兜底站换成同族的
+   * `pixigraph.online`（上面两条断言），取图链一行未动。 */
+  ok('pximg 地址：走 host 重写镜像，首选 i.muxmus.com（不再是 api/image.php）',
+    pixivProxyUrl('https://i.pximg.net/x.jpg') === `https://${PIXIV_IMAGE_MIRROR_HOSTS[0]}/x.jpg`,
+    pixivProxyUrl('https://i.pximg.net/x.jpg'));
+  eq('pximg 地址：拿全部候选，顺序 = 实测可靠性（path/search 原样保留）',
+    pixivProxyUrls('https://i.pximg.net/img-original/img/a/b_0.jpg?x=1'),
+    PIXIV_IMAGE_MIRROR_HOSTS.map((h) => `https://${h}/img-original/img/a/b_0.jpg?x=1`));
+  eq('非 pximg 地址：原样返回这一条（绝不回落 api/image.php，也不吃 BASE）',
+    pixivProxyUrls('https://example.com/x.jpg'), ['https://example.com/x.jpg']);
+  eq('烂输入不炸，也原样返回', pixivProxyUrls('not a url'), ['not a url']);
+  ok('候选里不再出现任何 image.php 形态的地址',
+    ![pixivProxyUrl('https://i.pximg.net/x.jpg'), ...pixivProxyUrls('https://i.pximg.net/x.jpg'),
+      ...pixivProxyUrls('https://example.com/x.jpg')].some((u) => u.includes('image.php')),
+    JSON.stringify(pixivProxyUrls('https://i.pximg.net/x.jpg')));
+  eq('镜像地址还原成内层 pximg（档位/孪生配对靠它）',
+    pixivImageInnerUrl(`https://${PIXIV_IMAGE_MIRROR_HOSTS[0]}/img-original/img/a/b_0.jpg?x=1`),
+    'https://i.pximg.net/img-original/img/a/b_0.jpg?x=1');
+  eq('非镜像地址还原成它自己（老 api/image.php 地址不再被解包）',
+    pixivImageInnerUrl('https://example.com/x.jpg'), 'https://example.com/x.jpg');
   if (before === undefined) delete process.env.QQBRIDGE_PIXIV_BASE; else process.env.QQBRIDGE_PIXIV_BASE = before;
   ok('默认地址可用（config.json 没配 pixiv.base 时）', /^https:\/\//.test(pixivBase()), pixivBase());
 
   // 用完必须把真 fetch 装回去：否则下面 --live 的"联网实跑"会继续吃假数据（第一版就踩了这个坑，
   // 明明在跑真搜索，打印出来的却全是内联样例的 id 1001/1002…）。
   globalThis.fetch = realFetch;
+
+  /* ══════════ 十三、第 ④ 条来源（桥自己的搜索引擎）的纯函数 ══════════
+   * 样例形状就是 `lib/web-search.js` 的 `searchAll()` 返回的 `results`（`[{ title, url, snippet }]`）；
+   * 里面那几条 URL 与标题是**服务器上的真实命中**（2026-09-27 实测 `site:pixiv.net/users 米山舞` →
+   * https://www.pixiv.net/users/1554775，标题「米山舞 - pixiv」），不是编的。这里钉三件事：
+   * ① 只认 `users/<数字>` 路径、别的站/作品页一概丢；② 名字剥不出来就给空串
+   * （假名字会污染"完全相等"的定号判断）；③ **source=search 时一律只给候选**，不自动定号。 */
+  console.log('\n══════ 十三、第 ④ 条来源（桥自己的搜索引擎）的纯函数 ══════');
+  const msFixture = [
+    { title: '米山舞 - pixiv', url: 'https://www.pixiv.net/users/1554775', snippet: 'イラストレーター、アニメーター。 お仕事のご依頼は上記サイトからお願い致します。' },
+    { title: '米山舞 - pixiv', url: 'https://www.pixiv.net/users/1554775/artworks', snippet: '同一个号的第二个结果（去重靠它）' },
+    { title: '#米山舞 - Jiuymgのイラスト', url: 'https://www.pixiv.net/users/23945067/illustrations/%E7%B1%B3%E5%B1%B1%E8%88%9E', snippet: '标签页，不是这位画师本人' },
+    { title: '米山舞のイラスト・マンガ - pixiv', url: 'https://www.pixiv.net/artworks/123456789', snippet: '作品页：不是 users/ 路径' },
+    { title: '米山 舞 Yoneyama Mai on X', url: 'https://x.com/yoneyamai/status/1762773998084227455', snippet: '别的站' },
+  ];
+  const msHits = parseSearchUserHits(msFixture);
+  eq('搜索命中：只留 pixiv 画师主页、按首次出现顺序（作品页/别的站都丢掉）',
+    msHits.map((h) => h.id), ['1554775', '23945067']);
+  eq('搜索命中：地址统一成 users/<id> 规范形（/artworks 那种尾巴去掉）',
+    msHits.map((h) => h.url),
+    ['https://www.pixiv.net/users/1554775', 'https://www.pixiv.net/users/23945067']);
+  eq('搜索命中：名字从标题剥「- pixiv」尾巴；剥不出来的给空串',
+    msHits.map((h) => h.name), ['米山舞', '']);
+  ok('搜索命中：标签页/作品页标题一律不给名字（不拿假名字参与定号）',
+    searchHitName('#米山舞 - Jiuymgのイラスト') === '' && searchHitName('米山舞のイラスト・マンガ - pixiv') === ''
+      && searchHitName('米山舞 - pixiv') === '米山舞' && searchHitName('米山舞') === '米山舞',
+    JSON.stringify([searchHitName('#米山舞 - Jiuymgのイラスト'), searchHitName('米山舞 - pixiv')]));
+  ok('搜索命中：超长标题当没名字（>40 字）', searchHitName('あ'.repeat(41)) === '');
+  ok('搜索命中：空/null/没有 items 都不炸',
+    parseSearchUserHits(null).length === 0 && parseSearchUserHits([{}]).length === 0
+      && parseSearchUserHits([{ title: 'x', url: 'not a url' }]).length === 0);
+  const rankedMs = rankArtistCandidates([{ id: '1554775', name: '米山舞', works: 300, worksKnown: true }], '米山舞');
+  eq('source=search：只命中一个完全同名号也只给候选（不自动定号）',
+    shapeAuthorResolution({ name: '米山舞', ranked: rankedMs, endpoint: 'web-search', source: 'search' }).kind,
+    'candidates');
+  eq('官方来源（app-api）：同一个候选仍按老规则定号',
+    shapeAuthorResolution({ name: '米山舞', ranked: rankedMs, endpoint: 'app-api:/v1/search/user', source: 'app-api' }).id,
+    '1554775');
+  eq('没有唯一候选时给候选列表（官方来源也一样）',
+    shapeAuthorResolution({
+      name: '七菜', ranked: rankArtistCandidates([{ id: '1', name: '七菜', works: 20 }, { id: '2', name: '七菜', works: 82 }], '七菜'),
+      endpoint: 'app-api:/v1/search/user', source: 'app-api',
+    }).kind,
+    'candidates');
 }
 
 /* ───────────────────── 联网实跑（--live）：只打印真实数字，不编 ───────────────────── */
 async function live() {
-  console.log('\n══════ 十三、联网实跑（真镜像站）══════');
+  console.log('\n══════ 十四、联网实跑（真镜像站）══════');
   globalThis.fetch = realFetch; // 双保险：确保走真网络（离线段落收尾已还原一次）
   console.log(`镜像站 = ${pixivBase()}`);
   const KW = process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : '初音ミク';

@@ -2,14 +2,20 @@
 //
 // 为什么走第三方平替站（不想登录、也进不去官网）：
 //   · pixiv.net 的搜索/详情接口要登录 cookie，而且机房 IP 常被挡；
-//   · https://x.pixigraph.xyz 是一个平替站，2026-09-18 在线上 VPS 实测可用：
+//   · https://pixigraph.online 是一个平替站（2026-09-28 起为内置默认；此前是它的同族域名
+//     x.pixigraph.xyz，已按使用方要求从默认与界面里去掉 —— 两个域名实测同一套后端），
+//     2026-09-18 在线上 VPS 实测可用：
 //
 //       GET /api/search.php?keyword=<关键词>&page=1
 //         → {"error":false,"body":{"illustManga":{"data":[<一页 60 条>],"total":…,"lastPage":…}}}
 //           每条就是 pixiv ajax 的原生形状：
 //           {id,title,userName,tags[],url,pageCount,width,height,xRestrict,sl,alt,userId,…}
 //
-//       GET /api/image.php?url=<encodeURIComponent(图片URL)>     ← 站内图床代理，绕开 i.pximg.net 的防盗链
+//       GET /api/image.php?url=<encodeURIComponent(图片URL)>     ← 站内图床代理（API 式）
+//         2026-09-28 **整体移除**（主人要求取图不要再经过它）：它慢（2.3~5.2 s）且不返回
+//         Content-Length，下游拿不到字节完整性的对照物。取图只剩两条路 —— 直联 i.pximg.net
+//         （带 Referer）与 host 重写式镜像，见 pixivProxyUrls 上方那段实测记录；本站的
+//         search/detail 两条接口线仍在用（pixivBase()）。
 //
 // 图片地址怎么来（搜索结果只给 250×250 缩略图，但 URL 里带着日期路径，可以推出大图）：
 //
@@ -27,7 +33,8 @@
 //
 // 两条纪律（与 image-search.js 一致）：
 //   ① 只返回 URL，不下载、不落盘 —— 下载由调用方走 SSRF 安全的 safeFetchBuffer；
-//   ② safeFetchBuffer 不能带自定义请求头，所以所有候选都走站内代理（i.pximg.net 需要 Referer 才给图）。
+//   ② 直联候选必须带 Referer（i.pximg.net 不带就 403）；镜像候选**一律不带**（host 重写式镜像
+//      自己会补，而 pximg.cocomi.eu.org 带了反而 403）。safeFetchBuffer 的头是调用方按这条传的。
 //
 // ══════════════════════════════════════════════════════════════════════════════════════════
 // 2026-09-18 实测：镜像站只认 keyword / page，所以筛选只能在本地做。
@@ -107,7 +114,9 @@
 //     ① app-api.pixiv.net（Bearer token，见 lib/pixiv-auth.js）—— 形状最规整，能拿到 meta_pages
 //        原图直链（逐页、不用猜扩展名）；没登录态时直接跳过（实测匿名必 400，白等一次超时）。
 //     ② www.pixiv.net/ajax（匿名就能用，2026-09-18 实测四类接口全 200）—— 没配登录态时的主力。
-//     ③ 第三方镜像站（pixivBase()）—— 最慢（同一张图 2.7~5.7s，出现过 25s 超时），只能垫底。
+//     ③ 第三方镜像站（`pixivBase()`，默认 https://pixigraph.online）—— 最慢，只能垫底
+//        （接口本身 1~2s；早年那条图片代理更慢：同一张图 2.7~5.7s、出现过 25s 超时，
+//         那条路 2026-09-28 已整体移除，见上面取图链）。
 //   纪律：cookie 与 Bearer 只发给 pixiv 自己的域名，镜像站永远看不到任何凭证（见 pixivRequestHeaders）。
 //   每个来源最多重试 1 次、超时短、不空转（镜像站那次重试前等 1.2 秒，它偶发慢；官网是硬失败，等它没意义）。
 // ══════════════════════════════════════════════════════════════════════════════════════════
@@ -115,11 +124,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPixivAccessToken, pixivAppHeaders, isPixivHost } from './pixiv-auth.js';
+// 第 ④ 条来源直接用桥自己的搜索内核（2026-09-27 从 mcp-web-search-safe.js 抽到 lib/web-search.js）。
+// 为什么不用子进程跑 MCP server：那要 spawn 一个 stdio 服务，只为查一个号码太重。
+import { searchAll } from './web-search.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** 桥的 config.json（本文件在 qq-bridge/src/lib/ 下 → 上两级就是 qq-bridge/）。 */
 const CONFIG_PATH = path.resolve(__dirname, '..', '..', 'config.json');
-const DEFAULT_BASE = 'https://x.pixigraph.xyz';
+/* 2026-09-28：内置兜底站从 `x.pixigraph.xyz` 换成同族的 `pixigraph.online`（使用方要求
+ *   「去掉那个旧地址，用我们首推的」）。两个域名本机同时实测各 4 条路由：search/detail 都是
+ *   200 + 同一份 JSON 形状、首条 id 都是 150206784、detail 的 illustTitle 也一致 ⇒ 同一套后端。
+ * ⚠ 这个 base **只管接口兜底**（`{base}/api/search.php`、`{base}/api/detail.php`、`/api/native.php`），
+ *   **取图完全不看它** —— 取图走 `pixivProxyUrls` 的 host 重写镜像链，首推 `i.muxmus.com`
+ *   （见下面那段实测）。所以别把纯图床反代（i.muxmus.com / cocomi / i.pixiv.re）填到这里：
+ *   它们对 `/api/*` 一律 404，填了这条兜底线就废了。 */
+const DEFAULT_BASE = 'https://pixigraph.online';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const TIMEOUT_MS = 15000;
 
@@ -153,9 +172,241 @@ export function pixivBase() {
   return pickPixivBase({ configBase: configPixivBase(), envBase: process.env.QQBRIDGE_PIXIV_BASE });
 }
 
-/** 把任意图片 URL 包成站内代理地址（绕开 i.pximg.net 的 Referer 防盗链）。 */
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+ * 2026-09-28 图片源换成 host 重写式反代（本机实测数据，不是搜来的推荐）
+ *
+ * 实测口径：本机国内家宽，**绕过系统代理**（node 的 fetch 默认不吃系统代理；另用
+ *   `curl.exe --noproxy "*"` 交叉验过一次）。基准图 = 作品 80643572 p0 原图
+ *   `/img-original/img/2020/04/08/11/41/00/80643572_p0.jpg`，满额 1,886,996B，
+ *   sha256 前 16 位 536c4aebbabc1fb6。
+ *   · 官方三域名本机**全 TCP 超时**（各 10s）：www.pixiv.net / i.pximg.net / app-api.pixiv.net
+ *     ⇒ 本机没有"直连兜底"这条退路，取图只能走镜像（直连排序见下面的可达性探测）。
+ *   · 旧图片源 `x.pixigraph.xyz/api/image.php?url=`：8/8 都下满了 1,886,996B、sha 一致，
+ *     **这次没复现"中途断流"**；但它 2.3~5.2s（均值 3.3s）且**不返回 Content-Length**
+ *     —— 下游 safe-fetch 的字节完整性闸门（verifyImageComplete）拿不到对照物。
+ *   · `i.muxmus.com`：同一张图 8/8 满额、同一个 sha，0.28~1.29s（均值 0.81s，快 4 倍），
+ *     **返回 Content-Length**（完整性闸门有了对照物），6 并发仍 6/6 满额。
+ *   · ⚠ 上面第一条（`x.pixigraph.xyz/api/image.php?url=`）**2026-09-28 已按主人要求移除**：
+ *     `pixivProxyUrls` 不再产出它，非 pximg 地址一律原样返回；本站只剩 search / detail
+ *     两条接口线还在用（`pixivBase()`）。
+ *
+ * 契约差异（本次改动的核心，别只看"谁快"）：
+ *   · `x.pixigraph.xyz`（历史；2026-09-28 起内置默认已换成同族 `pixigraph.online`）是 **API 站**：
+ *     靠 `{base}/api/image.php?url=<enc>` 代拉 ⇒ 旧代码"只改
+ *     config.json 的 pixiv.base 就换源"成立；
+ *   · `i.muxmus.com` 是 **host 重写式反代**：把 `i.pximg.net` 换成它的域名、路径原样透传
+ *     （实测 `/img-original/…`、`/img-master/…`、`/c/250x250_80_a2/…` 全 200；而 `/api/image.php`
+ *     一律 404/844B HTML）⇒ **换 base 没用，必须改这个函数**，且 detail/native/search 三条接口
+ *     线仍只能留给 API 站（默认 https://pixigraph.online，见 `pixivBase()` 的调用点）。
+ *   · 实测 muxmus 带不带 Referer 都 200；`pximg.cocomi.eu.org` **反过来 —— 带 Referer 一律 403
+ *     （3 字节）**，所以镜像候选一律不带 referer（`pixivImageSources` 的 ② 本来就不带）。
+ *
+ * 候选顺序与理由（全部本人实测，非搜索结果）：
+ *   ① i.muxmus.com         8/8 满额、最快、给 Content-Length
+ *   ② pximg.cocomi.eu.org  6/6 满额、3.0~7.4s（次选；务必别给它加 referer）
+ *   ③ i.pixiv.re           6/6 满额但 1.5~9s，且见过一次 25s 超时**切在 982,685B**（末选）
+ * 已失效（同一批实测，别再写回来）：i.pixiv.cat / pixiv.cat（DNS 通但 443 全超时）；
+ *   i.pixiv.download / pximg.nya.pub / pixivimg.net / pximg.exozy.me / pixiv.ducks.party
+ *   （域名不存在）；pixiv.pics（ECONNRESET）；pixiv.js.org（文档站，任何路径都回同一页 HTML）。
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/** 图片镜像域名（host 重写式）。顺序 = 实测可靠性，`pixivProxyUrls` 照这个顺序发候选。 */
+export const PIXIV_IMAGE_MIRROR_HOSTS = ['i.muxmus.com', 'pximg.cocomi.eu.org', 'i.pixiv.re'];
+
+/** 只有 pixiv 图床的地址才做 host 重写（外站地址原样返回，不再经任何代理）。 */
+const PIXIV_PXIMG_HOST_RE = /(^|\.)pximg\.net$/i;
+
+/**
+ * 一条图片地址 → **全部**可用的代理候选（按可靠性排序，调用方逐个试）。
+ *   · 入参 host 是 `i.pximg.net`（含子域）→ 对每个镜像域名做 host 重写，path/search 原样保留；
+ *   · 不是 pximg、或 URL 解析不出来 → **原样返回这一条**（2026-09-28 主人要求移除老
+ *     `x.pixigraph.xyz/api/image.php?url=` 图片源：它慢、且不返回 Content-Length，
+ *     下游没法做字节完整性对账。外站图本来就不该塞进 pixiv 镜像）。
+ * @param {string} imageUrl
+ * @returns {string[]} 至少一条；顺序即尝试顺序
+ */
+export function pixivProxyUrls(imageUrl) {
+  const u = String(imageUrl ?? '').trim();
+  try {
+    const x = new URL(u);
+    if (PIXIV_PXIMG_HOST_RE.test(x.hostname)) {
+      return PIXIV_IMAGE_MIRROR_HOSTS.map((h) => `https://${h}${x.pathname}${x.search}`);
+    }
+  } catch { /* 不是标准 URL：原样返回 */ }
+  return [u];
+}
+
+/**
+ * 单条代理地址（= 第一条候选）。给"只要一个地址"的老调用方用（工具自测里钉了它）；
+ * 新的取图路径请用 `pixivProxyUrls` 拿全部候选，失败了才有下一条可试。
+ */
 export function pixivProxyUrl(imageUrl) {
-  return `${pixivBase()}/api/image.php?url=${encodeURIComponent(String(imageUrl ?? '').trim())}`;
+  return pixivProxyUrls(imageUrl)[0];
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+ * 2026-09-28 修「pixiv 代理挂了」——直联走不通时，别让代理永远排在它后面等
+ *
+ * 现场（本机，国内家宽；证据 = tools/test-pixiv-byid.mjs --live 在本机第 12 节崩在
+ *   `Error: 请求超时：i.pximg.net`（safe-fetch.js 的 20s 超时），而同一张图走镜像代理 2 秒就回来）：
+ *   · www.pixiv.net 直连是**秒失败**（fetch failed，匿名 ajax 拿不到）→ 详情一路降级到镜像站；
+ *   · i.pximg.net 更难受：TCP 连得上、但一直不出数据，于是每个直联候选都**白等满 20 秒**才轮到代理；
+ *   · 多页作品（一页一个候选对）就是 20s × 页数 —— 用户看到的正是"pixiv 代理挂了"。
+ * 同一份代码在线上 VPS（能直连 pixiv）跑 --live 是 67/67 全过（直联 60~400ms），所以问题不在代码对不对，
+ *   而在"直联这条路不通时，代码还按直联优先硬等"。
+ *
+ * 处理（最小改动，不动档位纪律、不动纯函数测试）：
+ *   ① 直联候选单独用短超时 PIXIV_IMAGE_DIRECT_TIMEOUT_MS（正常直联 60~400ms，4s 足够；代理候选仍用默认 20s）；
+ *   ② 直联候选**超时**时把整条直联路由判死 PIXIV_DIRECT_DEAD_TTL_MS，期间用 pixivPrioritizeCandidates
+ *      把"同一张图、同一档位"的代理候选提到直联孪生兄弟前面（只换位置：不删候选、不改档位顺序，
+ *      直联仍在代理失败后兜底；10 分钟后自动重新试一次直联，直联恢复了会自动变回来）。
+ * 诚实性不变：结果里的 via 依旧按实际取字节的那条路回报（pximg-direct / mirror-proxy）。
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/** 直联 i.pximg 候选的请求超时（毫秒）。正常直联只要 60~400ms，4s 足够；代理候选不用这个值。 */
+export const PIXIV_IMAGE_DIRECT_TIMEOUT_MS = 4000;
+/** 镜像代理候选的请求超时（毫秒）。镜像站本来就慢：本机实测同一张图 2~18s，本文件上方还记过 25s 超时；
+ *  safeFetchBuffer 的默认 20s 会把"慢但能成"的那一次直接判死 —— 这是「代理像是挂了」的另一半原因。 */
+export const PIXIV_PROXY_TIMEOUT_MS = 45000;
+/** 直联判死**或判活**都记这么久再重新判（毫秒）。 */
+export const PIXIV_DIRECT_DEAD_TTL_MS = 10 * 60 * 1000;
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+ * 2026-09-28：直联可达性**探测**（带 10 分钟缓存）—— 修「本机每张图白等满超时才轮到镜像」
+ *
+ * 为什么要把"判死"升级成"探测"：
+ *   上面那套（直联超时 → markPixivDirectDead）是**被动**的，只能等真取图超时了才反应过来。
+ *   于是本机每过一个 TTL 就得再白白等一次直联超时。现在改成**主动探测 + 缓存判决**：
+ *   取图之前先问一次"i.pximg 到底通不通"，据此决定候选顺序是"直连优先"还是"镜像优先"。
+ *
+ * 判据（怎么算"通"）：**收到任何 HTTP 响应就算通**（含 403/404）。依据是本机实测的故障形态
+ *   是"连不上/不回数据"（`Connect Timeout Error (attempted address: i.pximg.net:443)`），
+ *   而不是"服务器拒绝"；服务端答了话说明链路是通的，该不该用它交给真正取图时按完整超时
+ *   和错误类型判。探测只取响应头就掐掉 body（不发完整的 1.9MB），所以它比取图本身便宜得多。
+ *
+ * 超时与延迟预算：探测超时 PIXIV_DIRECT_PROBE_TIMEOUT_MS = 1.5s。
+ *   · 服务器（香港，直连实测 0.49s 拿满 1.9MB）：探测只需 TLS 握手 + 首字节，约 0.1~0.3s，
+ *     而且**进程启动时就后台预热一次**（见 pixivWarmupDirectProbe），等用户真正发图时判决早已在缓存里
+ *     ⇒ 服务器上取图路径不额外等任何一次探测（这正是"不要给服务器加延迟"那条要求）；
+ *   · 本机：探测 1.5s 判死（对比原来直联候选白等 4s），之后 10 分钟内直接镜像优先。
+ *
+ * 失败语义：探测失败（超时/连接错误）**等同于判死**，直接翻转成"镜像优先"，并且写进缓存
+ *   （所以失败也只探测一次，不会每张图都探）。
+ * 未知语义：**没探测过**时 `pixivDirectDead()` 返回 false（= 直连优先）。这是刻意的保守选择：
+ *   服务器上一旦探测因偶发网络抖动失败，代价只是 10 分钟走镜像（图还是对的，只是慢些）；
+ *   反过来若把"未知"也当镜像优先，服务器每次冷启动都要先吃一次镜像延迟 —— 那才是真的引入延迟。
+ *   ⚠ 取图的两个调用点（mcp-napcat-safe.js / lib/qzone-image.js）都在排序前 `await pixivDirectReachable()`，
+ *   所以真实路径里"未知"这一态在排序时不会出现。
+ * 诚实性不变：候选顺序变了，但结果里的 via 仍按实际取到字节的那条路回报（pximg-direct / mirror-proxy）。
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/** 探测直联可达性的超时（毫秒）。理由见上面那段：服务器 0.1~0.3s，本机到点即判死。 */
+export const PIXIV_DIRECT_PROBE_TIMEOUT_MS = 1500;
+/** 探测用的地址：本文件头注释里那个 2020 年就在的基准原图（存在性稳定，且与真正要取的资源同类）。 */
+export const PIXIV_DIRECT_PROBE_URL = 'https://i.pximg.net/img-original/img/2020/04/08/11/41/00/80643572_p0.jpg';
+
+/** 当前判决：{ reachable:boolean, at:number, how:'probe'|'fetch', status:number }；null = 还没判过。 */
+let pixivDirectVerdict = null;
+/** 正在飞的探测（并发调用共用同一个 Promise，别把探测打成洪水）。 */
+let pixivDirectProbeInFlight = null;
+
+const pixivDirectVerdictFresh = () => Boolean(pixivDirectVerdict) && (Date.now() - pixivDirectVerdict.at) < PIXIV_DIRECT_DEAD_TTL_MS;
+
+function setPixivDirectVerdict(reachable, how, status = 0) {
+  pixivDirectVerdict = { reachable: Boolean(reachable), at: Date.now(), how, status: Number(status) || 0 };
+  return pixivDirectVerdict;
+}
+
+/** 直联路由现在是否被判为不可达（判决过期后自动回到 false）。 */
+export function pixivDirectDead() { return pixivDirectVerdictFresh() && pixivDirectVerdict.reachable === false; }
+
+/** 把直联路由判死一段时间；返回 true 表示"这次是刚刚判死"（调用方据此只打一次日志，别刷屏）。 */
+export function markPixivDirectDead() {
+  const first = !pixivDirectDead();
+  setPixivDirectVerdict(false, 'fetch');
+  return first;
+}
+
+/** 直联真的取到过图 ⇒ 判活（比探测更硬的证据：连 1.9MB 都拿回来了）。返回 true = 这次是刚判活。 */
+export function markPixivDirectAlive() {
+  const first = pixivDirectDead();
+  setPixivDirectVerdict(true, 'fetch');
+  return first;
+}
+
+/** 当前判决快照（诊断/自测用；顺序决策请用 pixivDirectDead）。 */
+export function pixivDirectVerdictInfo() {
+  if (!pixivDirectVerdict) return { reachable: null, ageMs: 0, how: '', status: 0, fresh: false };
+  return {
+    reachable: pixivDirectVerdict.reachable,
+    ageMs: Date.now() - pixivDirectVerdict.at,
+    how: pixivDirectVerdict.how,
+    status: pixivDirectVerdict.status,
+    fresh: pixivDirectVerdictFresh(),
+  };
+}
+
+/**
+ * 问一次"直联 i.pximg 通不通"，并把结论写进 10 分钟缓存。**并发调用共用同一次探测。**
+ * @param {{url?:string, force?:boolean}} [opts] url 默认用 PIXIV_DIRECT_PROBE_URL；force=true 忽略缓存重探
+ * @returns {Promise<boolean>} true = 可达
+ */
+export async function pixivDirectReachable({ url = PIXIV_DIRECT_PROBE_URL, force = false } = {}) {
+  if (!force && pixivDirectVerdictFresh()) return pixivDirectVerdict.reachable;
+  if (pixivDirectProbeInFlight) return pixivDirectProbeInFlight;
+  pixivDirectProbeInFlight = (async () => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), PIXIV_DIRECT_PROBE_TIMEOUT_MS);
+    let reachable = false;
+    let status = 0;
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'user-agent': UA, referer: PIXIV_REFERER, range: 'bytes=0-1' },
+        signal: ac.signal,
+        redirect: 'follow',
+      });
+      status = Number(res.status) || 0;
+      reachable = status > 0;            // 收到任何 HTTP 响应就算链路通（见上面"判据"）
+      try { await res.body?.cancel(); } catch { /* 只要响应头，body 不读 */ }
+    } catch { reachable = false; }
+    finally { clearTimeout(timer); pixivDirectProbeInFlight = null; }
+    setPixivDirectVerdict(reachable, 'probe', status);
+    return reachable;
+  })();
+  return pixivDirectProbeInFlight;
+}
+
+/** 后台预热一次探测（不 await、不抛）。给"进程刚起来、先别让第一张图吃延迟"的调用点用。 */
+export function pixivWarmupDirectProbe() {
+  Promise.resolve()
+    .then(() => pixivDirectReachable())
+    .catch(() => { /* 预热失败无所谓：真正需要时会再探一次 */ });
+}
+
+/**
+ * 候选排序：直联判死时，把"同一档位、同一张图（内层地址相同）"的代理候选提到直联前面。
+ * 只换同一对孪生兄弟的先后，不动别的候选、不删任何候选、不改档位分桶顺序
+ * （档位顺序是 planPixivSend 的契约：原图档 → 显式降级档，见本文件上方）。
+ * 直联没判死（或参数不是数组）时原样返回，纯函数可离线测。
+ */
+export function pixivPrioritizeCandidates(list) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  if (!pixivDirectDead()) return arr;
+  const inner = (s) => pixivImageInnerUrl(s?.url);
+  const out = [];
+  for (const s of arr) {
+    if (s?.referer && !out.includes(s)) {
+      const twin = arr.find((x) => x !== s && !x.referer && x.tier === s.tier && inner(x) === inner(s));
+      if (twin) {
+        if (!out.includes(twin)) out.push(twin);
+        out.push(s);
+        continue;
+      }
+    }
+    if (!out.includes(s)) out.push(s);
+  }
+  return out;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════
@@ -183,15 +434,20 @@ const PIXIV_RENDITION_NAME_RE = /_p\d+_(?:master1200|square1200|custom1200|\d{3,
 /** 原图文件名：`<id>_pN.jpg`（`/img-original/img/` 下、且没有档位后缀）。 */
 const PIXIV_ORIGINAL_NAME_RE = /\/\d+_p\d+\.(?:jpe?g|png|webp|gif)$/i;
 
-/** 把"镜像站代理地址"还原成它包着的 i.pximg 地址（档位要看里层那个地址才准）。 */
+/** 把"镜像站代理地址"还原成它包着的 i.pximg 地址（档位要看里层那个地址才准）。
+ *  当前只有一种镜像形态：host 重写式 `https://i.muxmus.com/<path>`（2026-09-28 起的图片源）
+ *  —— 把镜像域名换回 `i.pximg.net`。**这条是 `pixivPrioritizeCandidates` 的孪生配对能继续
+ *  工作的前提**：它靠 `pixivImageInnerUrl(直联) === pixivImageInnerUrl(镜像)` 认"同一张图"，
+ *  不还原的话直联判死时镜像候选就提不到前面去。
+ *  老 API 式 `…/api/image.php?url=` 的解包分支随 2026-09-28 移除该图片源一并删除（不再有任何
+ *  代码产出那种地址）。 */
 export function pixivImageInnerUrl(rawUrl) {
   const s = String(rawUrl ?? '').trim();
   if (!s) return '';
   try {
     const u = new URL(s);
-    if (/\/api\/image\.php$/.test(u.pathname)) {
-      const inner = String(u.searchParams.get('url') ?? '').trim();
-      if (inner) return inner;
+    if (PIXIV_IMAGE_MIRROR_HOSTS.includes(u.hostname.toLowerCase())) {
+      return `https://i.pximg.net${u.pathname}${u.search}`;
     }
     return s;
   } catch { return s; }
@@ -721,6 +977,10 @@ export function pixivImageCandidates(work, opts = {}) {
   const p = Math.max(0, Number(opts.page) || 0);
   const size = String(opts.size ?? 'master').toLowerCase() === 'original' ? 'original' : 'master';
   const out = [];
+  /* 2026-09-28：一个地址现在展开成**多个镜像候选**（host 重写式，顺序 = 实测可靠性）。
+   * 展开要成组做：先把 ① 的第一条镜像全试完，再试 ② 的 —— 所以这里是"每条地址各自展开"，
+   * 不是"每个镜像各轮一遍所有地址"（后者会把更可能命中的 muxmus 拖到最后一个）。 */
+  const pushProxy = (u) => { for (const one of pixivProxyUrls(u)) out.push(one); };
   // 缩略图 URL 里的日期路径 —— master / original / custom-thumb 三种都吃
   const m = thumb ? /\/img\/(\d{4}\/\d{2}\/\d{2}\/\d{2}\/\d{2}\/\d{2})\/(\d+)_p(\d+)_/.exec(thumb) : null;
   if (m && id) {
@@ -729,13 +989,13 @@ export function pixivImageCandidates(work, opts = {}) {
     const master = `https://i.pximg.net/img-master/img/${datePath}/${pid}_p${p}_master1200.jpg`;
     if (size === 'original') {
       // 原图扩展名有 jpg 也有 png，两个都试（站内代理会自己挑得到内容的那个）
-      out.push(pixivProxyUrl(`https://i.pximg.net/img-original/img/${datePath}/${pid}_p${p}.jpg`));
-      out.push(pixivProxyUrl(`https://i.pximg.net/img-original/img/${datePath}/${pid}_p${p}.png`));
+      pushProxy(`https://i.pximg.net/img-original/img/${datePath}/${pid}_p${p}.jpg`);
+      pushProxy(`https://i.pximg.net/img-original/img/${datePath}/${pid}_p${p}.png`);
     }
-    out.push(pixivProxyUrl(master));
+    pushProxy(master);
   }
   // 最后兜底：就用搜索结果给的那张缩略图（也过代理）
-  if (thumb) out.push(pixivProxyUrl(thumb));
+  if (thumb) pushProxy(thumb);
   return [...new Set(out)];
 }
 
@@ -947,7 +1207,7 @@ async function fetchPixivSearchPage(keyword, page) {
  *   · GET /ajax/search/users/米山舞 → 404；/ajax/search/users/米山舞?s_mode=s_usr → 404
  *   · 作品关键词搜索替不了它：搜「米山舞」全站 173 条里，作者名含"米山舞"的0 条
  *     （那些是打了她名字标签的粉丝图）。所以"找某人本人的作品"没法靠关键词搜。
- *   · 镜像站 x.pixigraph.xyz 也没有用户搜索（猜的 5 条路由全 404，search.php 忽略 type/mode/s_mode，
+ *   · 镜像站（当时试的是 x.pixigraph.xyz）也没有用户搜索（猜的 5 条路由全 404，search.php 忽略 type/mode/s_mode，
  *     native.php 代拉 pixiv 的用户搜索返回空）。
  *   ⇒ 想按名字找人，只能自己带登录态。免费号就够（会员只管人气排序/多标签检索这类玩法）。
  *
@@ -1164,6 +1424,48 @@ export function parsePixivUserSearch(json) {
       ).trim(),
     };
   }).filter((u) => u.id);
+}
+
+/**
+ * 纯函数：从**搜索结果**里挑出「pixiv 画师主页」命中（第 ④ 条来源用的，见下方那段说明）。
+ *
+ * 输入就是桥自己搜索内核的形状：`[{ title, url, snippet }, …]`（`searchAll()` 返回的 `results`）。
+ * 名字从哪来：pixiv **用户页**的标题就是「<昵称> - pixiv」（实测），所以剥掉尾巴当名字；
+ * 剥完还像作品页/标签页的一律**不给名字**（空串）—— 宁可候选里显示"(无名字)"，也不拿假名字去参与定号。
+ * 去重按 id（同一个号常命中多次，比如 `/users/1554775` 与 `/users/1554775/artworks`），保持首次出现顺序
+ * （搜索引擎的排序就是可信度）。
+ * @returns {{id:string,name:string,url:string,snippet:string,title:string}[]}
+ */
+export function parseSearchUserHits(items) {
+  const list = Array.isArray(items) ? items : [];
+  const out = [];
+  const seen = new Set();
+  for (const it of list) {
+    const url = String(it?.url ?? '').trim();
+    const m = /pixiv\.net\/(?:en\/)?users\/(\d{1,12})(?:[/?#]|$)/i.exec(url);
+    if (!m) continue;                       // 作品页 / 标签页 / 别的站：一概不要
+    const id = m[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      name: searchHitName(it?.title),
+      url: `https://www.pixiv.net/users/${id}`,
+      snippet: String(it?.snippet ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
+      title: String(it?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
+    });
+  }
+  return out;
+}
+
+/** 纯函数：从搜索结果标题里剥画师名（剥不出来给空串，理由见上）。 */
+export function searchHitName(title) {
+  let t = String(title ?? '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/\s*[-–—|｜]\s*pixiv\s*$/i, '').trim();      // 「米山舞 - pixiv」→「米山舞」
+  if (!t || t.length > 40) return '';
+  if (/[#＃]/.test(t)) return '';                             // 「#米山舞 - …」是标签页
+  if (/(のイラスト|のマンガ|の作品|の小説|illustrations|artworks|作品一覧)/i.test(t)) return '';
+  return t;
 }
 
 /**
@@ -1510,7 +1812,10 @@ export function pixivImageSources(work, opts = {}) {
       ? String(work.urls.regular).trim()
       : pixivMasterUrl(upstream));
     push(target, PIXIV_REFERER);   // ① 直联 i.pximg（带 Referer）
-    push(pixivProxyUrl(target));   // ② 镜像站代理兜底（同字节，但慢）
+    /* ② 镜像站代理兜底（同字节，但慢）。2026-09-28：从"一条 API 式代理"改成"多条 host 重写式镜像"
+     * （顺序 = 实测可靠性，见本文件上方那段）：镜像候选都**不带 referer** —— 这是必须的，
+     * pximg.cocomi.eu.org 带 Referer 会 403。 */
+    for (const one of pixivProxyUrls(target)) push(one);
   }
   // ③ 老候选：从缩略图推日期路径（搜索路径一直用这套，保持行为不变）
   for (const u of pixivImageCandidates(work, { page, size })) push(u);
@@ -1527,8 +1832,24 @@ export function pixivImageSources(work, opts = {}) {
  * 名字搜出来不保证唯一（同名号在 pixiv 上很常见），所以：
  *   · 只有一个名字完全相等、且没有包含关系的候选 → 敢直接定（unique）；
  *   · 否则返回候选列表让用户挑，绝不瞎猜一个发出去 —— 发错人比不发更糟。
- *   （web 搜索引擎那条路实测不可靠：这台 VPS 上 bing 候选恒 0、duckduckgo 时好时坏 202，
- *    且"七菜"这种常见名会捞出 3 个同名号而真号不在前列；所以只做候选，不做自动定号。）
+ *   （**桥自己的** web 搜索引擎那条路实测不可靠：这台 VPS 上 bing 候选恒 0、duckduckgo 时好时坏 202，
+ *    且"七菜"这种常见名会捞出 3 个同名号而真号不在前列；所以只做候选，不做自动定号。
+ *    2026-09-27 补：桥自己的多平台搜索修好之后（见 CHANGELOG 该日实测数字）这条路可用了，见下面 ④ 段。）
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 第 ④ 条来源：桥自己的搜索引擎（2026-09-27）─────────────────────────────────────────
+ * 为什么加：官方两条路（app-api 的 Bearer / 官网 cookie）**都要登录态**，而线上服务器现在一个令牌
+ * 都没有 —— 实测 `node tools/pixiv-login.mjs --status` → 「长期令牌 refresh_token：没有」「access_token：
+ * 没有」，于是"按名字找号"整个不可用，而"能在国外服务器上查到作者的 pixiv 账号 id"正是要这条。
+ * 桥自己的多平台搜索实测能直接从搜索结果里拿到画师主页：
+ *   `site:pixiv.net/users 米山舞` → https://www.pixiv.net/users/1554775（标题「米山舞 - pixiv」，约 1.5 s）
+ * 所以加第 ④ 条，**只在 ①②③ 全失败时才走**（有登录态时官方接口仍是唯一权威）：
+ *   · 直接调 `lib/web-search.js` 的 `searchAll()`（同一份平台表与相关度判据，不 spawn 子进程）；
+ *   · 平台只用能查 `site:` 的那几个（见 PIXIV_NAME_SEARCH_PLATFORMS），**不花任何第三方账号额度**
+ *     —— 唯一有计量的是免密钥 firecrawl 通道（按出口 IP 计，没有 key、没有月配额）；
+ *   · 第一条查询命中就不再发第二条（省一次出站请求与一次相关度计算）；
+ *   · **只产候选、不做自动定号** —— 名字是从搜索结果标题剥出来的、也给不出作品数，
+ *     "只有一个同名号且名下有作品 = 敢定号"那套依据在这里不成立（见 shapeAuthorResolution）。
  * ══════════════════════════════════════════════════════════════════════════════════════════ */
 
 /** 纯函数：认调用方给的"画师"入参。 */
@@ -1571,8 +1892,41 @@ async function enrichArtistWorks(users, limit = 8) {
   return users;
 }
 
+/* ── 第 ④ 条的实现：直接调桥自己的搜索内核（只读搜索，不改任何东西）────────────────────── */
+
+/** ④ 用哪几个平台：只要能认 `site:` 的通用检索源。firecrawl 是本项目在机房 IP 上唯一稳定的那条
+ *  （见 lib/web-search.js 的平台表与 CHANGELOG 2026-09-27 的实测数字），其余按"可能给结果"带上 ——
+ *  它们失败或超时都不会拖慢整体：`searchAll` 的核心集一旦有结论就立刻返回（firecrawl 在核心集里）。 */
+export const PIXIV_NAME_SEARCH_PLATFORMS = ['firecrawl', 'bing', 'duckduckgo', 'baidu', 'sogou', 'so360'];
+
+/** ④ 桥自己的搜索引擎：从搜索结果里找画师主页，归一成和官方同一个形状（见 parsePixivUserSearch）。
+ *  两条查询，第一条命中就不再发第二条；归一化借同一个函数，所以 pageUrl/字段名与官方一致，
+ *  而 `works` 一律 unknown（worksKnown=false，候选里会显示"作品数未知"，补查成功才有数）。 */
+async function pixivSearchUsersByOwnSearch(name) {
+  const tried = [];
+  for (const q of [`site:pixiv.net/users ${name}`, `${name} pixiv`]) {
+    let r = null;
+    try {
+      r = await searchAll(q, { maxResults: 12, platforms: PIXIV_NAME_SEARCH_PLATFORMS });
+    } catch (e) {
+      tried.push(`「${q}」搜索失败：${e?.message ?? e}`);
+      continue;
+    }
+    const hits = parseSearchUserHits(r?.results);
+    if (!hits.length) {
+      const bad = Object.keys(r?.failures ?? {});
+      tried.push(`「${q}」没有画师主页命中${bad.length ? `（平台报错：${bad.map((k) => `${k}:${r.failures[k]}`).join('、')}）` : ''}`);
+      continue;
+    }
+    const users = parsePixivUserSearch({ body: { users: hits.map((h) => ({ userId: h.id, userName: h.name, comment: h.snippet })) } });
+    await enrichArtistWorks(users);            // 匿名补得上就补（best-effort，失败不影响主流程）
+    return { endpoint: 'web-search', users, query: q, hits };
+  }
+  throw new Error(`桥自己的搜索引擎搜了两轮都没有画师主页命中：${tried.join('；')}`);
+}
+
 /**
- * 按名字搜画师（需要登录态；没登录态就直接说清楚，不退化成关键词搜）。
+ * 按名字搜画师（官方两条路都要登录态；都没有时退到桥自己的搜索引擎，见下面 ④）。
  *
  * 路由是怎么找到的（留证，免得下次又从头试）：`/ajax/search/users` 这条路由一直都在，
  * 之前一直 400「不正确的请求」是因为参数名给错了 —— 它要的是 `nick`，不是 `word`。
@@ -1586,7 +1940,8 @@ async function enrichArtistWorks(users, limit = 8) {
  * 顺序（2026-09-20 要求的"官方优先"，也是"能一直用"的关键）：
  *   ① app-api `/v1/search/user?word=`（Bearer，见 lib/pixiv-auth.js —— 长期令牌自动轮换，不再依赖 cookie）；
  *   ② 官网 `ajax/search/users?nick=`（cookie；就是原来的唯一实现，保留当兜底）；
- *   ③ 镜像站 native.php 代拉同一个地址（实测它自己没有用户搜索路由，能认就认）。
+ *   ③ 镜像站 native.php 代拉同一个地址（实测它自己没有用户搜索路由，能认就认）；
+ *   ④ 桥自己的多平台搜索（`lib/web-search.js`）—— **只在 ①②③ 全失败时**才走，且只产候选（见 shapeAuthorResolution）。
  *
  * @returns {Promise<{query:string, endpoint:string, users:object[], source:string, cached?:boolean, cachedAt?:number}>}
  */
@@ -1598,14 +1953,14 @@ export async function pixivSearchUsersByName(name) {
   if (cached) return { query: w, endpoint: 'cache', users: cached.users, cached: true, cachedAt: cached.at, source: 'cache' };
 
   const token = await getPixivAccessToken();
-  if (!token && !pixivLoggedIn()) {
-    throw new Error('按名字找画师需要 pixiv 登录态：给桥一个 PHPSESSID 换长期令牌即可（**只做一次**：在服务器上跑 '
-      + 'node tools/pixiv-login.mjs --cookie "PHPSESSID=xxx"，之后桥自己续期，不用再给）。'
-      + '没登录态时只能改用 authorId（画师号，如 1554775）或作品链接（pixiv.net/artworks/<数字>）；'
-      + '关键词搜索搜的是"标题/标签含该名字"的作品，找不到作者本人。'
-      + '（已经查过的名字有本地缓存，不受登录态影响。）');
-  }
   const tried = [];
+  // 2026-09-27：以前这里"没登录态就直接抛错、不退化成关键词搜"。现在**不抛了** —— 多了第 ④ 条
+  // （桥自己的多平台搜索），它能在没有登录态时把画师主页直接搜出来（服务器实测：米山舞 → users/1554775）。
+  // 官方两条路的优先级一字未改：有登录态就先用官方，①②③ 全失败才走 ④。
+  if (!token && !pixivLoggedIn()) {
+    tried.push('登录态 → 没有 refresh_token/access_token 也没有 cookie（官方两条路都跳过；'
+      + '想要长期可用的官方接口就跑一次 node tools/pixiv-login.mjs --cookie "PHPSESSID=…"，之后桥自己续期）');
+  }
 
   // ① app-api（Bearer）：没有令牌就跳过，别白等一次 400
   if (token) {
@@ -1660,8 +2015,39 @@ export async function pixivSearchUsersByName(name) {
     tried.push(`mirror → ${e?.message ?? e}`);
   }
 
+  // ④ 桥自己的多平台搜索：没有登录态时的出路（见本文件上方那段说明）。放最后：官方接口才是权威。
+  try {
+    const r = await pixivSearchUsersByOwnSearch(w);
+    artistCacheSet(w, r.users);            // 搜到一次就记住：下次连搜索都不用跑
+    return { query: w, endpoint: r.endpoint, users: r.users, cached: false, source: 'search' };
+  } catch (e) {
+    tried.push(`search → ${e?.message ?? e}`);
+  }
+
   throw new Error(`按名字搜「${w}」没拿到结果。逐条试过：${tried.join('；')}。`
-    + '（若全是 400/404，先用 tools/pixiv-login.mjs --status 看登录态；也可能是 pixiv 改了参数名。）');
+    + '（官方两条路要登录态，用 tools/pixiv-login.mjs --status 看当前状态；'
+    + '搜索那条要这台机器能出网（机房 IP 下 firecrawl 与维基/新闻 RSS 可用，见 CHANGELOG）。'
+    + '也可以直接给画师号（如 1554775）或作品链接。）');
+}
+
+/**
+ * 纯函数：把"名字 → 号"的结果收口成对外的 resolve 形状（离线可测）。
+ *
+ * 2026-09-27 新增一条硬规则：**source === 'search' 时一律只给候选**，哪怕恰好只命中一个同名号
+ * 也不自动定号。原因：搜索那条来源的名字是从搜索结果标题剥出来的（pixiv 用户页标题是
+ * 「昵称 - pixiv」），而且它给不出作品数 —— rankArtistCandidates 那套"唯一一个名下有作品 = 敢定号"
+ * 的依据在这里不成立。候选里带着主页链接，念给用户认一下就行：发错画师比多发一条确认消息糟得多。
+ */
+export function shapeAuthorResolution({ name, ranked, endpoint, source }) {
+  const candidates = ranked.candidates.slice(0, 8);
+  if (source === 'search') return { kind: 'candidates', name, candidates, endpoint, source };
+  if (ranked.unique) {
+    return {
+      kind: 'id', id: ranked.unique.id, from: 'name', name, endpoint,
+      alternatives: ranked.candidates.filter((u) => u.id !== ranked.unique.id).slice(0, 5),
+    };
+  }
+  return { kind: 'candidates', name, candidates, endpoint };
 }
 
 /**
@@ -1673,12 +2059,10 @@ export async function resolvePixivAuthor(input) {
   if (p.kind === 'none') return { kind: 'none' };
   if (p.kind === 'id') return { kind: 'id', id: p.id, from: p.from };
   const r = await pixivSearchUsersByName(p.name);
-  const ranked = rankArtistCandidates(r.users, p.name);
-  if (ranked.unique) {
-    return {
-      kind: 'id', id: ranked.unique.id, from: 'name', name: p.name, endpoint: r.endpoint,
-      alternatives: ranked.candidates.filter((u) => u.id !== ranked.unique.id).slice(0, 5),
-    };
-  }
-  return { kind: 'candidates', name: p.name, candidates: ranked.candidates.slice(0, 8), endpoint: r.endpoint };
+  return shapeAuthorResolution({
+    name: p.name,
+    ranked: rankArtistCandidates(r.users, p.name),
+    endpoint: r.endpoint,
+    source: r.source,
+  });
 }

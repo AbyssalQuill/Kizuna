@@ -38,6 +38,10 @@ import { searchImages } from './image-search.js';
 import {
   pixivSearch, parsePixivId, pixivIllustDetail, pixivIllustOriginals,
   pixivImageSources, planPixivSend, pixivTierSizeVerdict,
+  // 2026-09-28：与 qq_send_pixiv 同一套策略 —— 直联 i.pximg 不通时改走镜像代理
+  pixivPrioritizeCandidates, PIXIV_IMAGE_DIRECT_TIMEOUT_MS, PIXIV_PROXY_TIMEOUT_MS, markPixivDirectDead,
+  // 2026-09-28：同 qq_send_pixiv —— 排序前先要一份带缓存的直联可达性判决（见 lib/pixiv.js）
+  pixivDirectReachable, markPixivDirectAlive,
 } from './pixiv.js';
 import { sniffImageInfo } from './image-compress.js';
 
@@ -185,7 +189,11 @@ export async function collectQzoneImages(opts = {}) {
   const accept = async ({ url, referer, tier, from, title, work, page = 0 }) => {
     const label = String(url).slice(0, 96);
     try {
-      const got = await safeFetchBuffer(url, MAX_IMAGE_FETCH_BYTES, referer ? { referer } : null);
+      // 2026-09-28：两条路各自的超时同 qq_send_pixiv —— 直联 4s（不通时别拖），代理 45s（慢但能成）
+      // （理由见 lib/pixiv.js「修 pixiv 代理挂了」段）
+      const got = await safeFetchBuffer(url, MAX_IMAGE_FETCH_BYTES, referer ? { referer } : null, referer ? { timeoutMs: PIXIV_IMAGE_DIRECT_TIMEOUT_MS } : { timeoutMs: PIXIV_PROXY_TIMEOUT_MS });
+      /* 2026-09-28：直联真取到字节 ⇒ 判活，把可达性判决刷回"直连优先"（比探测更硬的证据）。 */
+      if (referer) markPixivDirectAlive();
       const v = verifyQzoneImage(got.buffer, { contentLength: got.contentLength, contentEncoding: got.contentEncoding });
       if (!v.ok) { tried.push(`${label} → ${v.reason}`); return null; }
       if (work) {
@@ -210,6 +218,8 @@ export async function collectQzoneImages(opts = {}) {
       return item;
     } catch (e) {
       tried.push(`${label} → ${e?.message ?? e}`);
+      // 直联超时 ⇒ 判死一段时间，后续候选排序会把镜像代理提到前面（见 lib/pixiv.js）
+      if (referer && e?.timeout) markPixivDirectDead();
       return null;
     }
   };
@@ -217,7 +227,9 @@ export async function collectQzoneImages(opts = {}) {
   /** pixiv 一张作品：候选按档分桶发（原图档优先；缩略档不试；降级必须显式说清）。 */
   const takePixivWork = async (work) => {
     const op = await pixivIllustOriginals(work).catch(() => ({ urls: [], source: '', note: '' }));
-    const sources = pixivImageSources(work, { page: 0, size: pixivSize, originals: op.urls });
+    /* 2026-09-28：与 qq_send_pixiv 一致 —— 排序前先取一份带缓存的直联可达性判决（见 lib/pixiv.js）。 */
+    await pixivDirectReachable();
+    const sources = pixivPrioritizeCandidates(pixivImageSources(work, { page: 0, size: pixivSize, originals: op.urls }));
     const plan = planPixivSend(sources, { size: pixivSize });
     for (const s of plan.skipped) {
       console.error(`[qzone-image] pixiv ${work.id}：跳过一个不该发的档（${s.tier}）${s.url.slice(0, 96)} —— ${s.reason}`);

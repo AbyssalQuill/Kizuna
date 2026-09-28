@@ -155,7 +155,12 @@ if (!plan) {
   check('size=original → 1200 档只出现在 fallback 里（且带降级原因）',
     plan.fallback.length > 0 && plan.fallback.every((s) => s.tier === 'master' && s.fallback === true && s.fallbackReason),
     JSON.stringify(plan.fallback.map((s) => s.tier)));
-  check('缩略档被 skipped（永远不试）', plan.skipped.length === 1 && plan.skipped[0].tier === 'thumb', JSON.stringify(plan.skipped.map((s) => s.tier)));
+  /* 2026-09-28：一条缩略图地址现在会展开成多个镜像候选（host 重写式，见 lib/pixiv.js），
+   * 所以 skipped 从 1 条变成多条 —— 断言按"**全都是缩略档**、且一条都没漏"来钉，不再钉死条数。 */
+  check('缩略档被 skipped（永远不试；展开成多个镜像候选后仍是全部拦下）',
+    plan.skipped.length > 0 && plan.skipped.every((s) => s.tier === 'thumb')
+    && plan.skipped.length === srcOrig.filter((s) => s.tier === 'thumb').length,
+    JSON.stringify(plan.skipped.map((s) => s.tier)));
   const planMaster = pixiv.planPixivSend(srcMaster, { size: 'master' });
   check('size=master → 1200 档是首选（用户明确要的档，不拦）', planMaster.primary.some((s) => s.tier === 'master') && planMaster.skipped.every((s) => s.tier === 'thumb'));
   // 上游给 720 档地址那一组：真正拼出来的原图候选必须排在它前面

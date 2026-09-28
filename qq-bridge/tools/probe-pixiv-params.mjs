@@ -7,7 +7,7 @@
  *
  * 用法：node qq-bridge/tools/probe-pixiv-params.mjs [关键词]
  */
-const BASE = 'https://x.pixigraph.xyz';
+const BASE = 'https://pixigraph.online';
 const KW = process.argv[2] || '初音ミク';
 const enc = encodeURIComponent(KW);
 

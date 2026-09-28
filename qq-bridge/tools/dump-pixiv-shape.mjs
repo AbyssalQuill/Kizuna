@@ -1,7 +1,7 @@
 /* 把镜像站搜索接口的**原始返回结构**打出来（形状不明时唯一的办法）。
  * 用法：node qq-bridge/tools/dump-pixiv-shape.mjs [关键词]
  */
-const BASE = 'https://x.pixigraph.xyz';
+const BASE = 'https://pixigraph.online';
 const kw = process.argv[2] || '初音ミク';
 
 const url = `${BASE}/api/search.php?keyword=${encodeURIComponent(kw)}&page=1`;

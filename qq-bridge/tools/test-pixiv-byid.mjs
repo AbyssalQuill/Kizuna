@@ -83,7 +83,11 @@ const srcOrig = pixivImageSources(det, {
   originals: ['https://i.pximg.net/img-original/img/2020/04/08/11/41/00/80643572_p0.jpg', 'https://i.pximg.net/img-original/img/2020/04/08/11/41/00/80643572_p1.jpg'],
 });
 ok('原图第 1 条 = 直联 i.pximg 且带 Referer', srcOrig[0].url.endsWith('80643572_p0.jpg') && srcOrig[0].referer === PIXIV_REFERER, JSON.stringify(srcOrig[0]));
-ok('原图第 2 条 = 镜像代理兜底（同 URL、无 Referer）', /\/api\/image\.php\?url=/.test(srcOrig[1].url) && !srcOrig[1].referer, JSON.stringify(srcOrig[1]));
+/* 2026-09-28：镜像兜底从"API 式 /api/image.php?url="改成"host 重写式镜像"（依据见 lib/pixiv.js
+ * 的实测段）—— 断言改成"同一张图 + 无 Referer + host 是实测首选的镜像域名"。 */
+ok('原图第 2 条 = 镜像兜底（同一张图、无 Referer、host 重写式首选镜像）',
+  srcOrig[1].url === 'https://i.muxmus.com/img-original/img/2020/04/08/11/41/00/80643572_p0.jpg' && !srcOrig[1].referer,
+  JSON.stringify(srcOrig[1]));
 ok('候选里没有重复地址', new Set(srcOrig.map((s) => s.url)).size === srcOrig.length);
 const srcPage1 = pixivImageSources(det, { page: 1, size: 'original', originals: ['a_p0.jpg', 'a_p1.jpg'] });
 ok('page=1 取的是第 2 页原图', srcPage1[0].url === 'a_p1.jpg', JSON.stringify(srcPage1[0]));
@@ -112,7 +116,7 @@ ok('超长被截断（不让凭证面无限大）', cleanPixivCookie(`PHPSESSID=
 
 console.log('\n=== 7. 登录态只发给 pixiv，绝不发给第三方镜像站 ===');
 const hPixiv = pixivRequestHeaders('https://www.pixiv.net/ajax/illust/80643572');
-const hMirror = pixivRequestHeaders('https://x.pixigraph.xyz/api/detail.php?id=80643572');
+const hMirror = pixivRequestHeaders('https://pixigraph.online/api/detail.php?id=80643572');
 ok('请求头里本来就没有 cookie 时也不报错', typeof hPixiv === 'object' && typeof hMirror === 'object');
 ok('两个域名都会带 Referer（图床防盗链要用）', hPixiv.referer === PIXIV_REFERER && hMirror.referer === PIXIV_REFERER);
 if (pixivLoggedIn()) {

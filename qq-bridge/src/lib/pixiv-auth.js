@@ -27,8 +27,24 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-/** 桥的 config.json（本文件在 qq-bridge/src/lib/ 下 → 上两级就是 qq-bridge/）。 */
-const CONFIG_PATH = path.resolve(__dirname, '..', '..', 'config.json');
+/** 桥的 config.json（本文件在 qq-bridge/src/lib/ 下 → 上两级就是 qq-bridge/）。
+ *  可用 QQBRIDGE_PIXIV_CONFIG_PATH 指到别处：自检要读一份"假配置"，绝不能碰真配置。 */
+export function pixivConfigPath() {
+  const override = String(process.env.QQBRIDGE_PIXIV_CONFIG_PATH ?? '').trim();
+  return override ? path.resolve(override) : path.resolve(__dirname, '..', '..', 'config.json');
+}
+
+/** 读 config.json 里某个 pixiv 字段（文件缺失 / JSON 坏 / 字段不是字符串，一律当"没配"）。 */
+function readPixivConfigField(key) {
+  try {
+    let text = fs.readFileSync(pixivConfigPath(), 'utf8');
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    const v = JSON.parse(text)?.pixiv?.[key];
+    return typeof v === 'string' ? v : '';
+  } catch {
+    return '';
+  }
+}
 
 /** 官方 Android 客户端的公开常量（客户端里硬编码的，非账号密码）。 */
 export const PIXIV_CLIENT_ID = 'MOBrBDS8blbauoSck0ZfDbtuzpyT';
@@ -92,14 +108,20 @@ function cleanToken(v) {
 
 /** config.json 的 pixiv.refreshToken（读不到/格式坏都当"没配"）。 */
 export function configPixivRefreshToken() {
-  try {
-    let text = fs.readFileSync(CONFIG_PATH, 'utf8');
-    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-    const t = JSON.parse(text)?.pixiv?.refreshToken;
-    return typeof t === 'string' ? t : '';
-  } catch {
-    return '';
-  }
+  return readPixivConfigField('refreshToken');
+}
+
+/** config.json 的 pixiv.cookie（同上）。这里单独实现一份而不 import lib/pixiv.js —— 那个文件已经
+ *  import 本文件，反向引用会成环；读法必须与 lib/pixiv.js 的 configPixivCookie() 保持一致。 */
+export function configPixivCookie() {
+  return readPixivConfigField('cookie');
+}
+
+/** 可用于"一次性引导"的 cookie：config 优先，其次环境变量；QQBRIDGE_PIXIV_COOKIE_OFF=1 强制停用
+ *  （与 lib/pixiv.js 的 pixivCookie() 同一套开关，便于自检和临时下线）。 */
+export function pixivBootstrapCookie() {
+  if (String(process.env.QQBRIDGE_PIXIV_COOKIE_OFF ?? '').trim() === '1') return '';
+  return configPixivCookie() || String(process.env.QQBRIDGE_PIXIV_COOKIE ?? '').trim();
 }
 
 /**
@@ -528,4 +550,45 @@ export async function loginWithPhpSessid(cookieValue) {
     error: ex.error,
     attempts,
   };
+}
+
+/* ─────────────────── 「粘贴一次就自动轮换」的最后一公里（2026-09-28）───────────────────
+ * 现场：主人在管理端的功能配置里贴了 PHPSESSID，以为"贴一次就会自己轮换"，但登录态一直没建立。
+ * 根因有两条，缺一不可：
+ *   ① 当时**只有** tools/pixiv-login.mjs 会去做 OAuth 交换；填进配置的 cookie 只是打开
+ *      lib/pixiv.js 里那条"每次请求都带 cookie"的旧路（pixivLoggedIn() = cookie 非空），
+ *      改配置从不触发交换 —— 于是永远停在"有个会过期的 cookie"，离"自动轮换"还差一步；
+ *   ② 那份 cookie 后来在四份 config.json 里一份都没留下（全盘也没有 state/pixiv-token.json），
+ *      连旧路也没在跑 —— 所以现象是"完全没有登录态"。
+ * 这个函数补上第 ① 步：有 cookie、没有长期令牌 → 自己换一次。调用点在 bridge.js 启动流程里，
+ * 与"每 50 分钟轮换"的定时器相邻；交换成功后第 ② 条自然不成立（令牌落盘，cookie 可丢）。
+ *
+ * 纪律：只做一次、绝不抛、绝不阻塞启动（调用方 void + catch）；失败只记一行日志；
+ *       凭证不进日志（长度以外一律不回显 —— loginWithPhpSessid 内部已脱敏）。
+ * @returns {Promise<{ok:boolean, skipped?:string, error?:string, userId?:string, userName?:string}>}
+ */
+export async function bootstrapPixivFromConfigCookie({ logger = () => {} } = {}) {
+  const st = pixivAuthState();
+  if (st.hasRefreshToken) return { ok: true, skipped: 'already-has-refresh-token' };
+  const cookie = pixivBootstrapCookie();
+  if (!cookie) return { ok: true, skipped: 'no-cookie' };
+  const sessid = normalizePhpSessid(cookie);
+  logger(`[pixiv] 配置里有登录 cookie 却没有长期令牌：正在用它换一次（PHPSESSID(len=${sessid.length})，只发给 pixiv 自己的域名）`);
+  let r;
+  try {
+    r = await loginWithPhpSessid(cookie);
+  } catch (e) {
+    const error = `引导时抛异常：${e?.message ?? e}`;
+    logger(`[pixiv] ${error}（不影响主流程；按名字搜画师仍可用这份 cookie，但它不会自动续期）`);
+    return { ok: false, error };
+  }
+  if (!r?.ok) {
+    logger(`[pixiv] 用配置里的 cookie 换长期令牌失败：${r?.error ?? '未知原因'}`
+      + '（按名字搜画师仍可用这份 cookie，但它不会自动续期；换一份新 cookie，'
+      + '或跑 node tools/pixiv-login.mjs --cookie "PHPSESSID=…" 看每一步的实测响应）');
+    return { ok: false, error: String(r?.error ?? '未知原因'), attempts: r?.attempts };
+  }
+  logger(`[pixiv] 已用配置里的 cookie 换取长期令牌（账号 ${r.userId || '?'}${r.userName ? `「${r.userName}」` : ''}，`
+    + `已落盘 ${pixivTokenPath()}）—— 此后每 50 分钟自动轮换，配置里的这份 cookie 可以删掉了`);
+  return { ok: true, userId: r.userId, userName: r.userName };
 }

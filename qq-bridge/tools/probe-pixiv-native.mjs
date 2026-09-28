@@ -4,7 +4,7 @@
  *
  * 用法：node qq-bridge/tools/probe-pixiv-native.mjs
  */
-const HOSTS = ['https://x.pixigraph.xyz', 'https://pixigraph.online'];
+const HOSTS = ['https://pixigraph.online', 'https://x.pixigraph.xyz'];
 const KW = encodeURIComponent('初音ミク');
 
 const tries = [
