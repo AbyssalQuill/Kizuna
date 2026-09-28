@@ -207,9 +207,11 @@ export const getNapcatWebuiReady = (_opts?: { verify?: boolean }) =>
 /* ================= 连接服务端的状态机 =================
  * 2026-09-22连接服务器后可直接退出；下次打开时自动连接服务器，该过程带有「服务端启动中」状态机。
  * 阶段：idle → connecting(SSH) → tunnels → server-starting(组件逐个就绪)
- * → warming(静默预鉴权) → ready / failed。轮询该接口不产生任何网络动作。 */
+ * → warming(静默预鉴权) → ready / failed。
+ * 2026-10-01 新增 partial（连上了、但服务端组件没起来）：它不是中间态，是终态 —— 界面不再显示
+ * 「服务端连接中」，各卡片如实写自己那份「运行中 / 未运行」。轮询该接口不产生任何网络动作。 */
 export interface ConnectPhase {
-  phase: 'idle' | 'connecting' | 'tunnels' | 'server-starting' | 'warming' | 'ready' | 'failed';
+  phase: 'idle' | 'connecting' | 'tunnels' | 'server-starting' | 'warming' | 'ready' | 'partial' | 'failed';
   note: string;
   serverId: string;
   serverName: string;
@@ -460,6 +462,8 @@ export interface PersonaEntry {
   style?: PersonaStyle | null;
   catchphrases?: Array<{ phrase: string; context: string }>;
   topics?: string[];
+  /** 人格学习产出的短标签（画像页 chips 的唯一来源；2026-09-26 新增） */
+  tags?: string[];
   taboos?: string[];
   samples?: number;
   learnedAtMs?: number;
@@ -480,14 +484,11 @@ export interface OwnerProfileResp {
     /**   / owner 在自己群里的真实角色（与图谱 node.role 同一套取值；null=拿不到）。注意这不是 owner 这个身份 */
     role?: GraphRole | null;
   } | null;
-/** 由 profile 的 personality/likes/dislikes/notes 切出的标签，最多 12 个。
-   *  「实测」owner 的 profile 中 personality/likes/dislikes 均为空，仅 notes 有内容，
-   *  而 notes 保存的正是"给模型的说话要求"（例如发消息末尾不带句号），前端取到后须再过一遍 INSTR_RE。 */
-  profileTags?: string[];
-/** 近 30 天记忆条目中的高频二字词，形状 {w,c}，来源为 server 的 memoryTopWords
-   *  （按汉字连续段切 bigram 并以停用字切断）：未使用词典，故可能出现"果数/里游"一类碎词，
-   *  界面上须标明来历，不得当作人格标签。 */
-  memoryTop?: Array<{ w: string; c: number }>;
+/** 人格学习产出的短标签（persona-library 的 tags，纯字符串数组）。
+   *  2026-09-26 起这是画像页 chips 的**唯一**来源：原来另有「按档案字段现切」与
+   *  「记忆条目高频二字词兜底」两路，高频词无词典可依、会切出「术问／角洲」这类碎词，
+   *  主人要求别再兜底 —— 学习没给出标签就是空数组，界面显示「没有」。 */
+  learnedTags?: string[];
 /** persona-library 里该 uid 的条目（存在就说明这个人是学习过的）；老数据/没学过时为 null */
   persona?: PersonaEntry | null;
   msgCount30d?: number;
@@ -875,7 +876,8 @@ export const setOwnerQQ = (ownerQQ: string) =>
  *            receivedTotal, todaySent, todayTotal, convTotal, groupConvs, privateConvs },
  *            usage:{ totalTokens, messages, avgTokensPerMessage, sinceDays, ledgerPath, note? } }
  *   GET  /bridge/chat-convs?scope=&serverId=&kind=all|group|private&limit=200
- *        → { ok:true, scope, convs:[{ key, kind:'group'|'private', name, count, sent, received, lastTs, lastText }] }
+ *        → { ok:true, scope, convs:[{ key, kind:'group'|'private', name, groupName?, groupNick?,
+ *            remark?, nameSource?, count, sent, received, lastTs, lastText }] }
  *   GET  /bridge/chat-messages?scope=&serverId=&key=group:123456&limit=50&offset=0&query=&direction=all|in|out
  *        → { ok:true, key, total, count, messages:[{ id, ts, sender, senderUid, isSelf, kind, content, recalled }] }
  *   POST /bridge/chat-delete body { scope, serverId, confirm:true, key?, ids?, beforeMs?, all? }
@@ -940,8 +942,17 @@ export interface ChatConv {
 /** 会话键，形如 `group:123456` / `private:10001`；也是删除时的 key 参数 */
   key: string;
   kind: ChatConvKind;
-/** 群名或 QQ 号（后端已解析；拿不到时可能是空串，界面回落显示 key） */
+/** 会话标题：群聊=群名、私聊=对方昵称（2026-09-26 起后端按这个口径解析；
+ *  拿不到时可能是空串，界面回落显示 key） */
   name: string;
+/** 群名（仅群聊；私聊为空串） */
+  groupName?: string;
+/** 我在这个群里的昵称（群名片优先、其次群昵称；仅群聊有） */
+  groupNick?: string;
+/** 私聊对方的备注（仅私聊、且设过备注时有） */
+  remark?: string;
+/** name 的来源：group=群名 / friend=对方昵称 / db=退回了库里的名字（后端拿不到真名） */
+  nameSource?: string;
   count: number;
   sent: number;
   received: number;

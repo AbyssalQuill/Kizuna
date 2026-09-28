@@ -39,6 +39,8 @@ export type DropdownProps = {
   style?: CSSProperties;
   title?: string;
   ariaLabel?: string;
+/** 触发按钮的 id（给需要按 id 定位该控件的调用方/验证脚本用；不影响样式与行为） */
+  id?: string;
 /** value 为空（且没有可选项命中）时触发器里的灰字；不传即为空白 */
   placeholder?: string;
 };
@@ -87,7 +89,7 @@ const PANEL_MAX_HEIGHT = PANEL_MAX_VISIBLE_ITEMS * ITEM_HEIGHT_ESTIMATE + 10;
 type PanelGeom = { left: number; top: number; width: number; maxHeight: number };
 
 export function Dropdown({
-  value, onChange, options, disabled, className, style, title, ariaLabel, placeholder,
+  value, onChange, options, disabled, className, style, title, ariaLabel, placeholder, id,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -281,10 +283,10 @@ export function Dropdown({
       <div ref={measureRef} className="mb-dd-measure" aria-hidden="true" />
       <button
         ref={triggerRef}
+        id={id}
         type="button"
         className={triggerClass}
         style={{ ...style, ...widthStyle }}
-        title={title}
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -332,7 +334,6 @@ export function Dropdown({
                   aria-selected={isSel}
                   aria-disabled={o.disabled || undefined}
                   data-idx={i}
-                  title={o.label}
                   onMouseEnter={() => { if (!o.disabled) setActive(i); }}
                   onClick={() => commit(i)}
                 >

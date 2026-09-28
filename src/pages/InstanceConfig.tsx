@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import NoticeBar from '../components/NoticeBar';
-import { api, postConfig, instanceAction, instanceLogs } from '../api';
+import { api, getState, postConfig, instanceAction, instanceLogs } from '../api';
 import { CFG_MANAGER, cachedInstanceConfig, rememberConfig, rememberInstanceConfig } from '../config-cache';
 import type { ManagerState, DSHIsolatedConfig, NapcatLocalConfig } from '../stores/types';
 import { ArrowLeft, Save, Play, Square, FileText, Loader2 } from 'lucide-react';
 import NumInput from '../components/NumInput';
 import Dropdown from '../components/Dropdown';
+import { ReadBar, Skeleton } from '../components/ReadState';
+import { initialFromCache, warmCache, writeCacheValue } from '../lib/read-cache';
+
+/** 本页负责的三个本机实例 id（与 `LocalInstance['id']` 同一口径）。 */
+export type InstanceId = 'dsh-isolated' | 'napcat-local' | 'bridge-local';
+
+/** 「预热全部本机实例」时用来过滤实例列表接口给回来的 id */
+const INSTANCE_IDS: readonly InstanceId[] = ['dsh-isolated', 'napcat-local', 'bridge-local'];
 
 interface Props {
   state: ManagerState | null;
-  instanceId: 'dsh-isolated' | 'napcat-local' | 'bridge-local';
+  instanceId: InstanceId;
   onBack: () => void;
   onRefresh: () => void;
 }
@@ -21,15 +29,69 @@ interface Props {
  *    绝不以出厂默认值冒充，屏幕上不会出现与桥上配置不同的数值；
  *  · 页面立刻可见，读取中只占一行行内提示，不做整页等待；
  *  · 「保存配置」在真实配置读到之前一律禁用（空值绝不允许写回桥上）。 */
-const instanceKeyOf = (id: 'dsh-isolated' | 'napcat-local' | 'bridge-local') =>
+const instanceKeyOf = (id: InstanceId) =>
   (id === 'dsh-isolated' ? 'dshIsolated' : id === 'napcat-local' ? 'napcatLocal' : 'bridgeLocal');
+
+/** 本页两个读取缓存的键（拼法只此一处，组件与预热函数共用）。 */
+const cfgKeyOf = (id: InstanceId) => 'instance:config:' + id;
+const logKeyOf = (id: InstanceId) => 'instance:log:' + id;
+
+/** 首要的取值口径：优先用管理端的配置缓存（`config-cache`，会话内持久、带密钥脱敏与作用域鉴别）；
+ *  它没有时才退到本页的读取缓存（`read-cache`，进程内，只在成功回包后写入）。
+ *  两者都只提供"上次真实读到的值" —— 本次进页面仍照常发一次真请求校准，读到原地替换。 */
+function bootCfg<T>(instanceId: InstanceId, instanceKey: string): T | null {
+  return cachedInstanceConfig<T>(instanceKey) ?? initialFromCache<T>(cfgKeyOf(instanceId)).value;
+}
+
+/* ── 取数 + 整形（模块级，2026-09-26 追加）─────────────────────────────────────────────
+ * 「为什么要抽出来」：预热（进管理器空闲时 / 首页鼠标停在「配置」按钮上）必须写进**与组件成功回包后
+ * 完全一致**的那份形状。形状只有一处来源才不会两边漂 —— 于是把"取数 + 整形"放在这两个函数里，
+ * 组件与预热共用：页面管界面（错误文案 / 退避重读 / 禁用），预热只管把值读进缓存。
+ *
+ * 「失败怎么办」两个函数都**抛错**：页面照旧 catch 成错误文案 + 自动退避；预热侧由 `warmCache` 静默吞掉。 */
+
+/** 取某个实例的配置（`/api/config` 回包里那一份）。成功时顺手把整份管理端配置写进 `CFG_MANAGER` 缓存。 */
+async function readInstanceConfig(id: InstanceId): Promise<any> {
+  const c = await api<any>('/config');
+  rememberConfig(CFG_MANAGER, c);
+  const next = c?.instances?.[instanceKeyOf(id)];
+  if (!next) throw new Error('回包中不含该实例的配置');
+  return next;
+}
+
+/** 读某个实例的日志尾。空数组给「（暂无日志）」占位 —— 与组件成功回包后写缓存的那份一致。 */
+async function readInstanceLogs(id: InstanceId, tail = 200): Promise<string[]> {
+  const r = await instanceLogs(id, tail);
+  return r.lines.length ? r.lines : ['（暂无日志）'];
+}
+
+/** 预热一个实例：它的配置（`instance:config:<id>`）与日志尾（`instance:log:<id>`）。
+ *  模块级：不 setState、不弹错、不刷屏；已在飞 / 缓存还新（默认 5 分钟）由 `warmCache` 自己跳过，
+ *  失败也由它静默丢弃 —— 进页面时照常自己读一遍。 */
+export async function warmInstancePage(id: InstanceId): Promise<void> {
+  await Promise.all([
+    warmCache(cfgKeyOf(id), () => readInstanceConfig(id)),
+    warmCache(logKeyOf(id), () => readInstanceLogs(id, 200)),
+  ]);
+}
+
+/** 预热全部本机实例（进管理器后空闲时调用一次即可）。
+ *  实例 id 取自现有的实例列表接口（`/api/state` 的 `instances[].id`）；拿不到列表就静默返回。 */
+export async function warmAllInstances(): Promise<void> {
+  let ids: InstanceId[] = [];
+  try {
+    const s = await getState();
+    ids = (s?.instances ?? []).map((i) => i.id).filter((id) => INSTANCE_IDS.includes(id));
+  } catch { return; }
+  for (const id of ids) await warmInstancePage(id);
+}
 
 export default function InstanceConfig({ state, instanceId, onBack, onRefresh }: Props) {
   const isDsh = instanceId === 'dsh-isolated';
   const cmdKey = instanceId === 'napcat-local' ? 'napcatLocal' : 'bridgeLocal';
   /* 初值：本页实例的缓存配置；没有缓存即为 null（字段留空、控件禁用），不使用任何出厂默认值。 */
-  const [dsh, setDsh] = useState<DSHIsolatedConfig | null>(() => cachedInstanceConfig<DSHIsolatedConfig>('dshIsolated'));
-  const [cmdCfg, setCmdCfg] = useState<NapcatLocalConfig | null>(() => cachedInstanceConfig<NapcatLocalConfig>(instanceKeyOf(instanceId)));
+  const [dsh, setDsh] = useState<DSHIsolatedConfig | null>(() => bootCfg<DSHIsolatedConfig>('dsh-isolated', 'dshIsolated'));
+  const [cmdCfg, setCmdCfg] = useState<NapcatLocalConfig | null>(() => bootCfg<NapcatLocalConfig>(instanceId, instanceKeyOf(instanceId)));
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 /** 提示条语气：失败走 `warn`（红字），成功与状态说明走 `notice` */
@@ -70,11 +132,13 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
   const loadCfg = async (): Promise<boolean> => {
     setCfgLoading(true);
     try {
-      const c = await api<any>('/config');
-      rememberConfig(CFG_MANAGER, c);
-      const next = isDsh ? c?.instances?.dshIsolated : c?.instances?.[cmdKey];
-      if (!next) throw new Error('回包中不含该实例的配置');
+      /* 取数 + 整形在模块级 `readInstanceConfig`（与预热函数共用同一份代码）；成功时它已把
+         管理端配置写进 CFG_MANAGER 缓存，回包不含本实例时抛「回包中不含该实例的配置」。 */
+      const next = await readInstanceConfig(instanceId);
       if (!touched.current) { if (isDsh) setDsh(next); else setCmdCfg(next); }
+      /* 只有成功回包才写本页读取缓存：下次进本页先按这份旧值渲染，再后台静默重读。
+         写的是"桥上读到的"那份，与用户此刻是否正在编辑无关。 */
+      writeCacheValue(cfgKeyOf(instanceId), next);
       setCfgErr(null);
       setRetrying(false);
       return true;
@@ -93,8 +157,8 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
        同时清掉上一个实例留下的失败原因与退避状态，由下面这次读取的结果重新决定。 */
     setCfgErr(null);
     setRetrying(false);
-    setDsh(cachedInstanceConfig<DSHIsolatedConfig>('dshIsolated'));
-    setCmdCfg(cachedInstanceConfig<NapcatLocalConfig>(instanceKeyOf(instanceId)));
+    setDsh(bootCfg<DSHIsolatedConfig>('dsh-isolated', 'dshIsolated'));
+    setCmdCfg(bootCfg<NapcatLocalConfig>(instanceId, instanceKeyOf(instanceId)));
     void loadCfg();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
@@ -159,11 +223,16 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
   const loadLogs = async () => {
     if (logsOpen) { setLogsOpen(false); return; }
     setLogsOpen(true);            // 立即展开卡片，日志到达后就地填充
-    setLogs([]);
+    /* 先铺上次成功读到的日志尾（同一个实例才共用同一条缓存键），再照常发一次真请求校准：
+       有旧值时屏上不会先跳一行「正在读取日志尾部 200 行…」。 */
+    setLogs(initialFromCache<string[]>(logKeyOf(instanceId)).value ?? []);
     setLogsLoading(true);
     try {
-      const r = await instanceLogs(instanceId, 200);
-      setLogs(r.lines.length ? r.lines : ['（暂无日志）']);
+      /* 取数 + 整形在模块级 `readInstanceLogs`（与预热函数共用同一份代码） */
+      const lines = await readInstanceLogs(instanceId, 200);
+      setLogs(lines);
+      /* 只有成功回包才写缓存（失败分支不写，免得把"读不到"当成旧值）。 */
+      writeCacheValue(logKeyOf(instanceId), lines);
     } catch (e: any) {
       /* 2026-09-30：原文「收起后再次点「日志」可重试」：措辞与"不要点击重试"的口径不符（此处本是
          展开/收起开关顺带重读，并非重试按钮）。日志为按需读取，不自动轮询，故改为如实说明"再次展开会重读"。 */
@@ -206,6 +275,7 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
         <NoticeBar msg={msg} onClose={() => setMsg(null)} kind={msgKind} />
 
         <div className="card">
+          {/* 2026-09-26 主人要求去掉全部加载线：原注释里的 ReadBar（2px 细进度条）已删除，下面的说明仍然成立。 */}
           {isDsh
             ? (
               <>
@@ -229,12 +299,12 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
                 </div>
                 <div className="form-group">
                   <label className="label">DSH 命令行路径</label>
-                  <input className="input" value={n(d.dshCli)} disabled={!ready} onChange={(e) => editDsh({ dshCli: e.target.value })} />
+                  <input className="input is-mid" value={n(d.dshCli)} disabled={!ready} onChange={(e) => editDsh({ dshCli: e.target.value })} />
                   <div className="field-hint">启动器调用 DSH 时使用的命令行入口路径；留空时按安装位置自动定位。</div>
                 </div>
                 <div className="form-group">
                   <label className="label">隔离主目录（DSH_HOME）</label>
-                  <input className="input" value={n(d.isolatedHome)} disabled={!ready} onChange={(e) => editDsh({ isolatedHome: e.target.value })} />
+                  <input className="input is-mid" value={n(d.isolatedHome)} disabled={!ready} onChange={(e) => editDsh({ isolatedHome: e.target.value })} />
                   <div className="field-hint">该实例独占的 <code>DSH_HOME</code>，与本机 <code>3210</code> 端口那套互不影响；改动后需重启该实例。</div>
                 </div>
               </>
@@ -258,17 +328,17 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
                   <>
                     <div className="form-group">
                       <label className="label">OneKey / 安装目录（可选）</label>
-                      <input className="input" value={n(c.installDir)} disabled={!ready} placeholder="留空自动探测 OneKey 安装目录" onChange={(e) => editCmd({ installDir: e.target.value || undefined })} />
+                      <input className="input is-mid" value={n(c.installDir)} disabled={!ready} placeholder="留空自动探测 OneKey 安装目录" onChange={(e) => editCmd({ installDir: e.target.value || undefined })} />
                       <div className="field-hint">OneKey 版 NapCat 的安装目录；留空则自动探测。目录填错时表现为找不到启动器而启动失败。</div>
                     </div>
                     <div className="form-group">
                       <label className="label">快速登录 QQ（留空自动探测 / 二维码登录）</label>
-                      <input className="input" value={n(c.quickLogin)} disabled={!ready} placeholder="如 10001（留空自动探测 / 二维码登录）" onChange={(e) => editCmd({ quickLogin: e.target.value || undefined })} />
+                      <input className="input is-short" value={n(c.quickLogin)} disabled={!ready} placeholder="如 10001（留空自动探测 / 二维码登录）" onChange={(e) => editCmd({ quickLogin: e.target.value || undefined })} />
                       <div className="field-hint">填写后按该号码免扫码登录；留空则自动探测，探测不到时退回二维码登录。</div>
                     </div>
                     <div className="form-group">
                       <label className="label">WebUI 登录令牌（登录 6099 网页用）</label>
-                      <input className="input" value={n(c.webuiToken)} disabled={!ready} placeholder={ready ? '留空 = 沿用 truefriend' : '尚未读取'} onChange={(e) => editCmd({ webuiToken: e.target.value || 'truefriend' })} />
+                      <input className="input is-mid" value={n(c.webuiToken)} disabled={!ready} placeholder={ready ? '留空 = 沿用 truefriend' : '尚未读取'} onChange={(e) => editCmd({ webuiToken: e.target.value || 'truefriend' })} />
                       <div className="field-hint">NapCat WebUI 的登录令牌，默认 <code>truefriend</code>；须与 NapCat 自身配置一致，否则 6099 网页登录失败。</div>
                     </div>
                     {/* 【2026-09-18】本机启动器「关闭界面时结束 NapCat」开关（组件定义见文件末尾） */}
@@ -278,7 +348,7 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
                 <div className="form-row">
                   <div className="form-group">
                     <label className="label">工作目录</label>
-                    <input className="input" value={n(c.workDir)} disabled={!ready} placeholder="可选" onChange={(e) => editCmd({ workDir: e.target.value || undefined })} />
+                    <input className="input is-mid" value={n(c.workDir)} disabled={!ready} placeholder="可选" onChange={(e) => editCmd({ workDir: e.target.value || undefined })} />
                     <div className="field-hint">启动进程的工作目录（可选）；留空时由启动器自行确定。</div>
                   </div>
                   <div className="form-group">
@@ -295,11 +365,17 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
               {/* 2026-09-30：缓存命中时（`ready`）不再显示这一行：下方本就是上次读到的真实值，
               每次进页面都挂一句「正在读取…」正是此前反馈的中间态跳变；回包到达后原地替换即可。
               2026-09-30 修改要求：失败分支里面那个「重试」按钮已移除，改为按退避间隔自动重读。 */}
-          {!ready && (
+          {/* 首次进入（缓存与回包都没有）：骨架占位，替掉原来那句「正在读取本机配置…」——
+              屏上不再是"被清空去等"，而是"值马上就到"。下方字段此刻空白且不可编辑（口径不变），
+              读到后原地填入并启用；已有旧值时这一段根本不出现，不再有任何进度条，只是静默在后台校准。 */}
+          {!ready && !cfgErr && (
+            <div style={{ marginTop: 10 }}>
+              <Skeleton rows={2} />
+            </div>
+          )}
+          {!ready && cfgErr && (
             <div className="field-hint" style={{ marginTop: 10 }}>
-              {cfgErr
-                ? '本实例配置尚未读取到；下方字段保持空白且不可编辑，本页会自动重读。'
-                : '正在读取本机配置；读到之前下方字段为空白且不可编辑，以免呈现与桥上不一致的数值。'}
+              本实例配置尚未读取到；下方字段保持空白且不可编辑，本页会自动重读。
             </div>
           )}
           {cfgErr && (
@@ -313,9 +389,6 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
           <button
             className="btn btn-primary"
             disabled={!ready || cfgLoading || !!cfgErr}
-            title={!ready
-              ? (cfgErr ? '配置未读取成功，暂不可保存；本页会自动重读' : '配置尚未读取完成，暂不可保存')
-              : cfgErr ? '配置未读取成功，暂不可保存；本页会自动重读' : '写入本机配置并立即生效'}
             onClick={save}
           >
             <Save size={14} /> 保存配置
@@ -335,8 +408,9 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
           <div className="card" style={{ marginTop: 14 }}>
             <div className="card-title">运行日志</div>
             <div className="log-viewer">
+              {/* 确实没有旧日志（首次展开）时才摆骨架，而不是先跳一行「正在读取日志尾部 200 行…」 */}
               {logsLoading && !logs.length
-                ? <div className="log-line">正在读取日志尾部 200 行…</div>
+                ? <Skeleton rows={6} />
                 : logs.map((l, i) => <div className="log-line" key={i}>{l}</div>)}
             </div>
           </div>
@@ -355,7 +429,7 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
 export function NapcatKillOnExitSwitch({ value, pending, onChange }: { value?: boolean; pending?: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="form-group">
-      <label className="switch-row" title={pending ? '配置尚未读取到，暂不可修改' : undefined}>
+      <label className="switch-row">
         <input type="checkbox" checked={pending ? false : value !== false} disabled={pending} onChange={(e) => onChange(e.target.checked)} />
         <div>
           <span>关闭界面时结束 NapCat</span>

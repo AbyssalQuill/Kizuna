@@ -1,5 +1,5 @@
 /**
- * MoonBot 管理端 · 配置缓存（内存 + 浏览器持久化 两级）
+ * Kizuna 管理端 · 配置缓存（内存 + 浏览器持久化 两级）
  *
  * 「为什么需要它」：管理端的页面切换是卸载再挂载（见 `src/App.tsx`：每次 `view` 变化即返回另一个页面组件），
  * 每个配置页在挂载瞬间都会重新发起一次配置读取。若挂载时用一组"出厂默认值"占位，页面上就会先闪出
@@ -12,7 +12,7 @@
  *   · 按"读取目标"分键：本机桥配置与服务端桥配置各占一个键，二者绝不互相回落，
  *     否则连上服务器时会把本机那份配置显示成服务端那份，比闪一下默认值更危险。
  *
- * ═══════════════ 2026-09-29：内存缓存 → 加一层浏览器持久化 ═══════════════
+ * ═══════════════ 2026-09-28：内存缓存 → 加一层浏览器持久化 ═══════════════
  *
  * 「为什么持久化」：上面那层只是模块级内存，刷新页面（或重开管理端窗口）即全部失效，
  * 于是每次打开都回到"没有缓存 → 空白 + 禁用 → 等回包"的老路：连服务器时表现为
@@ -26,15 +26,15 @@
  *     既不会串到别的站点，也不会被别的标签页误读；
  *   · 数据量是"几份配置对象"，localStorage 的容量绰绰有余，不需要 IndexedDB 的复杂度。
  *
- * 「键名格式」`moonbot.cfgcache.v1.<scope>::<key>`
- *   · `moonbot.cfgcache` = 本模块专用命名空间，清缓存时可整片删除，不碰别人的键；
+ * 「键名格式」`kizuna.cfgcache.v1.<scope>::<key>`
+ *   · `kizuna.cfgcache` = 本模块专用命名空间，清缓存时可整片删除，不碰别人的键；
  *   · `v1` = 版本前缀：将来缓存结构（或脱敏规则）变了，直接升 v2 即可让旧记录自然失效，
  *     不必写迁移逻辑（旧键永远不会被新版本读到，读取时按 TTL 顺手清掉）；
  *   · `<scope>` = 作用域，`local`（本机）或 `remote`（远端服务器）；
  *   · `<key>` = 本模块的缓存键，远端键自带服务器 id（`bridge-config:remote:<serverId>`），
  *     因此"先连 A、再连 B、再回 A"三条记录各占一个键，互不覆盖、互不回落。
- *   例：`moonbot.cfgcache.v1.local::bridge-config:local`
- *       `moonbot.cfgcache.v1.remote::bridge-config:remote:srv-1a2b`
+ *   例：`kizuna.cfgcache.v1.local::bridge-config:local`
+ *       `kizuna.cfgcache.v1.remote::bridge-config:remote:srv-1a2b`
  *
  * ═══════════════ 2026-09-30：作用域播种（消除首帧"未连接 / 不可用"的跳变） ═══════════════
  *
@@ -104,7 +104,7 @@ export const CFG_LEARNING = 'learning-config';
 export const CFG_LAST_CONNECT = 'last-connect';
 
 /** localStorage 命名空间（带版本前缀；升版本即旧记录自然失效） */
-const STORAGE_NS = 'moonbot.cfgcache.v1';
+const STORAGE_NS = 'kizuna.cfgcache.v1';
 /** 落盘记录的存活时间：超期即视为过期并删除（页面挂载时本来就会重新读一次，这里只是兜底，
  *  防止早已不存在的服务器/已改过的配置在很久以后仍被当作初值渲染）。 */
 const STORAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -121,7 +121,7 @@ const REDACT_MAX_DEPTH = 12;
  * 而这两页用的缓存键是固定的、不含作用域的 —— 于是"先连服务器 A 看一眼语音配置，再切回本机"时，
  * 缓存会把 A 那份当成本机的显示出来。拿服务端值冒充本机值（或反过来）比闪一下默认值危险得多，
  * 故本模块自行按作用域鉴别这两个键：
- *   · 落盘记录里带上写它时的作用域标签（`moonbot.cfgcache.v1.<scope>::<key>` 的键名是"键的作用域"，
+ *   · 落盘记录里带上写它时的作用域标签（`kizuna.cfgcache.v1.<scope>::<key>` 的键名是"键的作用域"，
  *     而这里的标签是"数据来自哪一侧"，二者不是一回事：键名对歧义键恒为 local）；
  *   · 读缓存时要求"标签 == 当前作用域"。当前作用域在本次页面加载的首帧之前即由
  *     "上次的连接事实"播种（见文件头「作用域播种」段），`/api/state` 到达后再由
@@ -245,7 +245,7 @@ function scopeOf(key: string): 'remote' | 'local' {
   return key.startsWith(CFG_BRIDGE_REMOTE_PREFIX) ? 'remote' : 'local';
 }
 
-/** 缓存键 → localStorage 键：`moonbot.cfgcache.v1.<scope>::<key>` */
+/** 缓存键 → localStorage 键：`kizuna.cfgcache.v1.<scope>::<key>` */
 function storageKeyOf(key: string): string {
   return `${STORAGE_NS}.${scopeOf(key)}::${key}`;
 }

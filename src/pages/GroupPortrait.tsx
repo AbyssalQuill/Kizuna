@@ -3,9 +3,11 @@ import { getLearningGraph, getOwnerProfile, getPersonMessages, getPersonProfile,
 import type { PersonMsg, PortraitCfg, GroupInfo } from '../api';
 import { NetCanvas, REL_CAT_COLOR, REL_CAT_LABEL, type EdgeClick } from './NetCanvas';
 import type { GraphData, GraphNode, GraphLink, GraphRole, OwnerProfileResp } from '../api';
-import { ArrowLeft, Users, Loader2, RefreshCw, RotateCcw, X, UserRound, Sparkles, History } from 'lucide-react';
+import { ArrowLeft, Users, Loader2, RefreshCw, RotateCcw, X, UserRound, Sparkles, History, BarChart3 } from 'lucide-react';
 import NumInput from '../components/NumInput';
 import Dropdown from '../components/Dropdown';
+import { ReadBar, Skeleton } from '../components/ReadState';
+import { initialFromCache, warmCache, writeCacheValue } from '../lib/read-cache';
 
 interface Props { onBack: () => void; }
 
@@ -44,6 +46,8 @@ export interface VNode {
 /** 群内角色（由后端 /api/learning/graph 返回；null/undefined 表示未取到，按「群成员」回落） */
   role?: GraphRole | null;
   msgCount?: number; lastSeen?: number | null;
+  /* 选了某个群时才有：ta 发进这个群的条数与最后一条时间（/api/learning/groups 的 members[]） */
+  grpCount?: number; grpLast?: number | null;
   birthday?: string | null; personality?: string | null; likes?: string | null;
   personaSummary?: string | null;
 }
@@ -57,7 +61,17 @@ function kindLabelOf(n: { kind: VKind; role?: GraphRole | null }): string {
   if (n.kind === 'owner') return KIND_LABEL.owner;
   if (n.role === 'owner') return '群主';
   if (n.role === 'admin') return '管理员';
+  /* 【2026-09-27 主人反馈】「这个管理员你标群成员」：角色来自 NapCat 的群成员表
+   * （get_group_member_list），NapCat 没运行时 role 为 null —— 此前一律回落到「群成员」，
+   * 等于把「查不到」说成了「他是成员」。现在只有确实读到 member 才写「群成员」，
+   * 读不到就老实写「角色未取」，鼠标悬停给出原因（见 roleTipOf）。 */
+  if (n.kind === 'member' && !n.role) return '角色未取';
   return KIND_LABEL[n.kind] ?? KIND_LABEL.member;
+}
+/** 角色取不到时的悬停说明；取到了就没必要解释 */
+function roleTipOf(n: { kind: VKind; role?: GraphRole | null }): string | undefined {
+  if (n.kind === 'member' && !n.role) return '尚未取到群角色：群成员表由 NapCat 提供，NapCat 未运行（或本机连不上 NapCat）时取不到；它下次运行并刷新画像后即会显示群主／管理员';
+  return undefined;
 }
 /** 群主/管理员徽标：有角色时以彩色药丸显示，其余走纯文本 kindLabelOf */
 function roleBadgeOf(n: { kind: VKind; role?: GraphRole | null }): { text: string; fg: string; bg: string } | null {
@@ -78,6 +92,36 @@ const trunc = (s: string, n: number) => (String(s).length > n ? String(s).slice(
 const initialOf = (n: VNode) => (n.kind === 'owner' ? '主' : (cleanName(n.name).slice(0, 2) || '?'));
 const colorOf = (k: VKind) => (k === 'owner' ? C.owner : k === 'friend' ? C.friend : k === 'member' ? C.member : '#9aa3b5');
 const softOf = (k: VKind) => (k === 'owner' ? C.ownerSoft : k === 'friend' ? C.friendSoft : k === 'member' ? C.memberSoft : 'rgba(154,163,181,0.13)');
+
+/** 英文人设正文裁剪：persona-library 里的 personaEn 是 150~400 词的整段提示词，
+ *  原样塞进画像卡既长又抢戏。这里只取前 ~240 字符并在句/词边界收尾，其余用「…」带过；
+ *  完整正文依旧在「学习与用量」页可看可改（主人明确要求那一页不要动）。 */
+function trimEn(s: string, max = 240): { text: string; cut: boolean } {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return { text: t, cut: false };
+  const head = t.slice(0, max);
+  const at = Math.max(head.lastIndexOf('. '), head.lastIndexOf('; '), head.lastIndexOf(', '));
+  return { text: (at > max * 0.5 ? head.slice(0, at + 1) : head).trim() + ' …', cut: true };
+}
+/** 千分位：排行榜上的条数要一眼可读（1234 → 1,234） */
+const fmtNum = (n: number): string => n.toLocaleString('zh-CN');
+
+/** 互动强度 → 一句话档位。主图浮层卡片与聚焦弹层共用这一处，避免两处口径漂移 */
+const strengthTagOf = (s: number): string => {
+  const v = Math.max(0, Math.min(1, Number(s) || 0));
+  return v >= 0.6 ? '关系热络，常在一起聊天' : v >= 0.35 ? '有稳定往来' : v >= 0.12 ? '偶尔互动' : '互动较少';
+};
+const strengthPct = (s: number): number => Math.max(0, Math.min(100, Math.round((Number(s) || 0) * 100)));
+
+/** 一条连线的“旁证”：两端各自在本图内与多少人相连、以及两人共同相连的人。
+ *  全部由前端已有数据现算（不额外发请求，因此点开即出，不会因为隧道那趟读而转圈）。
+ *  度数按**传入的那张图的边**算，故文案写作「本图内与 N 人相连」，不假装是全量度数。 */
+function edgeFactsOf(e: { from: string; to: string; strength: number }, links: VLink[], byUid: Map<string, VNode>) {
+  const neigh = (uid: string) => new Set(links.filter((l) => l.from === uid || l.to === uid).map((l) => (l.from === uid ? l.to : l.from)));
+  const na = neigh(e.from), nb = neigh(e.to);
+  const common = [...na].filter((u) => nb.has(u)).map((u) => cleanName(byUid.get(u)?.name || u));
+  return { aNode: byUid.get(e.from) ?? null, bNode: byUid.get(e.to) ?? null, degA: na.size, degB: nb.size, strength: e.strength, common };
+}
 
 /* 过滤「给模型的说话要求／指导／闲聊记录」此类内容不进入画像 */
 const INSTR_RE = /(主人|要求|希望|应该|不要|别|请|记得|以后|末尾|句号|中括号|括号|引用|矜持|AI\s*味|纠正|备注|说话|回复|消息|发帖|潜水|唤醒|token|额度|设置|配置)/;
@@ -424,9 +468,17 @@ type RelEdit =
   | { st: 'done'; cat: string };
 
 /** 关系标注卡片：主图浮层与聚焦弹层共用同一份，避免两处状态机写法出现差异 */
-function RelEdgeCard({ title, current, state, floating = false, onPick, onClose }: {
+function RelEdgeCard({ title, current, state, floating = false, onPick, onClose, aNode, bNode, degA, degB, strength, common, onOpenUid }: {
   title: string; current: string; state: RelEdit; floating?: boolean;
   onPick: (cat: string) => void; onClose: () => void;
+  /** 两端资料（用于把卡片从「一个标题 + 五个按钮」变成能读的条目：身份／QQ／各自人脉） */
+  aNode?: VNode | null; bNode?: VNode | null; degA?: number; degB?: number;
+  /** 互动强度原值（0~1）：卡片里写出百分比、进度条与档位原话 */
+  strength?: number;
+  /** 两人共同相连的人名（前端现算） */
+  common?: string[];
+  /** 点「档案」：把这一页的焦点切到 ta（不新开请求，主图/弹层各自处理） */
+  onOpenUid?: (uid: string) => void;
 }) {
   const busy = state.st === 'saving';
   // 正在提交／已提交的类别保持高亮（saving 时表示已按下、error 时可看出哪一类失败、done 时显示对勾）
@@ -443,6 +495,43 @@ function RelEdgeCard({ title, current, state, floating = false, onPick, onClose 
         {state.st === 'saving' && <span style={{ marginLeft: 6, fontWeight: 400, color: C.textMuted, fontSize: 12 }}><Loader2 size={11} className="spin" /> 保存中…</span>}
         {state.st === 'done' && <span style={{ marginLeft: 6, fontWeight: 400, fontSize: 12, color: '#2f9e44' }}>✓ 已保存</span>}
       </div>
+      {/* 条目化：两个人各自的昵称／身份／QQ／本图人脉，加一条互动强度（数值 + 条 + 原话档位）。
+         这些都不新发请求 —— 全取自图谱里已有的数据，所以点一条线是"立刻出内容"。 */}
+      {aNode && bNode && (
+        <div style={{ marginBottom: 8 }}>
+          {[{ n: aNode, d: degA, i: 0 }, { n: bNode, d: degB, i: 1 }].map(({ n, d, i }) => {
+            const b = roleBadgeOf(n);
+            return (
+              <div key={n.uid + i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.text, marginTop: 4 }}>
+                <i style={{ width: 9, height: 9, borderRadius: '50%', background: colorOf(n.kind), display: 'inline-block', flex: 'none' }} />
+                <span style={{ fontWeight: 600 }}>{trunc(cleanName(n.name), 10)}</span>
+                {b
+                  ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '0 6px', borderRadius: 999, background: b.bg, color: b.fg }}>{b.text}</span>
+                  : <span style={{ fontSize: 10.5, color: C.textMuted }} title={roleTipOf(n)}>{kindLabelOf(n)}</span>}
+                <span style={{ color: C.textMuted }}>QQ {n.uid}</span>
+                <span style={{ color: C.textMuted, marginLeft: 'auto' }}>本图内与 {d ?? 0} 人相连</span>
+                {onOpenUid && (
+                  <button className="btn btn-sm" style={{ padding: '0 7px', height: 21, fontSize: 11 }}
+                    onClick={() => onOpenUid(n.uid)}>档案</button>
+                )}
+              </div>
+            );
+          })}
+          <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.text }}>
+            <span style={{ color: C.textMuted }}>互动强度</span>
+            <b>{strengthPct(strength ?? 0)}%</b>
+            <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: Math.max(2, strengthPct(strength ?? 0)) + '%', background: 'linear-gradient(90deg,#cfd8e3,#1f4e79)', borderRadius: 3 }} />
+            </div>
+            <span style={{ color: C.textMuted }}>{strengthTagOf(strength ?? 0)}</span>
+          </div>
+          {!(common ?? []).length ? null : (
+            <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted }}>
+              两人都相连的还有 {common!.length} 位：{common!.slice(0, 4).join('、')}{common!.length > 4 ? ' 等' : ''}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         {(['qunyou', 'guimi', 'jiaren', 'qinglv', 'chouren'] as const).map((c) => (
           <button key={c} className="btn btn-sm" disabled={busy || state.st === 'done'} onClick={() => onPick(c)}
@@ -473,11 +562,57 @@ function RelEdgeCard({ title, current, state, floating = false, onPick, onClose 
   );
 }
 
+/* ============ 首屏取数（组件那次加载与预热共用同一段逻辑） ============
+ * 2026-09-26 追加：读提前 —— 进管理器后空闲时、鼠标停在入口按钮上时先预热，点进来就已经是「有旧值」的
+ * 瞬时路径（首帧不必再给骨架）。为此把本页首屏那一次「取数 + 整形」抽到下面这个模块级函数：
+ * 组件里那次加载与 warmPortraitPage **共用同一段代码**，写进缓存的形状因此与组件成功回包时完全一致
+ * （两份整形代码一旦漂移，预热就会把形状不对的值灌进首帧）。 */
+async function readPortraitGraph(): Promise<{
+  /** 本次确实读到的图谱（判据与形状与组件成功回包后 writeCacheValue 写的完全一致）；没读到为 null */
+  graph: GraphData | null;
+  /** 同上，owner 画像 */
+  owner: OwnerProfileResp | null;
+  /** 原始回包：失败分支的判据（!g?.ok || !o?.ok）与原因文案（reasonOf）照旧取自它，行为与改动前一致 */
+  gRaw: any;
+  oRaw: any;
+}> {
+  const [g, o] = await Promise.all([getLearningGraph(), getOwnerProfile()]);
+  return {
+    graph: (g?.ok && Array.isArray(g.nodes)) ? g : null,
+    owner: o?.ok ? o : null,
+    gRaw: g,
+    oRaw: o,
+  };
+}
+
+/** 「群友画像」页首屏要用的两份读取，一次预热（进管理器后空闲时 / 鼠标停在入口按钮上时调用）。
+ *  本页是一次 Promise.all 同时取这两份，故这里也只读一次（两个 key 的 fetcher 共用同一个在途 Promise），
+ *  不按 key 各发一遍请求。只预热这两份：`portrait:<uid>` / `portrait:msgs:<uid>` 是展开某个人才需要的，
+ *  预热会白读一堆人。去重（同 key 已在飞 / 缓存还新默认 5 分钟即跳过）、写缓存、失败静默都由 warmCache 负责。 */
+export async function warmPortraitPage(): Promise<void> {
+  let pending: ReturnType<typeof readPortraitGraph> | null = null;
+  const readOnce = () => (pending ??= readPortraitGraph());
+  await Promise.all([
+    warmCache('portrait:graph', async () => (await readOnce()).graph),
+    warmCache('portrait:owner', async () => (await readOnce()).owner),
+  ]);
+}
+
 /* ============ 页面 ============ */
 
 export default function GroupPortrait({ onBack }: Props) {
-  const [graph, setGraph] = useState<GraphData | null>(null);
-  const [owner, setOwner] = useState<OwnerProfileResp | null>(null);
+  /* 图谱 / owner 画像的首帧旧值：本次会话里最近一次**成功**读到的那份。
+     ref 保护只在挂载时取一次，不在渲染里反复读缓存（否则旧值会被反复灌回屏上）。
+     图谱与筛选无关（core/all 是前端筛的），所以不必把筛选拼进 key。 */
+  const bootRef = useRef<{ graph: ReturnType<typeof initialFromCache<GraphData>>; owner: ReturnType<typeof initialFromCache<OwnerProfileResp>> } | null>(null);
+  if (!bootRef.current) {
+    bootRef.current = {
+      graph: initialFromCache<GraphData>('portrait:graph'),
+      owner: initialFromCache<OwnerProfileResp>('portrait:owner'),
+    };
+  }
+  const [graph, setGraph] = useState<GraphData | null>(bootRef.current.graph.value);
+  const [owner, setOwner] = useState<OwnerProfileResp | null>(bootRef.current.owner.value);
   const [loading, setLoading] = useState(true);
 /** 读取结果的一句话抬头（简短，用于图例上方那一行与画布占位区）。失败时才有值。 */
   const [err, setErr] = useState('');
@@ -517,6 +652,9 @@ export default function GroupPortrait({ onBack }: Props) {
   const [profBusy, setProfBusy] = useState('');
   const [profErr, setProfErr] = useState<Record<string, string>>({});
   const [profOpen, setProfOpen] = useState(false);
+  /* 聚焦档案的首帧旧值：本次会话里最近一次**成功**读到的该人档案，按 uid 各取一次缓存
+   * （只在这里取，不在每次渲染时读 —— 否则旧值会被反复灌回屏上）。*/
+  const profSeedRef = useRef<Record<string, ReturnType<typeof initialFromCache<any>>>>({});
   /* owner 画像卡中「展开档案」的折叠开关：刻意不复用 profOpen —— 后者是聚焦弹层内「学习档案」块的开关，
    * 共用同一 state 会导致展开该档案时把弹层那一块一并撑开（两处互不相关） */
   const [ownerOpen, setOwnerOpen] = useState(false);
@@ -524,17 +662,22 @@ export default function GroupPortrait({ onBack }: Props) {
   const loadAll = async (): Promise<boolean> => {
     setLoading(true); setErr('');
     try {
-      const [g, o] = await Promise.all([getLearningGraph(), getOwnerProfile()]);
-      if (g?.ok && Array.isArray(g.nodes)) setGraph(g); else setGraph(null);
-      if (o?.ok) setOwner(o); else setOwner(null);
-      if (!g?.ok || !o?.ok) {
+      /* 取数 + 整形已抽到模块级 readPortraitGraph()：与预热（warmPortraitPage）共用同一段逻辑，
+         预热带进来的旧值与这里读到的那份形状因此一致。 */
+      const { graph: g, owner: o, gRaw, oRaw } = await readPortraitGraph();
+      /* 2026-09-26 读取态改「瞬时」：成功才写缓存；失败**不清空**屏上已有的那份（有旧值时继续显示旧值，
+         只把 err 抬头挂上去说明"本次没读到"）。原先失败会把 graph/owner 置 null，等于把上次读到的内容
+         也一起抹掉，于是每次进页面都要先空一屏。 */
+      if (g) { setGraph(g); writeCacheValue('portrait:graph', g); }
+      if (o) { setOwner(o); writeCacheValue('portrait:owner', o); }
+      if (!gRaw?.ok || !oRaw?.ok) {
         /* 2026-09-30 反馈：「因为桥一次也没运行，所以没有群友画像正常，「部分画像数据读取失败」这个没必要，
            换个更贴切的说法」原先无论何种原因都写「部分画像数据读取失败」，把两件不同的事实混成一句：
              ① 桥从未运行过 —— 服务端直读桥记忆库失败，原话是「找不到桥记忆库 memory.db…请先让桥至少跑过一次」，
                 此时"还没有画像数据"是客观事实，说成"失败"既不准确，也让人误以为出了故障；
              ② 桥在运行、记忆库也在，但本次读取确实出错 —— 这才是"读取失败"。
            现按原因分开表述；两种都不再给「重试」按钮，改为按退避间隔自动重读。 */
-        const reason = reasonOf(g) || reasonOf(o);
+        const reason = reasonOf(gRaw) || reasonOf(oRaw);
         if (NEVER_RAN_RE.test(reason)) {
           setErr('画像数据尚未生成');
           setErrDetail('桥还没有运行过，记忆库尚未建立，因此当前没有群友画像 —— 这是正常情形，不是读取故障。待桥首次正常运行、群里有往来之后，此处会自动出现内容。');
@@ -612,6 +755,8 @@ export default function GroupPortrait({ onBack }: Props) {
           const d = (r?.profile !== undefined ? r : (r?.result ?? r)) ?? null;
           setProfErr((m) => { const n = { ...m }; delete n[uid]; return n; });
           setProfData((m) => ({ ...m, [uid]: d }));
+          /* 只有成功回包才写缓存（失败分支不写）：下次点开同一个人先按这份旧值渲染，再后台重读校准。 */
+          writeCacheValue('portrait:' + uid, d);
         }
       })
       .catch((e2: any) => {
@@ -634,7 +779,11 @@ export default function GroupPortrait({ onBack }: Props) {
     setMsgsLoading(true); setMsgsErr('');
     try {
       const r = await getPersonMessages(n.uid, 20);
-      if (r?.ok && Array.isArray(r.messages)) setMsgs(r.messages); else { setMsgs([]); setMsgsErr(r?.message || '读取失败'); }
+      if (r?.ok && Array.isArray(r.messages)) {
+        setMsgs(r.messages);
+        /* 只有成功回包才写缓存（失败分支不写）：下次展开同一个人先按这份旧值渲染，再后台重读校准。 */
+        writeCacheValue('portrait:msgs:' + n.uid, r.messages);
+      } else { setMsgs([]); setMsgsErr(r?.message || '读取失败'); }
     } catch (e2: any) { setMsgs([]); setMsgsErr(String(e2?.message ?? e2)); }
     finally { setMsgsLoading(false); }
   };
@@ -695,62 +844,27 @@ export default function GroupPortrait({ onBack }: Props) {
    * 「已纠正：发消息末尾不带句号；此前要求以后全用数组发消息…」：这类给模型的说话要求。
    * 旧口径只读 personality／likes，于是可切出的标签全属应被 INSTR_RE 过滤之物 → 页面整块空白。
    * 而 /api/learning/owner-profile 早已返回三个更有用的字段，前端一个都未使用：
-   *   profileTags —— 切自同几个字段（实测那 6 条全为说话要求，故取到后必须再过一遍过滤）
-   *   memoryTop   —— 记忆条目中的高频二字词 {w,c}（见 server 的 memoryTopWords）
+   *   learnedTags —— 人格学习产出的短标签（persona-library 的 tags；2026-09-26 起是 chips 的唯一来源）
    *   persona     —— persona-library 的完整条目：nickname／profile／catchphrases／style／topics…
-   * 现口径：标签 = profileTags（过滤后）→ 本地 likes／personality 切片 → 记忆高频词补足；
-   *       只要存在任一已学习痕迹（persona 条目／样本>0／memoryTop 非空／profileTags 非空），
-   *       即不再显示「暂无已整理档案」。 */
+   * 现口径（2026-09-26 起）：标签只有一个来源 —— 人格学习产出的 learnedTags；
+   *       学习没给出就显示「没有」（主人原话：「改为人格学习的时候自动加上，别兜底，没有就写没有」）。
+   *       只要存在任一已学习痕迹（persona 条目／样本>0／learnedTags 非空），即不再显示「暂无已整理档案」。 */
   const ownerInfo = useMemo(() => {
     const o = owner?.owner ?? allNodes.find((n) => n.kind === 'owner') ?? null;
     const persona = owner?.persona ?? null;
 
-    /* 标签回退链。来自记忆的标签单独记账（memTag），界面上以虚线加注解标明「来自记忆高频词」；
-     * 此类标签无词典可依，可能为碎词（实测 owner 最近 30 天只有 2 条空间说说记忆，
-     * 切出的高频词为 傍晚／抽风／出水／… 甚至 果数／里游 这类碎片）。 */
-    const TAG_BY_PROFILE = 8;   // profile 字段切出的标签不足此数时，才以记忆高频词补足
+    /* 标签（2026-09-26 主人要求）：唯一来源 = 人格学习产出的 tags（persona-library → learnedTags）。
+     * 旧版三段来源（档案字段现切 → 本地 likes/personality 切片 → 记忆高频词兜底）整段删除：
+     * 高频词按二字窗口切、无词典可依，实测产出过「技术／术问／问题／角洲」这类碎词；
+     * 「改为人格学习的时候自动加上，别兜底，没有就写没有」是主人的原话。仍留 INSTR_RE 这道闸：
+     * 学习偶尔会把「发消息末尾不带句号」这类说话要求当成标签交上来，那不是人格标签。 */
     const TAG_CAP = 10;
     const profileTags: string[] = [];
-    const memTags: Array<{ w: string; c: number }> = [];
-    const addProfileTag = (t?: string | null) => {
+    for (const t of (owner?.learnedTags ?? [])) {
       const s = String(t ?? '').trim();
-      if (!s || s.length > 12 || profileTags.length >= TAG_CAP) return;
-      if (profileTags.includes(s) || INSTR_RE.test(s) || INSTR_TAG_EXTRA_RE.test(s)) return;
+      if (!s || s.length > 12 || profileTags.length >= TAG_CAP) continue;
+      if (profileTags.includes(s) || INSTR_RE.test(s) || INSTR_TAG_EXTRA_RE.test(s)) continue;
       profileTags.push(s);
-    };
-    for (const t of (owner?.profileTags ?? [])) addProfileTag(t);
-    for (const t of splitTags(o?.likes)) addProfileTag(t);
-    for (const t of splitTags(o?.personality)) addProfileTag(t);
-    if (profileTags.length < TAG_BY_PROFILE) {
-      /* 2026-09-22 反馈报告「技术／术问／问题／发起／分享／活跃／角洲」这类碎片标签
-       * 记忆高频词按二字窗口切出，无词典可依，故「技术问题」会同时产出 技术／术问／问题，
-       * 「三角洲」：会产出 三角／角洲 —— 中间那个为缝合词，观感近似乱码。
-       * 两道过滤（均不需要词典）：
-       *   ① substring：为已采纳标签的子串 → 丢弃（角洲 ⊂ 三角洲）；
-       *   ② stitch  ：两字分别出现在两个计数更高的已采纳标签中 → 丢弃（术问：术∈技术、问∈问题）。
-       * 仅作用于记忆高频词这一段（前文从档案字段切出的标签不受影响）。 */
-      const accepted: Array<{ w: string; c: number }> = profileTags.map((w) => ({ w, c: Number.MAX_SAFE_INTEGER }));
-      const isJunkWord = (w: string, c: number) => {
-        if (w.length !== 2) return false;
-        for (const a of accepted) if (a.w.length > w.length && a.w.includes(w)) return true;
-        if (c > 0) {
-          const [x, y] = [w[0], w[1]];
-          const hasX = accepted.some((a) => a.w.includes(x) && a.c > c);
-          const hasY = accepted.some((a) => a.w.includes(y) && a.c > c);
-          if (hasX && hasY) return true;
-        }
-        return false;
-      };
-      for (const m of (owner?.memoryTop ?? [])) {
-        if (profileTags.length >= TAG_BY_PROFILE) break;
-        const w = String(m?.w ?? '').trim();
-        const c = Number(m?.c) || 0;
-        if (!w || w.length > 12 || INSTR_RE.test(w) || profileTags.includes(w)) continue;
-        if (isJunkWord(w, c)) continue;
-        profileTags.push(w);
-        memTags.push({ w, c });
-        accepted.push({ w, c });
-      }
     }
 
     /* persona（学习产出）各字段；正文走 cleanProse（按窄名单丢弃说话要求行），碎片字段原样使用 */
@@ -773,9 +887,8 @@ export default function GroupPortrait({ onBack }: Props) {
     const learnedAtMs = Number(persona?.learnedAtMs || 0) || 0;
 
     /* 「是否学过」：按后端可获取的原始数据判定（过滤与否不计）：
-     * persona 条目存在／样本>0／memoryTop 非空／profileTags 非空 —— 满足任一条即不再显示「暂无档案」 */
-    const hasLearned = !!persona || (samples ?? 0) > 0
-      || (owner?.memoryTop?.length ?? 0) > 0 || (owner?.profileTags?.length ?? 0) > 0;
+     * persona 条目存在／样本>0／learnedTags 非空 —— 满足任一条即不再显示「暂无档案」 */
+    const hasLearned = !!persona || (samples ?? 0) > 0 || (owner?.learnedTags?.length ?? 0) > 0;
     /* 存在已学习痕迹，但是否有可展示的内容（过滤之后）—— 决定显示内容还是那句「学过但无成文档案」 */
     const hasContent = !!(prose || personaEn || nick || address || styleLines.length || styleExamples.length
       || catchphrases.length || topics.length || taboos.length
@@ -792,7 +905,7 @@ export default function GroupPortrait({ onBack }: Props) {
       likes: cleanField(o?.likes) || null,
       personality: cleanField(o?.personality) || null,
       prose, personaEn, catchphrases, styleLines, styleExamples, topics, taboos,
-      memTags, samples, learnedAtMs, hasLearned, hasContent, hasPersonaContent,
+      samples, learnedAtMs, hasLearned, hasContent, hasPersonaContent,
       tags: profileTags.slice(0, TAG_CAP),
     };
   }, [owner, allNodes]);
@@ -815,6 +928,65 @@ export default function GroupPortrait({ onBack }: Props) {
     }
     return c;
   }, [allNodes]);
+
+  /* ============ 群友发消息排行榜（2026-09-26 主人要求） ============ */
+  const [rankKind, setRankKind] = useState<'all' | 'member' | 'friend'>('all');
+  /* 【2026-09-27 主人反馈「你每个群的消息要对应啊，全部群的时候才是总览」】
+   * 于是分成两套口径，切「群」时整张卡（名次、柱长、条数、日期）一起换：
+   *   · 选了某个群 → 用 /api/learning/groups 的 members[].count（后端口径：近 90 天、
+   *     direction=in、只算该成员发进「这个群」的消息），最后发言时间也用本群的；
+   *     名次就是本群的名次 —— 所以这里不再额外把主人塞进来，主人有没有名次由 ta 在本群发没发过决定。
+   *   · 全部群 → 总览：图谱 nodes 的 msgCount（近 30 天，含主人），与页面别处的「近 30 天发言」同一口径。
+   * 两个数分别放在 n.grpCount / n.msgCount 上（谁也不覆盖谁），显示时按当前选群取用，
+   * 这样弹层里的「近 30 天发言」永远是总览口径、不会跟着选群偷偷变。 */
+  const rankList = useMemo(() => {
+    const g = groupsList.find((x) => x.id === grpSel);
+    if (g) {
+      return g.members
+        .map((m) => {
+          const n = byUid.get(m.uid);
+          /* 本群有记录的人不一定在图谱里（图谱只收有画像/关系的人），这种就补一个最小节点：
+           * 名字优先用 profiles 里的，取不到就直接显示 QQ 号，不编造身份。 */
+          return n
+            ? { ...n, grpCount: m.count, grpLast: m.last || null }
+            : { uid: m.uid, name: m.name || m.uid, kind: 'member' as const, role: null, tags: [], grpCount: m.count, grpLast: m.last || null };
+        })
+        .filter((n) => (n.grpCount ?? 0) > 0)
+        .sort((a, b) => (b.grpCount ?? 0) - (a.grpCount ?? 0));
+    }
+    return allNodes
+      .filter((n) => n.kind !== 'tag')
+      .filter((n) => (n.msgCount ?? 0) > 0)
+      .sort((a, b) => (b.msgCount ?? 0) - (a.msgCount ?? 0));
+  }, [allNodes, byUid, groupsList, grpSel]);
+  const rankShown = useMemo(
+    () => (rankKind === 'all' ? rankList : rankList.filter((n) => n.kind === rankKind)),
+    [rankList, rankKind],
+  );
+  const rankRows = useMemo(() => {
+    const val = (n: VNode) => (grpSel ? (n.grpCount ?? 0) : (n.msgCount ?? 0));
+    const max = Math.max(1, ...rankShown.map(val));
+    return rankShown.slice(0, 15).map((n, i) => ({ n, rank: i + 1, pct: Math.max(4, Math.round((val(n) / max) * 100)) }));
+  }, [rankShown, grpSel]);
+  /** uid → 名次／总数：聚焦弹层里写「发言排行 第 N / M」，与这张卡同一口径 */
+  const rankMap = useMemo(() => {
+    const m = new Map<string, { rank: number; total: number }>();
+    rankShown.forEach((n, i) => m.set(n.uid, { rank: i + 1, total: rankShown.length }));
+    return m;
+  }, [rankShown]);
+
+  /** 选了某个群时：uid → 本群条数与最后发言时间（弹层里补一行「本群发言」，免得和总览口径混淆） */
+  const grpStat = useMemo(() => {
+    const g = groupsList.find((x) => x.id === grpSel);
+    return g ? new Map(g.members.map((m) => [m.uid, { count: m.count, last: m.last || 0 }])) : null;
+  }, [groupsList, grpSel]);
+
+  /** 各类关系已标注多少条：图例上直接写出条数，省得靠数颜色猜（数据就是 rels 本身，不发请求） */
+  const relCatCnt = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const v of Object.values(rels || {})) if (v) c[v] = (c[v] || 0) + 1;
+    return c;
+  }, [rels]);
 
   const relLabelOf = (a: string, b: string): string => {
     const k = a < b ? a + '|' + b : b + '|' + a;
@@ -871,7 +1043,7 @@ export default function GroupPortrait({ onBack }: Props) {
           <button className="btn btn-sm" onClick={() => { setFilter(filter === 'core' ? 'all' : 'core'); setRelayout((x) => x + 1); }}>
             {filter === 'core' ? '显示全部人' : '仅显核心'}
           </button>
-          <button className="btn btn-sm" onClick={() => setShowWeak(!showWeak)} title="切换弱关系连线的显示">
+          <button className="btn btn-sm" onClick={() => setShowWeak(!showWeak)}>
             {showWeak ? '隐藏弱关系' : '显示弱关系'}
           </button>
           <button className="btn btn-sm" disabled={loading} onClick={() => setRelayout((x) => x + 1)}><RotateCcw size={13} /> 重新布局</button>
@@ -906,7 +1078,7 @@ export default function GroupPortrait({ onBack }: Props) {
             自动刷新画像
             {/* 【2026-09-23】画像自动刷新配置（pCfg）尚未读到时：开关显示为未勾选且不可点，
                 天数留空且不可编辑 —— 否则会以"每 7 天"这类臆测值写回配置。 */}
-            <input type="checkbox" checked={pCfg?.enabled === true} disabled={!pCfg} title={pCfg ? undefined : '配置尚未读取到，暂不可修改'}
+            <input type="checkbox" checked={pCfg?.enabled === true} disabled={!pCfg}
               onChange={async (e) => {
                 const next = { enabled: e.target.checked, intervalDays: pCfg?.intervalDays || 7 };
                 setPCfgSaving(true);
@@ -918,8 +1090,7 @@ export default function GroupPortrait({ onBack }: Props) {
                 const next = { enabled: pCfg?.enabled !== false, intervalDays: Math.max(1, Math.min(90, Math.round(n) || 7)) };
                 setPCfgSaving(true);
                 try { const r = await savePortraitCfg(next); if (r) setPCfg(r); } catch {} finally { setPCfgSaving(false); }
-              }} title={pCfg ? '每 N 天自动刷新一次（1–90）' : '配置尚未读取到，暂不可修改'}
-              style={{ width: 52 }} />
+              }} style={{ width: 52 }} />
             天{pCfgSaving ? '…' : ''}
             {pCfg && pCfg.lastAt > 0 && (
               <span>· 上次分析 {fmtTime(pCfg.lastAt)}</span>
@@ -955,30 +1126,22 @@ export default function GroupPortrait({ onBack }: Props) {
                 {ownerInfo.personality && <div style={{ fontSize: 13, color: C.text }}>性格：<span style={{ color: C.textMuted, fontWeight: 400 }}>{ownerInfo.personality}</span></div>}
               </div>
             )}
-            {/* 标签：实心 = 由已整理档案字段切出；虚线 = 以记忆高频词补充（其来历见下方说明行） */}
-            {ownerInfo.tags.length > 0 && (
-              <>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {ownerInfo.tags.map((t, i) => {
-                    const mem = ownerInfo.memTags.find((m) => m.w === t);
-                    return (
-                      <span key={t + i} title={mem ? `记忆高频词，出现 ${mem.c} 次` : '来自已整理的档案字段'}
-                        style={{
-                          padding: '3px 11px', borderRadius: 999, fontSize: 12,
-                          background: mem ? 'transparent' : (i % 2 ? C.friendSoft : C.ownerSoft),
-                          color: mem ? C.textMuted : (i % 2 ? C.friend : C.owner),
-                          border: mem ? '1px dashed rgba(0,0,0,0.2)' : '1px solid transparent',
-                        }}>{t}</span>
-                    );
-                  })}
-                </div>
-                {ownerInfo.memTags.length > 0 && (
-                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>
-                    虚线标签来自<b>记忆高频词</b>（记忆条目按字频切出的二字词，无词典可依，可能出现碎词）；
-                    owner profile 的相应字段基本为空，故标签主要由它兜底
-                  </div>
-                )}
-              </>
+            {/* 标签：全部来自人格学习产出的 tags（persona-library）。2026-09-26 主人要求
+                「别兜底，没有就写没有」——记忆高频词那条兜底链已删除，这里不再有虚线标签。 */}
+            {ownerInfo.tags.length > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {ownerInfo.tags.map((t, i) => (
+                  <span key={t + i}
+                    style={{
+                      padding: '3px 11px', borderRadius: 999, fontSize: 12,
+                      background: i % 2 ? C.friendSoft : C.ownerSoft,
+                      color: i % 2 ? C.friend : C.owner,
+                      border: '1px solid transparent',
+                    }}>{t}</span>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: C.textMuted }}>没有</div>
             )}
 
             {/* 学习档案：沿用聚焦弹层「学习档案」那套折叠与内滚（.pv-intro 折起 96px／展开 240px 封顶），
@@ -987,7 +1150,6 @@ export default function GroupPortrait({ onBack }: Props) {
             <div className="pv-prof" style={{ marginTop: 10 }}>
               <div className="pv-prof-head">
                 {ownerInfo.samples != null && <span className="pv-meta">人格样本 <b>{ownerInfo.samples}</b> 条</span>}
-                {ownerInfo.memTags.length > 0 && <span className="pv-meta">记忆高频词 <b>{ownerInfo.memTags.length}</b> 个</span>}
                 {ownerInfo.learnedAtMs > 0 && <span className="pv-meta">最近学习 {fmtTime(ownerInfo.learnedAtMs)}</span>}
                 {ownerInfo.hasContent && (
                   <button className="btn btn-sm pv-prof-toggle" onClick={() => setOwnerOpen((v) => !v)}>
@@ -1005,11 +1167,12 @@ export default function GroupPortrait({ onBack }: Props) {
               {(ownerInfo.prose || ownerInfo.personaEn) && (
                 <div className={`pv-intro${ownerOpen ? ' is-open' : ''}`}>
                   {ownerInfo.prose && <p className="pv-prose">{ownerInfo.prose}</p>}
-                  {ownerOpen && ownerInfo.personaEn && (
-                    <p className="pv-prose" style={{ marginTop: 8, opacity: 0.85 }}>
-                      <b style={{ color: C.textMuted, fontWeight: 600 }}>英文人设正文</b>{'\n'}{ownerInfo.personaEn}
-                    </p>
-                  )}
+{ownerOpen && ownerInfo.personaEn && (
+  <p className="pv-prose" style={{ marginTop: 8, opacity: 0.85 }}>
+    <b style={{ color: C.textMuted, fontWeight: 600 }}>英文人设正文（已裁剪）</b>{'\n'}{trimEn(ownerInfo.personaEn).text}
+    {trimEn(ownerInfo.personaEn).cut && <span style={{ color: C.textMuted }}>{'\n'}（完整正文见「学习与用量」页的人格学习档案）</span>}
+  </p>
+)}
                 </div>
               )}
               {/* 碎片信息仅在展开时出现；口径与「学习」页一致：口头禅／风格／话题／禁忌 */}
@@ -1020,7 +1183,7 @@ export default function GroupPortrait({ onBack }: Props) {
                       <span style={{ color: C.textMuted }}>口头禅</span>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
                         {ownerInfo.catchphrases.map((c, i) => (
-                          <span key={c.phrase + i} title={c.context || undefined}
+                          <span key={c.phrase + i}
                             style={{ padding: '2px 9px', borderRadius: 999, fontSize: 12, background: C.ownerSoft, color: C.owner }}>{c.phrase}</span>
                         ))}
                       </div>
@@ -1061,8 +1224,68 @@ export default function GroupPortrait({ onBack }: Props) {
           </div>
         </div>
 
+        {/* ============ 群友发消息排行榜（标准卡） ============ */}
+        <div className="card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700, color: C.text }}>
+              <BarChart3 size={17} style={{ color: C.member }} /> 群友发消息排行榜
+            </span>
+            <span style={{ fontSize: 12, color: C.textMuted }}>
+              {grpSel
+                ? '本群发言条数（近 90 天、只算 ta 发进这个群的消息；切回「全部群」才是总览）· 点一行打开 ta 的档案'
+                : '近 30 天发言条数（总览，含主人，与上方图谱同一份数据；选了「群」就只看那个群）· 点一行打开 ta 的档案'}
+            </span>
+            <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+              {([['all', '全部'], ['member', '只群员'], ['friend', '只私聊']] as const).map(([k, lb]) => (
+                <button key={k} className="btn btn-sm" onClick={() => setRankKind(k)}
+                  style={rankKind === k ? { background: C.member, color: '#fff', borderColor: 'transparent' } : undefined}>{lb}</button>
+              ))}
+            </span>
+          </div>
+          {rankRows.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: C.textMuted }}>{grpSel ? '这个群里近 90 天还没有收到过消息 —— 换一个群，或切到「全部群」看总览。' : '还没有可排行的发言记录 —— 群里或私聊里有往来之后，这里会按条数排出来。'}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {rankRows.map((r) => {
+                const b = roleBadgeOf(r.n) ?? (r.n.kind === 'owner' ? { text: '主人', fg: C.owner, bg: C.ownerSoft } : null);
+                const col = colorOf(r.n.kind);
+                /* 条数与日期都跟着选群走：本群口径没有的字段就老老实实留空（不拿总览的数冒充） */
+                const cnt = grpSel ? (r.n.grpCount ?? 0) : (r.n.msgCount ?? 0);
+                const last = grpSel ? (r.n.grpLast ?? null) : (r.n.lastSeen ?? null);
+                return (
+                  <div key={r.n.uid} onClick={() => { setFocus(r.n); setEdgeSel(null); setRelSel(null); }}
+                    title={'打开 ' + cleanName(r.n.name) + ' 的档案'}
+                    style={{ display: 'grid', gridTemplateColumns: '26px 172px 1fr 124px', alignItems: 'center', gap: 10, padding: '3px 6px', borderRadius: 8, cursor: 'pointer' }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, textAlign: 'right', color: r.rank <= 3 ? C.owner : C.textMuted }}>{r.rank}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <i style={{ width: 8, height: 8, borderRadius: '50%', background: col, flex: 'none' }} />
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cleanName(r.n.name)}</span>
+                      {b && <span style={{ fontSize: 10, fontWeight: 700, padding: '0 5px', borderRadius: 999, background: b.bg, color: b.fg, flex: 'none' }}>{b.text}</span>}
+                    </span>
+                    {/* 柱子长度 = 相对榜首的比例；颜色沿用节点色（群主金／管理员青／成员蓝／私聊靛） */}
+                    <span style={{ position: 'relative', height: 15, borderRadius: 8, background: 'rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+                      <span className="pv-bar-flow" style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: r.pct + '%', borderRadius: 8, backgroundImage: 'linear-gradient(90deg, ' + col + '38, ' + col + '9e, ' + col + '38)', backgroundSize: '260% 100%' }} />
+                    </span>
+                    <span style={{ fontSize: 12, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <b>{fmtNum(cnt)}</b> 条
+                      <span style={{ color: C.textMuted }}>{last ? ' · ' + fmtTime(last) : ''}</span>
+                    </span>
+                  </div>
+                );
+              })}
+              {rankShown.length > rankRows.length && (
+                <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
+                  只列出前 {rankRows.length} 位，共 {rankShown.length} 位有发言记录
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* ============ 群友关系图（标准卡，画布加高） ============ */}
         <div className="card">
+          {/* 读取中不再把 600px 画布整块换成一行「读取画像数据…」+转圈：有旧图谱就继续显示，
+              不再有进度条，只是静默在后台校准。 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
             <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', fontSize: 15, fontWeight: 700, color: C.text }}>
               <Users size={16} style={{ color: C.friend }} /> 群友关系图
@@ -1095,17 +1318,21 @@ export default function GroupPortrait({ onBack }: Props) {
               <i style={{ width: 46, height: 2.5, borderRadius: 2, background: 'linear-gradient(90deg,#cfd8e3,#1f4e79)', display: 'inline-block' }} />
               浅 = 偶尔说话 · 深 = 常在一起（线越粗表示互动越强）
             </span>
-            <span style={{ marginLeft: 6 }}>已标注的关系：</span>
+            <span style={{ marginLeft: 6 }}>已标注的关系（共 {Object.keys(rels || {}).length} 条）：</span>
             {(['guimi', 'jiaren', 'qinglv', 'chouren', 'qunyou'] as const).map((c) => (
               <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <i style={{ width: 15, height: 2.5, borderRadius: 2, background: REL_CAT_COLOR[c], display: 'inline-block' }} />{REL_CAT_LABEL[c]}
+                <i style={{ width: 15, height: 2.5, borderRadius: 2, background: REL_CAT_COLOR[c], display: 'inline-block' }} />{REL_CAT_LABEL[c]}{relCatCnt[c] ? ' ×' + relCatCnt[c] : ''}
               </span>
             ))}
-            <span>（点击一条连线即可标注或清除关系；点击本身不改变线色）</span>
+            <span>（线越粗 = 互动越多，<b>与是否标注无关</b>；颜色只表示已标注的关系 —— 点击一条连线即可标注或清除）</span>
           </div>
           <div ref={mainBoxRef} style={{ height: 600, position: 'relative', border: '1px solid rgba(0,0,0,0.07)', borderRadius: 16, background: 'rgba(255,255,255,0.6)', overflow: 'hidden' }}>
             {loading && !graph ? (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: C.textMuted }}><Loader2 size={18} className="spin" /> 读取画像数据…</div>
+              /* 首次进入且没有旧图谱：用骨架占位承接原来那行「读取画像数据…」+转圈 —— 不写"正在读取"，
+                 形状跟画布一致，读到即原地换成真图。 */
+              <div style={{ position: 'absolute', inset: 0, padding: 18 }}>
+                <Skeleton rows={4} variant="card" />
+              </div>
             ) : !graph ? (
               /* 2026-09-30：数据没读到时不再断言「尚无画像数据」那是一句结论，且多半是假的
                  （接口失败时此前也这样写，等于把"读不到"说成"没有"）；反过来也不再把"桥没跑过"
@@ -1143,15 +1370,19 @@ export default function GroupPortrait({ onBack }: Props) {
                 （状态已设置但无人绘制），下次打开聚焦弹层还会把这口旧状态带出。 */}
             {edgeSel && edgePos && !focus && (
               <div style={{
-                position: 'absolute', width: 340, transform: 'translateX(-50%)', zIndex: 5,
-                left: Math.max(178, Math.min(edgePos.w - 178, edgePos.x)),
-                top: Math.max(8, Math.min(edgePos.h - 150, edgePos.y + 14)),
+                /* 卡片加宽到 384 并在夹取时按新半宽（198）计算：里面多了两行人资料 + 强度条 + 共同相连，
+                   原 340/178 会把内容挤成两行、贴边时还会被容器裁掉；上边界同样按新高度留出余量。 */
+                position: 'absolute', width: 384, transform: 'translateX(-50%)', zIndex: 5,
+                left: Math.max(198, Math.min(edgePos.w - 198, edgePos.x)),
+                top: Math.max(8, Math.min(edgePos.h - 230, edgePos.y + 14)),
               }}>
                 <RelEdgeCard
                   title={cleanName(byUid.get(edgeSel.from)?.name || edgeSel.from) + ' ↔ ' + cleanName(byUid.get(edgeSel.to)?.name || edgeSel.to)}
                   current={relLabelOf(edgeSel.from, edgeSel.to)}
                   state={relEdit} floating
-                  onPick={submitRel} onClose={closeEdge} />
+                  {...edgeFactsOf(edgeSel, mainLinks, byUid)}
+                  onPick={submitRel} onClose={closeEdge}
+                  onOpenUid={(u) => { const n = byUid.get(u); if (n) setFocus(n); }} />
               </div>
             )}
             <div style={{ position: 'absolute', left: 12, bottom: 8, fontSize: 11.5, color: C.textMuted }}>拖拽移动 · 点击人物聚焦 · 点击连线标注关系（视图大小已固定）</div>
@@ -1173,9 +1404,15 @@ export default function GroupPortrait({ onBack }: Props) {
                 const b = roleBadgeOf(focus);
                 return b
                   ? <span style={{ fontSize: 12, fontWeight: 700, padding: '1px 9px', borderRadius: 999, background: b.bg, color: b.fg }}>{b.text}</span>
-                  : <span style={{ fontSize: 13, color: C.textMuted }}>{kindLabelOf(focus)}</span>;
+                  : <span style={{ fontSize: 13, color: C.textMuted }} title={roleTipOf(focus)}>{kindLabelOf(focus)}</span>;
               })()}
-              <button className="icon-btn" style={{ marginLeft: 'auto' }} onClick={() => setFocus(null)} title="关闭"><X size={18} /></button>
+              {/* 标题旁的旁证：全部来自已加载的数据（关系图的邻居数、排行榜的名次），不发请求 */}
+              <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 10 }}>
+                {ego ? '本图人脉 ' + ego.neigh.length + ' 人' : ''}
+                {rankMap.get(focus.uid) ? ' · 发言排行 第 ' + rankMap.get(focus.uid)!.rank + ' / ' + rankMap.get(focus.uid)!.total : ''}
+              </span>
+
+              <button className="icon-btn" style={{ marginLeft: 'auto' }} onClick={() => setFocus(null)}><X size={18} /></button>
             </div>
 
             <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginTop: 10 }}>
@@ -1197,10 +1434,16 @@ export default function GroupPortrait({ onBack }: Props) {
                         <div style={{ height: '100%', width: Math.max(2, Math.min(100, Math.round((relSel.strength ?? 0) * 100))) + '%', background: 'linear-gradient(90deg,#e77ca4,#d95f8e)', borderRadius: 3 }} />
                       </div>
                       <div style={{ marginTop: 8, fontSize: 12.5, color: C.text, lineHeight: 1.6 }}>
-                        {(() => {
-                          const s = relSel.strength ?? 0;
-                          const tag = s >= 0.6 ? '关系热络，常在一起聊天' : s >= 0.35 ? '有稳定往来' : s >= 0.12 ? '偶尔互动' : '互动较少';
-                          return <>{tag}。如需进一步了解 ta，可在下方查看「发过的消息」。</>;
+                        {strengthTagOf(relSel.strength ?? 0)}。如需进一步了解 ta，可在下方查看「发过的消息」。
+                          {(() => {
+                            /* 同一套旁证（本图内度数 + 共同相连）：与浮层卡片口径一致，全部现算，不发请求 */
+                            const f = edgeFactsOf({ from: focus.uid, to: relSel.node.uid, strength: relSel.strength ?? 0 }, allLinks, byUid);
+                            return (
+                              <div style={{ marginTop: 4, fontSize: 11.5, color: C.textMuted }}>
+                                {cleanName(focus.name)} 与 {f.degA} 人相连 · {cleanName(relSel.node.name)} 与 {f.degB} 人相连
+                                {f.common.length ? ` · 两人都相连的还有 ${f.common.slice(0, 4).join('、')}${f.common.length > 4 ? ' 等' : ''}` : ''}
+                              </div>
+                            );
                         })()}
                       </div>
                     </div>
@@ -1216,8 +1459,16 @@ export default function GroupPortrait({ onBack }: Props) {
                     完整介绍折叠并内滚（app.css 的 .pv-intro），档案再长也不拉长弹窗 */}
                 {(() => {
                   const uid = focus.uid;
-                  const d = profData[uid] ?? null;
-                  const busy = profBusy === uid;
+                  /* 首帧旧值：本次会话最近一次成功读到的该人档案（每个 uid 只取一次缓存）。
+                     有旧值 → d 直接用旧值，屏上立刻就是上次那份档案，读取期间不再有任何进度条；
+                     没有旧值 → d 为 null，由下方的骨架占位承担读取态，而不是先跳一行「正在读取档案…」。 */
+                  if (!profSeedRef.current[uid]) profSeedRef.current[uid] = initialFromCache<any>('portrait:' + uid);
+                  const cached = profSeedRef.current[uid].value;
+                  /* profData[uid] 为 null 表示"读到了、但没有档案"，同样是已有结论，不再回落到缓存。 */
+                  const d = profData[uid] !== undefined ? profData[uid] : cached;
+                  /* 2026-09-26 主人要求去掉全部加载线：原注释里的 ReadBar（2px 细进度条）已删除，
+                     下面的说明仍然成立。 */
+                  const busy = profBusy === uid || profData[uid] === undefined;
                   const fErr = profErr[uid] || '';
                   const lib = d?.library ?? null;
                   const pf = d?.profile ?? null;
@@ -1241,7 +1492,9 @@ export default function GroupPortrait({ onBack }: Props) {
                           </button>
                         )}
                       </div>
-                      {busy && <div className="pv-note"><Loader2 size={12} className="spin" /> 正在读取档案…</div>}
+                      {/* 读取中且确实没有可显示的内容（首次点开、缓存也没有）→ 骨架占位，
+                          替掉原来那行「正在读取档案…」+ 转圈；有旧值时走上面的静默刷新路径，这里不出现。 */}
+                      {busy && !has && <Skeleton rows={2} />}
                       {/* 【2026-09-30】与上方画布区同一口径：桥从未运行过时，档案是"尚未生成"（
                           服务端原话「找不到桥记忆库 memory.db…请先让桥至少跑过一次」），不是"读取失败"；
                           确系本次读取未成功，才说"暂时读取不到"。此处本就没有重试按钮（按需读取、点开才发一次请求）。 */}
@@ -1255,11 +1508,18 @@ export default function GroupPortrait({ onBack }: Props) {
                       {!busy && !fErr && !has && (
                         <div className="pv-note">记忆库中尚无 ta 的档案：多聊几次，或到「学习」页执行一次「人格立即学习」；此后本处将如「人格学习状态」一般显示是否已学习、最近学习时间与样本数。</div>
                       )}
-                      {intro && (
-                        <div className={`pv-intro${profOpen ? ' is-open' : ''}`}>
-                          <p className="pv-prose">{intro}</p>
-                        </div>
-                      )}
+{intro && (
+  <div className={`pv-intro${profOpen ? ' is-open' : ''}`}>
+    <p className="pv-prose">{intro}</p>
+    {/* 2026-09-27 主人要求：档案里也放英文人设，但裁剪过再展示（完整正文仍在「学习与用量」页） */}
+    {String(lib?.personaEn || '').trim() && (
+      <p className="pv-prose" style={{ marginTop: 8, opacity: 0.85 }}>
+        <b style={{ color: C.textMuted, fontWeight: 600 }}>英文人设正文（已裁剪）</b>{'\n'}{trimEn(String(lib?.personaEn || '')).text}
+        {trimEn(String(lib?.personaEn || '')).cut && <span style={{ color: C.textMuted }}>{'\n'}（完整正文见「学习与用量」页的人格档案）</span>}
+      </p>
+    )}
+  </div>
+)}
                     </div>
                   );
                 })()}
@@ -1270,21 +1530,35 @@ export default function GroupPortrait({ onBack }: Props) {
                 {/* 「近 30 天发言」已在上方学习档案块中（与 /api/learning/profile 同一口径），此处不再重复 */}
                 <div style={{ display: 'flex', gap: 20, marginTop: 12, fontSize: 12.5, color: C.textMuted }}>
                   <span>最近活跃 {focus.lastSeen ? fmtTime(focus.lastSeen) : '—'}</span>
+                  {focus.msgCount != null && focus.msgCount > 0 && <span>近 30 天发言 <b style={{ color: C.text }}>{fmtNum(focus.msgCount)}</b> 条</span>}
+                  {/* 选了某个群时补一行本群口径：上面的「近 30 天发言」是总览，两者不是一回事，所以分行写清 */}
+                  {grpSel && grpStat && (grpStat.get(focus.uid)?.count ?? 0) > 0 && <span>本群发言 <b style={{ color: C.text }}>{fmtNum(grpStat.get(focus.uid)!.count)}</b> 条{grpStat.get(focus.uid)!.last ? '（最近 ' + fmtTime(grpStat.get(focus.uid)!.last) + '）' : ''}</span>}
+                  {ego && <span>本图人脉 <b style={{ color: C.text }}>{ego.neigh.length}</b> 人</span>}
+                  {rankMap.get(focus.uid) && <span>发言排行 <b style={{ color: C.text }}>{rankMap.get(focus.uid)!.rank}</b> / {rankMap.get(focus.uid)!.total}</span>}
                 </div>
 
                 {/* 发过的消息（仅在点击后展开，不自动加载） */}
                 <div style={{ marginTop: 14 }}>
-                  <button className="btn btn-sm" onClick={() => { if (!msgsOpen && msgs === null) loadPersonMsgs(focus); setMsgsOpen(!msgsOpen); }}>
+                  <button className="btn btn-sm" onClick={() => {
+                    /* 展开前先把上次读到的那些消息铺上（同一个 uid 的旧值），后台照常重读、读到原地替换；
+                       有旧值时屏上不会先跳一行「加载中…」，确实没有旧值（首次查看）才由骨架占位。 */
+                    if (!msgsOpen && msgs === null) {
+                      const boot = initialFromCache<PersonMsg[]>('portrait:msgs:' + focus.uid);
+                      if (boot.value !== null) setMsgs(boot.value);
+                      loadPersonMsgs(focus);
+                    }
+                    setMsgsOpen(!msgsOpen);
+                  }}>
                     <History size={13} /> {msgsOpen ? '收起 Ta 发过的消息' : '查看 Ta 发过的消息'}
                   </button>
                   {msgsOpen && (
                     <div style={{ marginTop: 10, maxHeight: 220, overflowY: 'auto', border: '1px solid rgba(0,0,0,0.07)', borderRadius: 10, padding: '6px 10px', background: 'rgba(0,0,0,0.02)' }}>
-                      {msgsLoading && <div style={{ color: C.textMuted, fontSize: 12, padding: 6 }}><Loader2 size={12} className="spin" /> 加载中…</div>}
+                      {msgsLoading && (!msgs || msgs.length === 0) && <Skeleton rows={3} />}
                       {!msgsLoading && msgsErr && <div style={{ color: '#c0504d', fontSize: 12, padding: 6 }}>{msgsErr}</div>}
                       {!msgsLoading && !msgsErr && (!msgs || msgs.length === 0) && (
                         <div style={{ color: C.textMuted, fontSize: 12, padding: 6 }}>尚无 ta 发过的消息记录（需先在群聊或私聊中有往来并落库）</div>
                       )}
-                      {!msgsLoading && msgs && msgs.map((m, i) => (
+                      {msgs && msgs.length > 0 && msgs.map((m, i) => (
                         <div key={i} style={{ padding: '7px 2px', borderBottom: i < msgs.length - 1 ? '1px solid rgba(0,0,0,0.05)' : 'none' }}>
                           <div style={{ fontSize: 11, color: C.textMuted }}>{m.ts} · {String(m.conv || '').replace(/^(group|private):/, (x: string) => (x === 'group:' ? '群' : '私聊'))}</div>
                           <div style={{ fontSize: 12.5, color: C.text, lineHeight: 1.5, wordBreak: 'break-word' }}>{trunc(String(m.content || ''), 160) || '(图片/表情)'}</div>
@@ -1302,12 +1576,14 @@ export default function GroupPortrait({ onBack }: Props) {
                     title={cleanName(byUid.get(edgeSel.from)?.name || edgeSel.from) + ' ↔ ' + cleanName(byUid.get(edgeSel.to)?.name || edgeSel.to)}
                     current={relLabelOf(edgeSel.from, edgeSel.to)}
                     state={relEdit}
-                    onPick={submitRel} onClose={closeEdge} />
+                    {...edgeFactsOf(edgeSel, ego.egoLinks, byUid)}
+                    onPick={submitRel} onClose={closeEdge}
+                    onOpenUid={(u) => { const n = byUid.get(u); if (n) { setFocus(n); setRelSel(null); } }} />
                 )}
                 <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 6 }}>
                   与 ta 互动较多（{ego.neigh.length} 人）· 拖转后暂停自动旋转（双击恢复）· 线色与主图同一套；点击壳上人物 → 查看 ta 与 {cleanName(focus.name)} 的互动强度，点击连线 → 标注关系
                 </div>
-                <div style={{ height: 340, border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14, position: 'relative', overflow: 'hidden' }}>
+<div style={{ height: 380, border: '1px solid rgba(120,140,180,0.22)', borderRadius: 14, position: 'relative', overflow: 'hidden', background: 'radial-gradient(120% 120% at 30% 18%, #ffffff 0%, #f4f8ff 55%, #e7eefa 100%)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.9)' }}>
                   {ego.egoNodes.length >= 2 ? (
                     <div style={{ position: 'absolute', inset: 0 }}>
                       {/* key 仅随焦点人物变化。原先还带 relSel?.node.uid —— 点击一个邻居即更换 key 而整块重挂，

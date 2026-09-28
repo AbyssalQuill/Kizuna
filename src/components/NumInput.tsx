@@ -57,7 +57,6 @@ export default function NumInput({
       disabled={disabled}
       placeholder={placeholder}
       aria-label={ariaLabel}
-      title={title}
       style={style}
       value={txt}
       onFocus={() => setEditing(true)}

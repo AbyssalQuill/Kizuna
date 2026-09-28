@@ -343,8 +343,22 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
         ctx.globalAlpha = 1;
       };
 
-      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(175,190,210,0.16)'; ctx.lineWidth = 1; ctx.stroke();
+      /* 2026-09-26 美化（主人：「尤其是右边的球形图」）：聚焦弹层右侧那张小图原来只是
+       * 「空画布上一圈极淡的边框」，不像一颗球。现在在同样的半径里先铺一层柔和的径向渐变球
+       * （左上受光、右下退暗），再把外缘提亮一点 —— 体积感只来自这层底纹，点与线的画法一概不动。
+       * 只在中心模式（聚焦弹层）下画；主图没有球心，保持原来的通透观感。 */
+      if (cid) {
+        const ball = ctx.createRadialGradient(cx - R * 0.34, cy - R * 0.38, R * 0.08, cx, cy, R * 1.04);
+        ball.addColorStop(0, 'rgba(255,255,255,0.97)');
+        ball.addColorStop(0.55, 'rgba(232,240,251,0.8)');
+        ball.addColorStop(1, 'rgba(203,218,240,0.55)');
+        ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = ball; ctx.fill();
+        ctx.strokeStyle = 'rgba(148,170,205,0.45)'; ctx.lineWidth = 1.2; ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(175,190,210,0.16)'; ctx.lineWidth = 1; ctx.stroke();
+      }
 
       for (const p of arr) {
         const x1 = p.x * cosY - p.z * sinY;
@@ -376,7 +390,11 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
         // 淡蓝 + 低 alpha 只是「更淡的蓝」，色相不变，故弱关系视图中读起来仍属蓝系。
         ctx.globalAlpha = labeled ? 0.34 + 0.5 * zf01 : 0.2 + 0.44 * zf01 * (0.5 + 0.5 * l.strength);
         ctx.strokeStyle = labeled ? REL_CAT_COLOR[cat!] : defaultLineColor(l.strength);
-        ctx.lineWidth = (0.5 + l.strength * 1.2 + (labeled ? 0.4 : 0)) * (0.7 + 0.6 * zf01);
+        /* 2026-09-26 主人要求：「粗细应当是根据互动频繁度来定的」。原式对已标注的线额外加 0.4 ——
+         * 于是「把两个人标成群友」看起来就像互动变强了，与图例「线越粗表示互动越强」自相矛盾。
+         * 现在线宽只由 l.strength（× 远近缩放）决定；标注只从**颜色**上体现（见上面那行 strokeStyle），
+         * 两个通道各管一件事，互不冒充。 */
+        ctx.lineWidth = (0.5 + l.strength * 1.2) * (0.7 + 0.6 * zf01);
         ctx.beginPath(); ctx.moveTo(p1.sx, p1.sy); ctx.lineTo(p2.sx, p2.sy); ctx.stroke();
       }
 
@@ -396,8 +414,22 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
           const cat = relationsRef.current?.[pairKey(l.from, l.to)];
           const labeled = !!(cat && REL_CAT_COLOR[cat]);
           ctx.globalAlpha = labeled ? 0.42 + 0.5 * zf : 0.3 + 0.55 * zf;
-          ctx.strokeStyle = labeled ? REL_CAT_COLOR[cat!] : PAL.spoke;
-          ctx.lineWidth = 0.8 + l.strength * 1.1 + (labeled ? 0.35 : 0);
+          const spokeCol = labeled ? REL_CAT_COLOR[cat!] : PAL.spoke;
+          /* 辐条改成从球心向外渐隐的渐变（近心实、贴人淡）：一根根辐条因此有了方向感，
+           * 像从中心辐射出去，而不是一堆等宽直线叠在一起。已标注的取关系色，未标注的仍是粉。
+           * 注意 PAL.spoke 自带 alpha 的 rgba，不能喂给 hexRgb，故分两条路。 */
+          const lg = ctx.createLinearGradient(cObj.sx, cObj.sy, o.sx, o.sy);
+          if (labeled) {
+            const [rr, gg, bb] = hexRgb(spokeCol);
+            lg.addColorStop(0, 'rgba(' + rr + ',' + gg + ',' + bb + ',1)');
+            lg.addColorStop(1, 'rgba(' + rr + ',' + gg + ',' + bb + ',0.4)');
+          } else {
+            lg.addColorStop(0, spokeCol);
+            lg.addColorStop(1, 'rgba(224,120,156,0.34)');
+          }
+          ctx.strokeStyle = lg;
+          /* 同上：辐条宽度也只由互动强度决定，标注只改颜色（大图小图同一口径） */
+          ctx.lineWidth = 0.8 + l.strength * 1.1;
           ctx.beginPath(); ctx.moveTo(cObj.sx, cObj.sy); ctx.lineTo(o.sx, o.sy); ctx.stroke();
         }
       }
@@ -417,6 +449,9 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
         const col = colorOf(nd.kind);
         if (p.fixed) {
           const r = 12.6 * SZ * USCALE;
+          /* 悬停／选中时给一点柔光：鼠标落在球心那位身上一眼可见（只加光，不改尺寸与命中半径） */
+          ctx.save();
+          if (isHover || isSel) { ctx.shadowColor = 'rgba(52,74,110,0.35)'; ctx.shadowBlur = 13; }
           ctx.globalAlpha = 0.95;
           ctx.beginPath(); ctx.arc(p.sx, p.sy, r * (isHover || isSel ? 1.15 : 1), 0, Math.PI * 2);
           ctx.fillStyle = softOf(nd.kind);
@@ -425,6 +460,7 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
           ctx.lineWidth = isSel ? 2.6 : isHover ? 2 : 1.3;
           ctx.strokeStyle = col;
           ctx.stroke();
+          ctx.restore();
           // 球心这位若是群主／管理员，同样给角色环（与聚焦卡片的徽标对应）
           drawRoleRing(nd, p.sx, p.sy, r, isHover || isSel);
           // 球心这位的名字常显（小图里即「这张网的中心是谁」，比灰字压在辐条上更易辨认）
@@ -435,6 +471,9 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
         const scale = 0.6 + 0.9 * zf;
         const baseR = (nd.kind === 'owner' ? 10.5 : nd.kind === 'friend' ? 12.6 : 12.3) * SZ * USCALE;
         const r = baseR * scale;
+        /* 壳面点同款柔光（同样只管光与影，半径、深度排序、命中判定都不受影响） */
+        ctx.save();
+        if (isHover || isSel) { ctx.shadowColor = 'rgba(52,74,110,0.32)'; ctx.shadowBlur = 10; }
         ctx.globalAlpha = 0.4 + 0.6 * zf;
         ctx.beginPath(); ctx.arc(p.sx, p.sy, r * (isHover || isSel ? 1.15 : 1), 0, Math.PI * 2);
         ctx.fillStyle = softOf(nd.kind);
@@ -443,6 +482,7 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
         ctx.lineWidth = isSel ? 2.4 : isHover ? 1.9 : 1.1;
         ctx.strokeStyle = col;
         ctx.stroke();
+        ctx.restore();
         drawRoleRing(nd, p.sx, p.sy, r, isHover || isSel);
         drawNodeText(nd, p.sx, p.sy, r, col, isHover || isSel);
       }

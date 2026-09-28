@@ -70,9 +70,10 @@ export interface ManagerState {
   dualNapcat?: boolean;
 /** 2026-09-22 要求"下次打开自动连接服务器，这个过程希望能带上「服务端启动中」状态机"
    *  连接服务端的状态机：idle → connecting → tunnels → server-starting → warming → ready / failed。
+   *  2026-10-01 新增 partial：连上了、但服务端组件没起来（终态，界面照实写各组件状态）。
    *  /api/state 里带一份，也可以单独 GET /api/connect（读它不产生任何网络动作）。 */
   connect?: {
-    phase: 'idle' | 'connecting' | 'tunnels' | 'server-starting' | 'warming' | 'ready' | 'failed';
+    phase: 'idle' | 'connecting' | 'tunnels' | 'server-starting' | 'warming' | 'ready' | 'partial' | 'failed';
     note: string;
     serverId: string;
     serverName: string;

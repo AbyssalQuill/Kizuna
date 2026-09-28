@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import NoticeBar from '../components/NoticeBar';
+import StatValue from '../components/StatValue';
 import NumInput from '../components/NumInput';
 import {
   getLearningConfig, saveLearningConfig, slangAction, personaAction, personaApply, portraitAction, getTokenReport, getSlangLibrary, getPersonProfile,
@@ -8,6 +9,8 @@ import {
 import type { SlangEntry, SlangLearnPhase, SlangLearningState } from '../api';
 import type { CSSProperties } from 'react';
 import { CFG_LEARNING, getCachedConfig, rememberConfig } from '../config-cache';
+import { dropCacheValue, initialFromCache, warmCache, writeCacheValue } from '../lib/read-cache';
+import { ReadBar, Skeleton } from '../components/ReadState';
 import {
   ArrowLeft, Save, Play, Square, RefreshCw, Loader2, AlertTriangle,
   Activity, TrendingUp, Users, Clock3, Zap, BarChart3, Wallet, RotateCcw, BookOpen,
@@ -300,6 +303,130 @@ function cachedLearnForm(): LearnForm {
   return c ? learnFormOf(c) : BLANK_LEARN_FORM;
 }
 
+/* ---------- 「先出上次内容、再后台校准」的缓存键（src/lib/read-cache.ts） ----------
+ * 各读取点的规则一致：进页面/展开面板时先拿上次**成功**读到的值渲染，同时照常发一次真请求，
+ * 读到原地替换；只有确实没有旧值时才显示骨架。读取期间不再出现「正在读取…」的整块替换。
+ *
+ * 「为什么学习配置不在这里」：那份配置走 config-cache 的 CFG_LEARNING，它多两项本模块没有的能力 ——
+ *   ① 落盘到 localStorage（刷新页面/重开窗口后仍有旧值可起底）；② 本机 / 远端作用域鉴别。
+ *   学习配置是"当前活动目标"上的配置：改用无作用域鉴别的进程内缓存起底，
+ *   会在"先连服务端看一眼、再切回本机"时拿服务端那份冒充本机那份，比闪一下默认值更危险。故那一处不改。 */
+const KEY_SLANG_STATUS = 'learning:status';        // 黑话库词条 + 桥侧 learning 快照（同一次 GET /api/slang）
+const KEY_PERSONA_STATUS = 'learning:persona';     // 人格学习状态（persona status 的列表与其读取时刻）
+const KEY_PORTRAIT_STATUS = 'learning:portrait';   // 画像学习状态（portrait status）
+const KEY_USAGE = 'learning:usage';                // Token 用量报表（本机 / 服务端 / 合计 + 剪枝计量）
+/** 某个人的完整资料：带参数的缓存键必须把参数拼进去，否则两个人的资料会互相顶掉。 */
+const profileCacheKey = (uid: string): string => `learning:profile:${uid}`;
+
+/* ---------- 首屏取数（组件各读取点与预热共用同一段逻辑） ----------
+ * 2026-09-26 追加：读提前 —— 进管理器后空闲时、鼠标停在入口按钮上时先预热，点进来就已经是「有旧值」的
+ * 瞬时路径（首帧不必再给骨架）。为此把各读取点的「取数 + 整形」集中到下面这几个模块级函数：
+ * 组件里那次加载与 warmLearningPage **共用同一段代码**，写进缓存的形状因此与组件成功回包时完全一致
+ * （两份整形代码一旦漂移，预热就会把形状不对的值灌进首帧）。
+ * 这些函数只取数、只整形，既不 setState 也不弹错误：失败原因以字符串返回，由各调用点按原有分支处置。 */
+
+/** 人格学习状态：列表 + 读取时刻（bjClock）。形状与组件成功回包时 writeCacheValue 写的完全一致。 */
+async function readPersonaStatus(): Promise<{ value: { list: PItem[]; at: string } | null; error: string }> {
+  try {
+    const r = await personaAction('status');
+    const e = firstErr(r);
+    if (e) return { value: null, error: e };
+    return { value: { list: normStatus(r), at: bjClock(Date.now()) }, error: '' };
+  } catch (err: any) {
+    return { value: null, error: String(err?.message ?? err) };
+  }
+}
+
+/** 画像学习状态：入缓存的是 unwrap 后的 result（与组件一致）。 */
+async function readPortraitStatus(): Promise<{ value: any; error: string }> {
+  try {
+    const r: any = await portraitAction('status');
+    const e = firstErr(r);
+    if (e) return { value: null, error: e };
+    return { value: unwrap(r), error: '' };
+  } catch (err: any) {
+    return { value: null, error: String(err?.message ?? err) };
+  }
+}
+
+/** 黑话库词条 + 桥侧 learning 快照（同一次 GET /api/slang，两者共用一个缓存键）。 */
+interface SlangRead {
+  /** 可入缓存的形状（与组件成功回包时写入的完全一致）；本次没读到为 null */
+  value: { entries: SlangEntry[]; learn: SlangLearningState | null } | null;
+  /** 回包是否带了 learning 快照：组件据此置「学习状态不可用」（失败时为 false，与组件原分支等价） */
+  hasLearn: boolean;
+  /** 失败原因；空串表示回包正常 */
+  error: string;
+}
+async function readSlangStatus(): Promise<SlangRead> {
+  try {
+    const r = await getSlangLibrary();
+    const list: SlangEntry[] = Array.isArray(r?.entries) ? r.entries
+      : (Array.isArray(r?.result?.entries) ? r.result.entries : (Array.isArray(r?.data?.entries) ? r.data.entries : []));
+    const hasLearn = isObj(r?.learning);
+    const learn = hasLearn ? normSlangLearning((r as any).learning) : null;
+    return { value: { entries: list, learn }, hasLearn, error: '' };
+  } catch (e) {
+    return { value: null, hasLearn: false, error: String((e as Error)?.message ?? e) };
+  }
+}
+
+/** 用量报表中「本机 / 服务端 / 合计」那一段（组件 state 的 split 就是这个形状）。 */
+interface UsageSplit {
+  local: any | null; remote: any | null; total: any | null;
+  localReason: string; remoteReason: string; remoteServer: any;
+}
+/** 取用量的三种结果，分别对应组件里原有的三条分支：
+ *  err     = 回包本身没读到（分段与剪枝计量一律不动）；
+ *  partial = 有回包但没有可用的 total（分段与剪枝计量照常取回，只是不入缓存）；
+ *  ok      = 读到 total，这份 value 即被写入缓存的形状。 */
+type UsageRead =
+  | { kind: 'err'; error: string }
+  | { kind: 'partial'; split: UsageSplit; savings: any | null; error: string }
+  | { kind: 'ok'; value: { report: any; savings: any | null; split: UsageSplit; updatedAt: string }; split: UsageSplit; savings: any | null };
+
+/** 取 Token 用量报表并整形为可入缓存的形状（report / savings / split / updatedAt）。
+ *  请求抛错照旧向上抛：组件侧走原有的 catch，预热侧由 warmCache 静默吞掉。 */
+async function readUsage(): Promise<UsageRead> {
+  const r: any = await getTokenReport();
+  const e = firstErr(r);
+  if (e) return { kind: 'err', error: e };
+  // 2026-09-14后端现返回 { local, remote, total, remoteReason, ... }：
+  //   · local：本机桥的数据（始终获取，SSH 模式下亦保留）；
+  //   · remote：服务端桥的数据（未连接服务器或服务端桥未运行时为 null，另以 remoteReason 说明原因）；
+  //   · total：两份合并后的合计；曲线与分时图仍按合计绘制。
+  const total = isObj(r?.total) ? r.total : (isObj(r?.report) ? r.report : null);
+  const split: UsageSplit = {
+    local: isObj(r?.local) ? r.local : null,
+    remote: isObj(r?.remote) ? r.remote : null,
+    total,
+    localReason: String(r?.localReason || ''),
+    remoteReason: String(r?.remoteReason || ''),
+    remoteServer: isObj(r?.remoteServer) ? r.remoteServer : null,
+  };
+  const savings = isObj(r?.contextSavings) ? r.contextSavings : null;
+  if (!total) {
+    return { kind: 'partial', split, savings, error: [split.localReason, split.remoteReason].filter(Boolean).join('；') || '两侧桥均未取到用量数据' };
+  }
+  return { kind: 'ok', value: { report: total, savings, split, updatedAt: bjClock(Date.now()) }, split, savings };
+}
+
+/** 「学习与用量」页首屏要用的四份读取，一次预热（进管理器后空闲时 / 鼠标停在入口按钮上时调用）。
+ *  这四个 key 都预热：黑话库词条 + 桥侧学习快照、人格状态列表、画像状态、Token 用量报表 —— 都是首屏可见的数据。
+ *  「学习配置」刻意不在此列：它走 config-cache 的 CFG_LEARNING（有落盘与作用域鉴别，见上方说明），本函数不碰它。
+ *  去重（同 key 已在飞 / 缓存还新默认 5 分钟即跳过）、写缓存、失败静默，全部由 warmCache 负责。 */
+export async function warmLearningPage(): Promise<void> {
+  await Promise.all([
+    warmCache(KEY_SLANG_STATUS, async () => (await readSlangStatus()).value),
+    warmCache(KEY_PERSONA_STATUS, async () => (await readPersonaStatus()).value),
+    warmCache(KEY_PORTRAIT_STATUS, async () => (await readPortraitStatus()).value),
+    warmCache(KEY_USAGE, async () => {
+      const r = await readUsage();
+      return r.kind === 'ok' ? r.value : null;
+    }),
+  ]);
+}
+
 export default function Learning({ onBack }: Props) {
   /* 2026-09-23 反馈：切页面先闪一下"出厂默认值" —— 配置与表单草稿的初值先取模块级缓存
    *  （上次成功读到的那份）：切走再切回来时页面直接就是上次读到的真实配置；
@@ -308,6 +435,11 @@ export default function Learning({ onBack }: Props) {
   const [cfg, setCfg] = useState<any>(() => getCachedConfig<any>(CFG_LEARNING));
 /** 配置是否已读到（缓存命中或本次读取成功）。未读到时：两块表单禁用、两个「保存配置」禁用。 */
   const cfgReady = cfg !== null;
+/** 进入页面后，各读取点的首轮读取是否已结束（成功与失败都算结束 —— 否则桥不可达时进度条会一直亮）。
+   *  ReadBar 的判据是「屏上已有内容 且 首轮尚未结束」：只在原先会跳一行「正在读取…」的那个窗口亮一次。
+   *  刻意不用"是否有请求在途"作判据 —— 那样每 60 秒的常规静默轮询也会闪一下进度条。 */
+  const [calDone, setCalDone] = useState<Record<string, boolean>>({});
+  const markCalDone = (k: string) => setCalDone((m) => (m[k] ? m : { ...m, [k]: true }));
   const [loadErr, setLoadErr] = useState<string>('');
 /** 2026-09-19读取配置失败时一并记录桥侧返回的 code（'bridge-offline' / 'bridge-stale'），
    *  用以区分「桥未运行」与「桥版本过旧」——两者下一步处置不同，
@@ -346,12 +478,21 @@ export default function Learning({ onBack }: Props) {
   const [qqText, setQqText] = useState(boot.qqText);
 
   // 人格学习状态
-  const [pStatus, setPStatus] = useState<PItem[]>([]);
-  const [statusAt, setStatusAt] = useState<string>('');
+  /* 首帧初值取上次成功读到的那份列表（read-cache）：进页面先把上次那份渲染出来，
+     后台重读、读到原地替换 —— 不再先跳一句「暂无档案」再把列表刷出来。
+     缓存只在这里取一次（ref 兜住，此后每次渲染都用首帧那份），不在每次渲染时读缓存。 */
+  const personaBootRef = useRef<{ value: { list: PItem[]; at: string } | null } | null>(null);
+  if (!personaBootRef.current) personaBootRef.current = initialFromCache<{ list: PItem[]; at: string }>(KEY_PERSONA_STATUS);
+  const [pStatus, setPStatus] = useState<PItem[]>(personaBootRef.current.value?.list ?? []);
+  const [statusAt, setStatusAt] = useState<string>(personaBootRef.current.value?.at ?? '');
   const [statusErr, setStatusErr] = useState<string>('');
   // 展开某条记录时按需读取「完整资料」（直读桥的 memory.db，不截断；图谱接口会截断，故不采用）
   const [openUid, setOpenUid] = useState<string>('');
   const [profDetail, setProfDetail] = useState<Record<string, any>>({});
+  /** 本次会话里真正读到过完整资料的 uid。
+   *  与 profDetail 的区别：profDetail 里可能只是从 read-cache 起底的旧值（尚未重读），
+   *  而这里记的是"本次读回包确实拿到了"，用于沿用"已读到过就不再重复请求"的原有行为。 */
+  const profFreshRef = useRef<Set<string>>(new Set());
   const [profErr, setProfErr] = useState<Record<string, string>>({});
   const [profBusy, setProfBusy] = useState<string>('');
   // 英文人设正文（personaEn）的编辑草稿、进行中的动作与逐行结果提示。
@@ -365,14 +506,30 @@ export default function Learning({ onBack }: Props) {
     setOpenUid(uid);
     // 展开后将该条滚动至可视区（列表自身滚动，避免末条资料看似被截断）
     setTimeout(() => { try { document.getElementById(`lrn-row-${uid}`)?.scrollIntoView({ block: 'nearest' }); } catch { /* ignore */ } }, 80);
-    if (profDetail[uid]) return;                       // 已缓存：直接展开
+    /* 有旧值（本次会话读到过的，或 read-cache 里上次读到的）就先把旧值渲染出来，
+       同时后台重读、读到原地替换 —— 展开面板不再先跳一行「正在读取完整资料…」。
+       这次重读与原有行为一致地只在"本次会话还没读到过该 uid"时发生（已读到过则直接展开，不重复请求）。 */
+    const key = profileCacheKey(uid);
+    if (!profDetail[uid]) {
+      const cached = initialFromCache<any>(key).value;
+      if (cached) setProfDetail((m) => ({ ...m, [uid]: cached }));
+    }
+    if (profFreshRef.current.has(uid)) return;          // 本次会话已读到：直接展开
     setProfBusy(uid);
     try {
       const r: any = await getPersonProfile(uid);
       const d = (r && r.ok === false) ? null : (r?.profile !== undefined ? r : (r?.result ?? r));
-      if (r && r.ok === false) setProfErr((m) => ({ ...m, [uid]: String(r?.error || '读取失败') }));
-      else setProfErr((m) => { const n = { ...m }; delete n[uid]; return n; });
-      setProfDetail((m) => ({ ...m, [uid]: d }));
+      if (r && r.ok === false) {
+        /* 读取失败不清空已显示的那份资料（"保持原值"推广到此处）：清掉会让刚渲染出来的旧值消失、
+           只剩一句失败说明，而失败原因本来就与资料显示在同一块里，用户看得出这份是上一次读到的。
+           重读仍会发生 —— 判据是 profFreshRef（本次会话确实读到过），不是 profDetail。 */
+        setProfErr((m) => ({ ...m, [uid]: String(r?.error || '读取失败') }));
+      } else {
+        setProfErr((m) => { const n = { ...m }; delete n[uid]; return n; });
+        setProfDetail((m) => ({ ...m, [uid]: d }));
+        /* 只在成功回包后入缓存；失败不写（免得把错误状态当旧值反复渲染）。 */
+        if (d) { profFreshRef.current.add(uid); writeCacheValue(key, d); }
+      }
     } catch (e: any) {
       setProfErr((m) => ({ ...m, [uid]: String(e?.message ?? e) }));
     } finally { setProfBusy(''); }
@@ -434,6 +591,7 @@ export default function Learning({ onBack }: Props) {
       const res = unwrap(r);
       setPeDraft((m) => { const n = { ...m }; delete n[uid]; return n; });   // 落库成功后以库里的值为准
       setPeNote((m) => ({ ...m, [uid]: `已保存修正（${num(res.savedChars) || text.trim().length} 字）。机器人当前人设未改动；如需生效，请点「整篇覆盖人设」。` }));
+      dropCacheValue(profileCacheKey(uid));   // 该档案的 personaEn 已改：旧资料缓存作废
       await refreshStatus(true);
     } catch (err: any) {
       setPeNote((m) => ({ ...m, [uid]: `保存修正失败：${apiErrText(err)}` }));
@@ -466,6 +624,7 @@ export default function Learning({ onBack }: Props) {
           + `${res.backup ? `，旧人设已备份为 ${String(res.backup)}` : '（此前无 persona.md，故未生成备份）'}`
           + `。自下一条消息起生效，无需重启桥。`,
       }));
+      dropCacheValue(profileCacheKey(uid));   // 该档案的 personaEn 已改：旧资料缓存作废
       await refreshStatus(true);
     } catch (err: any) {
       setPeNote((m) => ({ ...m, [uid]: `覆盖失败：${apiErrText(err)}` }));
@@ -473,8 +632,12 @@ export default function Learning({ onBack }: Props) {
   };
 
   // 黑话库弹窗
+  /* 黑话库词条与「学习状态机」快照来自同一次 GET /api/slang，故共用 learning:status 一个缓存键：
+     进页面/切回本页时先把上次那份渲染出来（连「黑话库（N）」的条数也不跳），后台重读后原地替换。 */
+  const slangBootRef = useRef<{ value: { entries: SlangEntry[]; learn: SlangLearningState | null } | null } | null>(null);
+  if (!slangBootRef.current) slangBootRef.current = initialFromCache<{ entries: SlangEntry[]; learn: SlangLearningState | null }>(KEY_SLANG_STATUS);
   const [slangOpen, setSlangOpen] = useState(false);
-  const [slangEntries, setSlangEntries] = useState<SlangEntry[]>([]);
+  const [slangEntries, setSlangEntries] = useState<SlangEntry[]>(slangBootRef.current.value?.entries ?? []);
   const [slangErr, setSlangErr] = useState('');
   const [slangQ, setSlangQ] = useState('');
   // 黑话库批量审批：已勾选的词条 id（仅认可当前可见的未确认列表中勾选项）、进行中的动作与弹窗内结果提示
@@ -484,14 +647,20 @@ export default function Learning({ onBack }: Props) {
   const [slangNote, setSlangNote] = useState('');
   // 「已拒收」：分组默认折叠（该组既不属于已确认也不属于未确认，但数据不可丢弃，可展开查看）
   const [slangShowRejected, setSlangShowRejected] = useState(false);
+  // 2026-09-26：已确认组默认收起（待审批的候选在第一屏）
+  const [slangShowConfirmed, setSlangShowConfirmed] = useState(false);
   // 黑话「学习状态机」快照（GET /api/slang 的 learning，桥侧 slangLearningState()）；旧版桥无该字段时为 null
-  const [slangLearn, setSlangLearn] = useState<SlangLearningState | null>(null);
+  const [slangLearn, setSlangLearn] = useState<SlangLearningState | null>(slangBootRef.current.value?.learn ?? null);
 /** 2026-09-30「拿不到学习状态」是否已是确定结论（本次请求已返回且没带来 learning，或请求失败）。
    *  初值为 false：首帧数据尚未回来时不得显示「学习状态不可用」——那是把"还没结论"说成结论，
-   *  表现为此前反馈的"每次点开都跳一遍『学习状态不可用』再恢复正常"。此时渲染中性的"正在读取…"。 */
+   *  表现为此前反馈的"每次点开都跳一遍『学习状态不可用』再恢复正常"。
+   *  不再出现「正在读取…」+转圈那种整块替换的中间态。 */
   const [slangLearnUnavailable, setSlangLearnUnavailable] = useState(false);
   // 画像学习状态（右卡「画像学习」栏；来源 portraitAction('status')，与人格状态共用 60 秒静默轮询）
-  const [ptStatus, setPtStatus] = useState<any>(null);
+  /* 初值同样取上次成功读到的那份：进页面先渲染旧值，后台重读原地替换。 */
+  const portraitBootRef = useRef<{ value: any } | null>(null);
+  if (!portraitBootRef.current) portraitBootRef.current = initialFromCache<any>(KEY_PORTRAIT_STATUS);
+  const [ptStatus, setPtStatus] = useState<any>(portraitBootRef.current.value);
   const [ptErr, setPtErr] = useState('');
 
   const openSlangLib = async () => {
@@ -502,25 +671,27 @@ export default function Learning({ onBack }: Props) {
    *  页面上的「学习中」状态即取自该快照，为桥的真实运行态，非前端推测。
    *  2026-09-30`slangLearnUnavailable` 只在这次请求确实有了结果时才置位：
    *    回包正常但没带 learning（旧版桥）→ true（确定结论）；请求抛错 → true（确定失败）；
-   *    数据还在路上 → 保持原值（初值 false），界面显示中性的"正在读取…"，不显示"不可用"。 */
+   *    不显示"不可用"。 */
   const refreshSlangLib = async (quiet = false): Promise<boolean> => {
-    try {
-      const r = await getSlangLibrary();
-      const list: SlangEntry[] = Array.isArray(r?.entries) ? r.entries
-        : (Array.isArray(r?.result?.entries) ? r.result.entries : (Array.isArray(r?.data?.entries) ? r.data.entries : []));
-      setSlangEntries(list);
-      const hasLearn = isObj(r?.learning);
-      setSlangLearn(hasLearn ? normSlangLearning((r as any).learning) : null);
-      setSlangLearnUnavailable(!hasLearn);
-      // 列表重取后清除已不存在的勾选项，避免「已选 N 条」计入失效词条
-      setSlangSel((prev) => (prev.length ? prev.filter((id) => list.some((e) => String(e?.id ?? '') === id)) : prev));
-      setSlangErr('');
-      return true;
-    } catch (e) {
+    /* 取数+整形已抽到模块级 readSlangStatus()：与预热共用同一段逻辑，入缓存的形状不会与预热漂移。 */
+    const res = await readSlangStatus();
+    if (res.error) {
       setSlangLearnUnavailable(true);      // 请求已返回失败：这才是"不可用"的确定结论
-      if (!quiet) setSlangErr(String((e as Error)?.message ?? e));
+      if (!quiet) setSlangErr(res.error);
       return false;
     }
+    const value = res.value!;
+    const list = value.entries;
+    setSlangEntries(list);
+    setSlangLearn(value.learn);
+    setSlangLearnUnavailable(!res.hasLearn);
+    /* 读到即入缓存（只在成功回包后写；失败不写）。缓存的是同一次回包的两部分：
+       词条与 learning 快照 —— 下次进页面先按这份渲染，再后台校准、原地替换。 */
+    writeCacheValue(KEY_SLANG_STATUS, value);
+    // 列表重取后清除已不存在的勾选项，避免「已选 N 条」计入失效词条
+    setSlangSel((prev) => (prev.length ? prev.filter((id) => list.some((e) => String(e?.id ?? '') === id)) : prev));
+    setSlangErr('');
+    return true;
   };
 
 /** 黑话库批量操作：reject = 批量拒收，research = 批量分析（桥侧仅研究候选词条）。 */
@@ -534,6 +705,7 @@ export default function Learning({ onBack }: Props) {
     setSlangLibBusy(kind);
     setSlangNote(`${label}：已提交 ${ids.length} 条，等待桥侧回执…`);
     try {
+      dropCacheValue(KEY_SLANG_STATUS);   // 拒收 / 研究都会改变词条：旧快照先作废
       const r: any = kind === 'reject' ? await slangBatchReject(ids) : await slangResearch(ids);
       const e = firstErr(r);
       if (e) { const t = `${label}失败：${e}`; setMsg(t); setSlangNote(t); return; }
@@ -572,6 +744,7 @@ export default function Learning({ onBack }: Props) {
     setSlangLibBusy(`del:${id}`);
     setSlangNote(`正在删除「${word}」…`);
     try {
+      dropCacheValue(KEY_SLANG_STATUS);   // 删除会改变词条：旧快照先作废
       const r: any = await slangBatchDelete([id]);
       const err = firstErr(r);
       if (err) {
@@ -640,33 +813,28 @@ export default function Learning({ onBack }: Props) {
   };
 
   const refreshStatus = async (quiet = false): Promise<boolean> => {
-    try {
-      const r = await personaAction('status');
-      const e = firstErr(r);
-      if (e) { if (!quiet) setStatusErr(e); return false; } // 静默轮询失败不作提示（保留已展示内容）
-      setPStatus(normStatus(r));
-      setStatusErr('');
-      setStatusAt(bjClock(Date.now()));
-      return true;
-    } catch (err: any) {
-      if (!quiet) setStatusErr(String(err?.message ?? err));
-      return false;
-    }
+    /* 取数+整形已抽到模块级 readPersonaStatus()：与预热共用同一段逻辑，入缓存的形状不会与预热漂移。 */
+    const res = await readPersonaStatus();
+    if (res.error) { if (!quiet) setStatusErr(res.error); return false; } // 静默轮询失败不作提示（保留已展示内容）
+    const value = res.value!;
+    setPStatus(value.list);
+    setStatusErr('');
+    setStatusAt(value.at);
+    /* 读到即入缓存（只在成功回包后写；失败不写）：下次进页面先渲染这份列表，再后台校准。 */
+    writeCacheValue(KEY_PERSONA_STATUS, value);
+    return true;
   };
 
-/** 画像学习状态（右卡下方栏）。回包为 { ok, result:{ config, lastTargets, status, running } } */
+/** 画像学习状态（右卡下方栏）。回包为 { ok, result:{ config, lastTargets, status, running } }
+   *  取数+整形已抽到模块级 readPortraitStatus()：与预热共用同一段逻辑（入缓存的形状一致）。 */
   const refreshPortrait = async (quiet = false): Promise<boolean> => {
-    try {
-      const r: any = await portraitAction('status');
-      const e = firstErr(r);
-      if (e) { if (!quiet) setPtErr(e); return false; }
-      setPtStatus(unwrap(r));
-      setPtErr('');
-      return true;
-    } catch (err: any) {
-      if (!quiet) setPtErr(String(err?.message ?? err));
-      return false;
-    }
+    const res = await readPortraitStatus();
+    if (res.error) { if (!quiet) setPtErr(res.error); return false; }
+    setPtStatus(res.value);
+    setPtErr('');
+    /* 读到即入缓存（只在成功回包后写）：下次进页面先渲染这份状态，再后台校准。 */
+    writeCacheValue(KEY_PORTRAIT_STATUS, res.value);
+    return true;
   };
 
   // 进入页面时拉取一次配置、人格状态、画像学习状态与黑话库（含学习状态机）。
@@ -686,6 +854,9 @@ export default function Learning({ onBack }: Props) {
         loadConfig(), refreshStatus(true), refreshPortrait(true), refreshSlangLib(true),
       ]);
       if (!alive) return;
+      /* 本轮（含进页面后的首轮）四项读取至此结束，进度条可以收起了：成功与失败都算结束 ——
+         否则桥不可达时 ReadBar 会一直亮着。markCalDone 幂等，60 秒一轮的常规轮询不会引起重渲染。 */
+      markCalDone('cfg'); markCalDone('persona'); markCalDone('portrait'); markCalDone('slang');
       const ok = a && b && c && d;
       backoff = ok ? 0 : (backoff === 0 ? 5000 : Math.min(60000, backoff * 2));
       setAutoRetryMs(backoff);
@@ -768,6 +939,7 @@ export default function Learning({ onBack }: Props) {
 /**  即同一份 persona status（pOtherRows），点完黑话学习后画像学习栏随之刷新，表现为「画像学习也运行了」。 */
 /**  现仅刷新黑话侧，黑话按钮只触发黑话相关逻辑。 */
   const learnSlang = slangRun('learn', async () => {
+    dropCacheValue(KEY_SLANG_STATUS);   // 本轮学习会改变词条与学习状态：旧快照先作废，免得下次进页面把旧结果当新结果渲染
     const r = await slangAction('learn');
     const e = firstErr(r);
     if (e) { setMsg(`失败：${e}`); return; }
@@ -778,6 +950,7 @@ export default function Learning({ onBack }: Props) {
   });
 
   const stopSlang = slangRun('stop', async () => {
+    dropCacheValue(KEY_SLANG_STATUS);   // 同上：停止会改变 learning 快照，旧快照先作废
     const r = await slangAction('stop');
     const e = firstErr(r);
     if (e) { setMsg(`失败：${e}`); return; }
@@ -797,6 +970,9 @@ export default function Learning({ onBack }: Props) {
     if (started.length) setMsg(`已受理人格学习：${started.join('、')}（后台串行执行）`);
     else if (qqs.length) setMsg('未受理新任务：目标可能已处于学习中，或 DSH 会话尚未就绪');
     else setMsg('未受理：请先在下方填写目标 QQ（每行一个，或用逗号分隔）');
+    /* 本轮学习会重写这些人的档案：把「完整资料」的旧缓存作废，
+       免得切走再回来展开时把学习前的旧档案当成新结果渲染。 */
+    for (const it of pStatus) dropCacheValue(profileCacheKey(String(it.uid)));
     await refreshStatus(true);
   });
 
@@ -807,6 +983,7 @@ export default function Learning({ onBack }: Props) {
     const res = unwrap(r);
     const stopped = Array.isArray(res?.stopped) ? res.stopped.map(String) : [];
     setMsg(stopped.length ? `已请求停止 ${stopped.join('、')} 的学习（本轮结束后收尾，不写入未完成内容）` : '当前没有进行中的人格学习');
+    for (const uid of stopped) dropCacheValue(profileCacheKey(uid));   // 同上：本轮会收尾写入这些人的档案
     await refreshStatus(true);
   });
 
@@ -829,12 +1006,12 @@ export default function Learning({ onBack }: Props) {
         <div className="page-header-left">
           <button className="btn btn-sm" onClick={onBack}><ArrowLeft size={15} /> 返回</button>
           <div className="page-title-wrap">
-            <div className="page-title" style={{ color: 'var(--nc-primary-500)' }}>MoonBot · 学习与用量</div>
+            <div className="page-title" style={{ color: 'var(--nc-primary-500)' }}>Kizuna · 学习与用量</div>
             <div className="page-subtitle">黑话与人格学习 · Token 用量统计（作用于当前活动桥接）</div>
           </div>
         </div>
         <div className="page-actions">
-          <span className="connection-bar" title="学习配置与用量接口由管理端代理至当前活动实例（优先远端隧道，其次本机 3100）">
+          <span className="connection-bar">
             <Zap size={13} /> 目标：当前活动实例
           </span>
         </div>
@@ -847,6 +1024,7 @@ export default function Learning({ onBack }: Props) {
           <div className="lrn-grid">
             {/* ============ 左：学习配置与操作 ============ */}
             <div className="card">
+              {/* 2026-09-26 主人要求去掉全部加载线：原注释里的 ReadBar（2px 细进度条）已删除，下面的说明仍然成立。 */}
               <div className="card-title"><Activity size={17} /> 黑话 / 人格学习</div>
               {/* 【2026-09-19 要求：桥不可达不应使配置页变为不可用】
                   此前此处为 `loadErr ? <错误块> : <>...全部配置字段...</>`：桥一停，整块学习配置
@@ -875,10 +1053,11 @@ export default function Learning({ onBack }: Props) {
                   </div>
                 </div>
               )}
-              {/* 读取中只占一行，页面结构照常可见；读到之前各字段为空白且不可编辑（见上方 cfgReady）。 */}
+              {/* 确实一无所有（从未读到过、也没有旧值）时才出现的说明：保持字段空白且不可编辑，
+                  但只写小字，不再加转圈图标 —— 有旧值时这份配置照常显示、照常可编辑（见上方 cfgReady）。 */}
               {!cfgReady && !loadErr && (
                 <div className="lrn-inline-note">
-                  <Loader2 size={13} className="spin" /> 正在读取学习配置：读到之前下方字段为空白且不可编辑，以免呈现与桥上不一致的数值。
+                  正在读取学习配置；读到之前字段为空白且不可编辑（以免呈现与桥上不一致的数值）。
                 </div>
               )}
 
@@ -908,13 +1087,11 @@ export default function Learning({ onBack }: Props) {
                         </div>
                       </>
                     ) : !slangLearnUnavailable ? (
-                      /* 2026-09-30数据尚未回来（首帧 / 本页刚从别处切回）：只显示中性一行。
-                         此前此处的降级块带 AlertTriangle +「学习状态不可用」，等于把"还没结论"说成结论，
-                         正是此前反馈的"每次点开都跳一遍『学习状态不可用』再恢复正常"。 */
-                      <div className="lrn-learn-state is-unknown">
-                        <Loader2 size={13} className="spin" />
-                        <span className="lrn-learn-note">正在读取学习状态（桥侧 learning 快照）…</span>
-                      </div>
+                      /* 数据尚未回来、且没有旧值可显示（首次进入）：给骨架占位，不再是一行「正在读取…」+转圈。
+                         有旧值时走上面 slangPhase 那条分支照常渲染（那份快照已由 read-cache 起底）。
+                         2026-09-30原备注仍成立：此前此处的降级块带 AlertTriangle +「学习状态不可用」，
+                         等于把"还没结论"说成结论，正是此前反馈的"每次点开都跳一遍『学习状态不可用』再恢复正常"。 */
+                      <Skeleton rows={1} />
                     ) : (
                       /* 状态取不到（旧版桥无 learning 字段，或本次读取已确定失败）：明确标注「取不到」，
                          不显示任何学习阶段——显示错误状态比不显示更为不利。黑话库本身仍可查看与修改。 */
@@ -935,7 +1112,7 @@ export default function Learning({ onBack }: Props) {
                       </>
                     )}
                     <div className="cfg-fields">
-                      <label className="switch-row" title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+                      <label className="switch-row">
                         <input type="checkbox" checked={slgEnabled === true} disabled={!cfgReady} onChange={(e) => setSlgEnabled(e.target.checked)} />
                         <span>启用定时学习</span>
                         <em>每日按下方时间自动学习一次群聊黑话</em>
@@ -945,24 +1122,24 @@ export default function Learning({ onBack }: Props) {
                         <input className="input" type="text" inputMode="numeric" placeholder="如 04:00（留空表示不定时）"
                           value={slgTime} disabled={!cfgReady} onChange={(e) => setSlgTime(normHHMM(e.target.value))} />
                       </label>
-                      <label className="switch-row" title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+                      <label className="switch-row">
                         <input type="checkbox" checked={slgLiveWin === true} disabled={!cfgReady} onChange={(e) => setSlgLiveWin(e.target.checked)} />
                         <span>实时窗口提取</span>
                         <em>开启：消息到达时实时提取唤醒，额度消耗更高；关闭：仅在定时任务中批量学习</em>
                       </label>
-                      <label className="switch-row" title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+                      <label className="switch-row">
                         <input type="checkbox" checked={slgResearch === true} disabled={!cfgReady} onChange={(e) => setSlgResearch(e.target.checked)} />
                         <span>自动深入研究</span>
                         <em>提取到新词后自动执行一轮深度研究</em>
                       </label>
-                      <label className="switch-row" title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+                      <label className="switch-row">
                         <input type="checkbox" checked={slgIntv === true} disabled={!cfgReady} onChange={(e) => setSlgIntv(e.target.checked)} />
                         <span>自动间隔学习</span>
                         <em>按固定间隔增量学习一次（自上次学习点起），可与每日定时并存</em>
                       </label>
                       <label className="field-row">
                         <span className="f-label">间隔（小时）</span>
-                        <NumInput className="input" value={slgIntvHours} disabled={!cfgReady} placeholder={cfgReady ? undefined : '尚未读取'}
+                        <NumInput className="input is-short" value={slgIntvHours} disabled={!cfgReady} placeholder={cfgReady ? undefined : '尚未读取'}
                           onCommit={(n) => setSlgIntvHours(clampHrs(n || 24))} />
                       </label>
                     </div>
@@ -974,7 +1151,6 @@ export default function Learning({ onBack }: Props) {
                     <div className="lrn-actions">
                       {/* 配置尚未读到时禁用保存：此时表单是空的，保存下去等于把空值当成配置写回。 */}
                       <button className="btn btn-primary btn-sm" disabled={slangBusy !== null || !cfgReady}
-                        title={cfgReady ? undefined : '学习配置尚未读取到，暂不可保存；本页会自动重读，读到后即可保存'}
                         onClick={saveSlang}>
                         {slangBusy === 'save' ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存配置
                       </button>
@@ -984,7 +1160,7 @@ export default function Learning({ onBack }: Props) {
                       <button className="btn btn-outline-danger btn-sm" disabled={slangBusy !== null} onClick={stopSlang}>
                         {slangBusy === 'stop' ? <Loader2 size={14} className="spin" /> : <Square size={14} />} 停止学习
                       </button>
-                      <button className="btn btn-sm" onClick={openSlangLib} title="查看已学到的黑话词条（含含义、用法例句与出现次数）">
+                      <button className="btn btn-sm" onClick={openSlangLib}>
                         <BookOpen size={14} /> 黑话库{slangEntries.length ? `（${slangEntries.length}）` : ''}
                       </button>
                     </div>
@@ -995,20 +1171,41 @@ export default function Learning({ onBack }: Props) {
                   {/* 人格学习 */}
                   <div className="lrn-block">
                     <div className="lrn-block-title">人格学习（学习指定 QQ 的语言风格与性格）</div>
+                      {/* 2026-09-26 主人要求：人格学习也要有和黑话那边一样的「空闲（随时可开始）」标识。
+                          黑话那边由桥 GET /api/slang 的 learning 快照给 phase；人格这边桥没有等价快照，
+                          故按「目标名单里有没有 state=learning 的行」+ 本次是否刚点过「人格立即学习」判断。 */}
+                      <div>
+                        {(() => {
+                          const rows = Array.isArray(pTargetRows) ? pTargetRows : [];
+                          const learningN = rows.filter((r: any) => String(r?.state ?? '') === 'learning').length;
+                          const active = learningN > 0 || personaBusy === 'start';
+                          return (
+                            <div className={`lrn-learn-state${active ? ' is-active' : ''}`}>
+                              {active ? <Loader2 size={13} className="spin" /> : <Activity size={13} />}
+                              <span className={active ? 'badge badge-warn' : 'badge badge-success'}>
+                                {active ? (learningN > 0 ? `学习中（${learningN} 个目标）` : '正在受理') : '空闲（随时可开始）'}
+                              </span>
+                              <span className="lrn-learn-note">
+                                {active ? '学习任务执行中，本轮结束后自动收尾' : '当前无进行中的学习任务，可随时再发起一轮人格学习'}
+                              </span>
+                            </div>
+                          );
+                        })()}
+                      </div>
                     <div className="cfg-fields">
-                      <label className="switch-row" title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+                      <label className="switch-row">
                         <input type="checkbox" checked={perEnabled === true} disabled={!cfgReady} onChange={(e) => setPerEnabled(e.target.checked)} />
                         <span>启用人格学习</span>
                         <em>关闭后桥侧将拒绝人格学习请求</em>
                       </label>
-                      <label className="switch-row" title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+                      <label className="switch-row">
                         <input type="checkbox" checked={perIntv === true} disabled={!cfgReady} onChange={(e) => setPerIntv(e.target.checked)} />
                         <span>自动间隔学习</span>
                         <em>按间隔对下方目标全量重新学习；窗口自上次学习起算（未运行过则取近 30 天）</em>
                       </label>
                       <label className="field-row">
                         <span className="f-label">间隔（小时）</span>
-                        <NumInput className="input" value={perIntvHours} disabled={!cfgReady} placeholder={cfgReady ? undefined : '尚未读取'}
+                        <NumInput className="input is-short" value={perIntvHours} disabled={!cfgReady} placeholder={cfgReady ? undefined : '尚未读取'}
                           onCommit={(n) => setPerIntvHours(clampHrs(n || 24))} />
                       </label>
                       <label className="field-row">
@@ -1025,7 +1222,6 @@ export default function Learning({ onBack }: Props) {
                     </div>
                     <div className="lrn-actions">
                       <button className="btn btn-primary btn-sm" disabled={personaBusy !== null || !cfgReady}
-                        title={cfgReady ? undefined : '学习配置尚未读取到，暂不可保存；本页会自动重读，读到后即可保存'}
                         onClick={savePersona}>
                         {personaBusy === 'save' ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存配置
                       </button>
@@ -1081,6 +1277,9 @@ export default function Learning({ onBack }: Props) {
                   </div>
                 </div>
               ) : pTargetRows.length === 0 ? (
+                /* 首轮尚未结束且没有任何档案可显示：给骨架，不用「暂无档案」把"还没读到"说成结论
+                   （有旧列表时上面那条 ReadBar 负责说明正在后台校准）。 */
+                !calDone.persona ? <Skeleton rows={3} /> : (
                 <div className="empty-state" style={{ padding: '34px 12px' }}>
                   <Users size={34} style={{ color: 'var(--nc-foreground-300)', marginBottom: 10 }} />
                   <div style={{ color: 'var(--nc-foreground-400)', fontSize: 13 }}>
@@ -1089,6 +1288,7 @@ export default function Learning({ onBack }: Props) {
                       : <>暂无档案<br />已学习或正在学习的目标将显示于此（点「人格立即学习」开始）</>}
                   </div>
                 </div>
+                )
               ) : (
                 <div className="lrn-status-list lrn-status-scroll">
                   {pTargetRows.map((it) => {
@@ -1097,7 +1297,7 @@ export default function Learning({ onBack }: Props) {
                     const pf = d?.profile || null;
                     return (
                       <div className={`lrn-status-row${open ? ' is-open' : ''}`} key={it.uid} id={`lrn-row-${it.uid}`}
-                        onClick={() => openProfile(it.uid)} title={open ? '点击收起' : '点击查看完整资料'}>
+                        onClick={() => openProfile(it.uid)}>
                         <div className="lrn-status-main">
                           <div className="lrn-status-uid">
                             <b>{it.uid}</b>
@@ -1139,7 +1339,9 @@ export default function Learning({ onBack }: Props) {
                               .filter(Boolean).join('；');
                             return (
                             <div className="lrn-status-detail">
-                              {profBusy === it.uid && <div className="lrn-dk">正在读取完整资料…</div>}
+                              {/* 有旧值（本次读到过一次，或 read-cache 里上次读到的）：照常渲染，不再加任何加载线；
+                                  确实没有旧值（首次展开）才给骨架 —— 不再先跳一行「正在读取完整资料…」。 */}
+                              {profBusy === it.uid && !d && <Skeleton rows={3} />}
                               {profErr[it.uid] && <div className="lrn-dk">读取失败：{profErr[it.uid]}</div>}
                               <div>
                                 <span className="lrn-dk">人格样本</span>
@@ -1227,9 +1429,6 @@ export default function Learning({ onBack }: Props) {
                                   <button
                                     className="btn btn-soft-primary btn-sm"
                                     disabled={!!peBusy || !inTarget || !peLib}
-                                    title={inTarget
-                                      ? '由桥运行一轮模型：将已学特点并入当前机器人人设并重新增删改，产出草稿填入输入框（不写盘，确认后再覆盖）'
-                                      : '该目标不在人格学习目标列表中，不可使用'}
                                     onClick={() => fusePersonaEn(it.uid)}
                                   >
                                     {peBusy === `fuse:${it.uid}` ? <Loader2 size={13} className="spin" /> : <Wand2 size={13} />} 结合原人设完善
@@ -1237,7 +1436,6 @@ export default function Learning({ onBack }: Props) {
                                   <button
                                     className="btn btn-soft-primary btn-sm"
                                     disabled={!!peBusy || !inTarget || !peText.trim()}
-                                    title={inTarget ? '将输入框中的正文写回该档案（机器人当前人设不变）' : '该目标不在人格学习目标列表中，不可修改'}
                                     onClick={() => savePersonaEn(it.uid, peText)}
                                   >
                                     {peBusy === `save:${it.uid}` ? <Loader2 size={13} className="spin" /> : <Save size={13} />} 保存修正
@@ -1245,7 +1443,6 @@ export default function Learning({ onBack }: Props) {
                                   <button
                                     className="btn btn-primary btn-sm"
                                     disabled={!!peBusy || !inTarget || !peText.trim()}
-                                    title={inTarget ? '以输入框中的这段英文整篇替换机器人当前人设（旧人设自动备份）' : '该目标不在人格学习目标列表中，不可覆盖'}
                                     onClick={() => applyPersonaEn(it.uid, peText)}
                                   >
                                     {peBusy === `apply:${it.uid}` ? <Loader2 size={13} className="spin" /> : <Zap size={13} />} 整篇覆盖人设
@@ -1282,9 +1479,6 @@ export default function Learning({ onBack }: Props) {
               <div className="lrn-status-block lrn-status-block-fill">
                 <div className="lrn-block-title">
                   画像学习
-                  <button className="btn btn-sm lrn-block-refresh" onClick={() => refreshPortrait()} title="重新读取一次画像学习状态（常规每 60 秒自动刷新）">
-                    <RefreshCw size={12} /> 刷新
-                  </button>
                 </div>
                 {ptErr ? (
                   <div className="lrn-error">
@@ -1295,7 +1489,11 @@ export default function Learning({ onBack }: Props) {
                     </div>
                   </div>
                 ) : !ptStatus ? (
-                  <div className="lrn-status-meta"><Loader2 size={13} className="spin" /> 正在读取画像学习状态…</div>
+                  /* 首次进入且没有旧状态：骨架占位，不再是一行「正在读取画像学习状态…」+转圈。
+                     注意：静默轮询失败不置 ptErr（原有设计），故桥不可达时这里会一直停在骨架上
+                     —— 与改动前"一直转圈"的处境相同，只是不再有那个转圈；本页仍会自动重读。
+                     手动点本栏「刷新」走的是非静默路径，失败会照常显示错误分支。 */
+                  <Skeleton rows={2} />
                 ) : (() => {
                   const ptCfg: Record<string, any> = isObj(ptStatus?.config) ? ptStatus.config : {};
                   const ptList: any[] = Array.isArray(ptStatus?.status) ? ptStatus.status : [];
@@ -1332,7 +1530,7 @@ export default function Learning({ onBack }: Props) {
                         const d = profDetail[uid] || null;
                         return (
                           <div className={`lrn-status-row${open ? ' is-open' : ''}`} key={uid} id={`lrn-row-${uid}`}
-                            onClick={() => openProfile(uid)} title={open ? '点击收起资料' : '点击查看完整资料'}>
+                            onClick={() => openProfile(uid)}>
                             <div className="lrn-status-main">
                               <div className="lrn-status-uid">
                                 <b>{uid}</b>
@@ -1422,11 +1620,6 @@ export default function Learning({ onBack }: Props) {
                 <div
                   className={`lrn-status-row lrn-slang-row${picked ? ' is-selected' : ''}${selectable ? '' : ' is-readonly'}`}
                   key={id || `slang-${st || 'x'}-${idx}`}
-                  title={selectable
-                    ? (id ? (picked ? '点击取消选择' : '点击选择该条') : '该词条没有 id，无法勾选（桥侧旧数据）')
-                    : st === 'rejected'
-                      ? '已拒收的黑话：只读展示（不参与查询，可留存档案）；无需留存时点右侧「删除」'
-                      : '已确认的黑话：只读展示（研究会话确认后桥侧自动转为已确认，无需人工批量通过）'}
                   onClick={selectable ? (evt) => { if ((evt.target as HTMLElement)?.tagName === 'INPUT') return; toggle(id); } : undefined}
                 >
                   {selectable
@@ -1438,14 +1631,13 @@ export default function Learning({ onBack }: Props) {
                       <b>{String(e?.content ?? '(空)')}</b>
                       {badge(st)}
                       {e?.autoConfirmed === true && (
-                        <span className="badge badge-info" title="研究会话明确确认（confirmed:true 且含含义、风险不高）后由桥自动转为已确认">自动确认</span>
+                        <span className="badge badge-info">自动确认</span>
                       )}
                       <span className="lrn-status-caret">出现 {num(e?.count)} 次 · {String(e?.source ?? '')}</span>
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-danger lrn-slang-del"
                         disabled={!!slangLibBusy || !id}
-                        title={id ? '删除该黑话（将二次确认；删除后机器人不再使用该黑话）' : '该词条没有 id，无法删除（桥侧旧数据）'}
                         onClick={(evt) => { evt.stopPropagation(); void deleteSlang(e); }}
                       >
                         {slangLibBusy === `del:${id}` ? <Loader2 size={12} className="spin" /> : <Trash2 size={12} />} 删除
@@ -1478,7 +1670,6 @@ export default function Learning({ onBack }: Props) {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn btn-sm" disabled={!!slangLibBusy} onClick={() => refreshSlangLib()}><RefreshCw size={13} /> 刷新</button>
                       <button className="btn btn-sm" onClick={() => setSlangOpen(false)}>关闭</button>
                     </div>
                   </div>
@@ -1496,19 +1687,20 @@ export default function Learning({ onBack }: Props) {
                       <button type="button" className="btn btn-sm" disabled={!slangSel.length} onClick={() => setSlangSel([])}>清空选择</button>
                       <span className="lrn-batch-spacer" />
                       <button type="button" className="btn btn-outline-danger btn-sm" disabled={!!slangLibBusy || !selIds.length}
-                        onClick={() => act('reject')} title="将选中词条标记为已拒收（不再参与查询，可留存不删除）">
+                        onClick={() => act('reject')}>
                         {slangLibBusy === 'reject' ? <Loader2 size={13} className="spin" /> : <X size={13} />} 批量拒收
                       </button>
                       <button type="button" className="btn btn-soft-primary btn-sm" disabled={!!slangLibBusy || !selIds.length}
-                        onClick={() => act('research')} title="对选中的候选词条触发一次研究分析（桥侧后台串行执行，完成后补齐含义、用法与例句）">
+                        onClick={() => act('research')}>
                         {slangLibBusy === 'research' ? <Loader2 size={13} className="spin" /> : <Search size={13} />} 批量分析
                       </button>
                     </div>
                     <div className="lrn-slang-note">
-                      「已确认」的含义为该词条已入库、具备含义且可被检索。黑话默认不注入唤醒提示词（桥侧 injectIntoPrompt 默认关闭），
-                      机器人遇到不认识的词时自行调用 qq_slang_query 工具按需查库，故仅「已确认且已填含义」的词条可被检索到。
-                      候选词条的释义由「批量分析」交由研究会话补齐，<b>研究会话明确确认后桥侧自动转为「已确认」</b>
-                      （slang.js 中的 autoConfirmed 一段），因此此处不再提供「批量通过」。删除不可恢复；如需留存档案，宜改用「批量拒收」。
+                      「已确认」= 词条已入库、有含义、可被检索。<b>黑话表不注入唤醒提示词</b>
+                      （为省 token，桥侧 injectIntoPrompt 保持关闭），改由系统提示词的 SLANG_NOT_IN_CONTEXT 硬规则
+                      要求机器人遇到生词先自己查 qq_slang_query，查不到再联网搜 —— 所以「已确认且已填含义」的词条才检索得到。
+                      候选的释义由「批量分析」交研究会话补齐，<b>研究会话明确确认后桥侧自动转为「已确认」</b>
+                      （slang.js 的 autoConfirmed 一段），因此此处不再提供「批量通过」。删除不可恢复；如需留存档案，宜改用「批量拒收」。
                     </div>
                     {slangNote && <div className="lrn-slang-result">{slangNote}</div>}
                   </div>
@@ -1522,27 +1714,34 @@ export default function Learning({ onBack }: Props) {
                     )}
                     {!slangErr && list.length > 0 && (
                       <>
-                        {/* ——— 已确认（只读；标题计数 = 桥 learning.counts.confirmed） ——— */}
-                        <div className="lrn-slang-group">
-                          <div className="lrn-slang-group-h">
-                            <Check size={13} /> 已确认
-                            <span className="lrn-slang-group-n">{cnt(slangCounts.confirmed, confirmedList.length)}</span>
-                            <span className="lrn-slang-group-hint">只读 · 研究会话确认后桥侧自动转为已确认，无需人工批量通过</span>
-                          </div>
-                          {confirmedList.length > 0
-                            ? confirmedList.map((e, i) => rowOf(e, i, false))
-                            : <div className="pfp-empty">{kw ? '没有命中的已确认词条。' : '本组当前为空：尚无词条被确认（候选经研究会话确认并给出含义后自动归入本组）。'}</div>}
-                        </div>
-                        {/* ——— 未确认（= 候选，可勾选；标题计数 = 桥 learning.counts.candidate） ——— */}
+                        {/* ——— 未确认（= 候选，可勾选；标题计数 = 桥 learning.counts.candidate）———
+                            2026-09-26：未确认排到最前 —— 待审批的一组必须第一眼看到，不必先翻过已确认。 */}
                         <div className="lrn-slang-group">
                           <div className="lrn-slang-group-h">
                             <AlertTriangle size={13} /> 未确认
                             <span className="lrn-slang-group-n">{cnt(slangCounts.candidate, candidateList.length)}</span>
-                            <span className="lrn-slang-group-hint">可勾选后执行「批量分析 / 批量拒收」；每条亦可单独删除</span>
+                            <span className="lrn-slang-group-hint">待审批 · 可勾选后执行「批量分析 / 批量拒收」；每条亦可单独删除</span>
                           </div>
                           {candidateList.length > 0
                             ? candidateList.map((e, i) => rowOf(e, i, true))
                             : <div className="pfp-empty">{kw ? '没有命中的未确认词条。' : '无未确认词条：候选均已确认入库，机器人可按需检索。'}</div>}
+                        </div>
+                        {/* ——— 已确认（只读；标题计数 = 桥 learning.counts.confirmed）———
+                            2026-09-26：默认收起（与「已拒收」同一交互），它只是档案，不该把待审批的挤出屏幕。 */}
+                        <div className="lrn-slang-group">
+                          <div className="lrn-slang-group-h lrn-slang-group-h-btn" role="button" tabIndex={0}
+                            onClick={() => setSlangShowConfirmed((v) => !v)}
+                            onKeyDown={(evt) => { if (evt.key === 'Enter' || evt.key === ' ') { evt.preventDefault(); setSlangShowConfirmed((v) => !v); } }}
+>
+                            <Check size={13} /> 已确认
+                            <span className="lrn-slang-group-n">{cnt(slangCounts.confirmed, confirmedList.length)}</span>
+                            <span className="lrn-slang-group-hint">只读 · 桥侧自动转入，无需人工批量通过 · {slangShowConfirmed ? '点击收起 ▾' : '点击展开 ▸'}</span>
+                          </div>
+                          {slangShowConfirmed && (
+                            confirmedList.length > 0
+                              ? confirmedList.map((e, i) => rowOf(e, i, false))
+                              : <div className="pfp-empty">{kw ? '没有命中的已确认词条。' : '本组当前为空：尚无词条被确认（候选经研究会话确认并给出含义后自动归入本组）。'}</div>
+                          )}
                         </div>
                         {/* ——— 已拒收：既不进"已确认"也不进"未确认"，单独折一组（默认收起），数据不丢 ——— */}
                         {(rejectedList.length > 0 || slangCounts.rejected > 0) && (
@@ -1550,7 +1749,7 @@ export default function Learning({ onBack }: Props) {
                             <div className="lrn-slang-group-h lrn-slang-group-h-btn" role="button" tabIndex={0}
                               onClick={() => setSlangShowRejected((v) => !v)}
                               onKeyDown={(evt) => { if (evt.key === 'Enter' || evt.key === ' ') { evt.preventDefault(); setSlangShowRejected((v) => !v); } }}
-                              title="已拒收的词条不再参与查询，可留存档案；无需留存时展开后逐条删除">
+>
                               <X size={13} /> 已拒收
                               <span className="lrn-slang-group-n">{cnt(slangCounts.rejected, rejectedList.length)}</span>
                               <span className="lrn-slang-group-hint">
@@ -1604,7 +1803,7 @@ function UsageSourceCard({ title, src, badge, highlight }: { title: string; src:
         {title}
         {badge && <span className={`badge ${badge === '服务端' ? 'badge-remote' : 'badge-local'}`} style={{ marginLeft: 6 }}>{badge}</span>}
       </div>
-      <div className="lrn-stat-v">{ok ? fmtFull(used) : '—'}</div>
+      <StatValue className="lrn-stat-v" value={ok ? used : null} text={ok ? fmtFull(used) : '—'} />
       <div className="lrn-stat-s">
         {ok
           ? (used === 0
@@ -1618,14 +1817,21 @@ function UsageSourceCard({ title, src, badge, highlight }: { title: string; src:
 }
 
 function UsagePanel() {
-  const [report, setReport] = useState<any>(null);
+  /* 首帧初值取上次成功读到的用量（read-cache）：进页面先把上次的数字与曲线渲染出来，
+     后台重读、读到原地替换 —— 不再先摆一排 0 与空图、读完再跳。只取一次，不在每次渲染时读缓存。 */
+  const bootRef = useRef<{ value: { report: any; savings: any; split: any; updatedAt: string } | null } | null>(null);
+  if (!bootRef.current) bootRef.current = initialFromCache<{ report: any; savings: any; split: any; updatedAt: string }>(KEY_USAGE);
+  const [report, setReport] = useState<any>(bootRef.current.value?.report ?? null);
   /* 2026-09-19 修复「剪枝数据行不显示」该字段位于响应顶层（r.contextSavings），不在 total 内；
    * 此前写作 report?.contextSavings（report = total），始终取不到，导致整行不渲染。 */
-  const [savings, setSavings] = useState<any>(null);
-  const [split, setSplit] = useState<{ local: any | null; remote: any | null; total: any | null; localReason: string; remoteReason: string; remoteServer: any } | null>(null);
+  const [savings, setSavings] = useState<any>(bootRef.current.value?.savings ?? null);
+  const [split, setSplit] = useState<{ local: any | null; remote: any | null; total: any | null; localReason: string; remoteReason: string; remoteServer: any } | null>(bootRef.current.value?.split ?? null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState('');
+  const [updatedAt, setUpdatedAt] = useState(bootRef.current.value?.updatedAt ?? '');
+  /* 进页面后的首轮读取是否已结束（成败都算）：ReadBar 的判据 —— 只有"屏上已有旧值 且 首轮尚未结束"
+     才亮，之后的 60 秒轮询与 SSE 触发的重读不再闪进度条。 */
+  const [calDone, setCalDone] = useState(false);
   const [live, setLive] = useState<'sse' | 'poll'>('poll');
 /** 失败后的自动重试间隔（毫秒，0 = 正常）：仅用于如实说明"现在多久重读一次"。 */
   const [autoRetryMs, setAutoRetryMs] = useState(0);
@@ -1679,36 +1885,25 @@ function UsagePanel() {
     inflight.current = true;
     if (!report) setLoading(true);
     try {
-      const r: any = await getTokenReport();
-      const e = firstErr(r);
-      if (e) { setErr(e); return false; }
-      // 2026-09-14后端现返回 { local, remote, total, remoteReason, ... }：
-      //   · local：本机桥的数据（始终获取，SSH 模式下亦保留）；
-      //   · remote：服务端桥的数据（未连接服务器或服务端桥未运行时为 null，另以 remoteReason 说明原因）；
-      //   · total：两份合并后的合计；曲线与分时图仍按合计绘制。
-      const total = isObj(r?.total) ? r.total : (isObj(r?.report) ? r.report : null);
-      const next = {
-        local: isObj(r?.local) ? r.local : null,
-        remote: isObj(r?.remote) ? r.remote : null,
-        total,
-        localReason: String(r?.localReason || ''),
-        remoteReason: String(r?.remoteReason || ''),
-        remoteServer: isObj(r?.remoteServer) ? r.remoteServer : null,
-      };
-      setSplit(next);
-      setSavings(isObj(r?.contextSavings) ? r.contextSavings : null);
-      if (!total) {
-        setErr([next.localReason, next.remoteReason].filter(Boolean).join('；') || '两侧桥均未取到用量数据');
-        return false;
-      }
-      setReport(total); setErr('');
-      setUpdatedAt(bjClock(Date.now()));
+      /* 取数+整形已抽到模块级 readUsage()：与预热共用同一段逻辑，入缓存的形状不会与预热漂移。
+         err     = 回包本身没读到（分段与剪枝计量一律不动，与改动前一致）；
+         partial = 有回包但没有可用的 total（分段与剪枝计量照常取回，只是不入缓存）；
+         ok      = 读到 total，value 即被写入缓存的形状。 */
+      const res = await readUsage();
+      if (res.kind === 'err') { setErr(res.error); return false; }
+      setSplit(res.split);
+      setSavings(res.savings);
+      if (res.kind === 'partial') { setErr(res.error); return false; }
+      setReport(res.value.report); setErr('');
+      setUpdatedAt(res.value.updatedAt);
+      /* 读到即入缓存（只在成功回包后写；失败不写）：下次进页面先渲染这份数字与曲线，再后台校准。 */
+      writeCacheValue(KEY_USAGE, res.value);
       return true;
     } catch (e2: any) {
       setErr(String(e2?.message ?? e2));
       return false;
     } finally {
-      inflight.current = false; setLoading(false);
+      inflight.current = false; setLoading(false); setCalDone(true);
     }
   };
 
@@ -1862,13 +2057,8 @@ function UsagePanel() {
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><TrendingUp size={17} /> Token 用量统计</span>
         <span className="page-actions" style={{ gap: 8 }}>
           <span className="lrn-updated">{live === 'sse' ? '实时推流（SSE）· 本机 + 服务端合并' : '每 60 秒自动刷新（SSE 不可用）'}{updatedAt ? ` · ${updatedAt}` : ''}</span>
-          {/* 【合并为一个刷新】取用量与「与 DSH 对账」原本是两个按钮，现合并为一键：点击后自动对账。 */}
-          <button
-            className="btn btn-sm" disabled={busy || loading} onClick={() => void doRefresh()}
-            title="重新读取用量，并自动以 DSH 记录的逐会话累计用量与桥侧对账，补入桥侧漏记的 usage 帧（仅比对 DSH 自身的会话累计，不比对提供方控制台；补记按对账时刻计入当日）"
-          >
-            {busy || loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} 刷新
-          </button>
+          {/* 2026-09-26 主人要求：去掉「与 DSH 对账」手动按钮。对账能力照旧 —— 桥侧每 5 分钟自动执行一次，
+              面板下方的状态行显示最近一次结果；用量本身走 SSE 实时推送，本页没有任何手动刷新入口。 */}
         </span>
       </div>
 
@@ -1933,7 +2123,7 @@ function UsagePanel() {
       <div className="lrn-stat-row">
         <div className="lrn-stat lrn-stat-azure">
           <div className="lrn-stat-t">今日已用 token</div>
-          <div className="lrn-stat-v">{fmtFull(todayUsed)}</div>
+          <StatValue className="lrn-stat-v" value={todayUsed} text={fmtFull(todayUsed)} />
           <div className="lrn-stat-s">
             {todayUsed === 0 ? '今日暂无记录' : `未命中 ${fmtFull(num(today.prompt))} · 命中 ${fmtFull(num(today.cacheRead))} · 输出 ${fmtFull(num(today.completion))}`}
             {/* 【2026-09-19 关于「token 虚高」】将两处看似虚高的来源直接标注：
@@ -1965,7 +2155,8 @@ function UsagePanel() {
         </div>
         <div className="lrn-stat lrn-stat-azure">
           <div className="lrn-stat-t">近 {days.length || 7} 日日均</div>
-          <div className="lrn-stat-v">{fmtFull(dayAvg)}</div>
+          {/* 2026-09-27 主人要求：token 页的数字也要这个 +N 动效（日均会随窗口滑动涨跌，用 signed） */}
+          <StatValue className="lrn-stat-v" signed value={Math.round(dayAvg)} text={fmtFull(dayAvg)} />
           <div className="lrn-stat-s">未命中 + 缓存命中 + 输出，按平台计费日聚合（{dayStartLabel} 换日）</div>
         </div>
       </div>
@@ -2167,8 +2358,40 @@ function HourBars({ hours, todayUsed }: { hours: HourStat[]; todayUsed: number }
 }
 
 /* ---------- 实时计量（实测）与费用预算（假设口径）：两套口径彼此独立，互不换算 ---------- */
-/** 高峰时段（北京时）：09:00-12:00 与 14:00-18:00，单价乘以 peakMult */
+/** 高峰小时（北京时）：09:00-12:00 与 14:00-18:00，单价乘以 peakMult。
+ *  2026-09-26 修正：高峰只存在于**工作日** —— 周末、法定节假日全天按谷价。
+ *  旧版只看小时不看星期/节假日，每个周末与中秋连假都被按 ×2 计价，主人指出与官方不符；
+ *  规则与节假日表逐字对齐桥侧 qq-bridge/src/core/token-report.js 的 HOLIDAY_VALLEY，
+ *  也与本机小鲸鱼插件（dsh-whale-widget）的权威判定一致。⚠️ 每年 11 月补下一年的日期。 */
 const PEAK_HOURS = new Set([9, 10, 11, 14, 15, 16, 17]);
+const CN_HOLIDAYS = new Set([
+  '2026-01-01', '2026-01-02', '2026-01-03',
+  '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19',
+  '2026-02-20', '2026-02-21', '2026-02-22', '2026-02-23',
+  '2026-04-04', '2026-04-05', '2026-04-06',
+  '2026-05-01', '2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05',
+  '2026-06-19', '2026-06-20', '2026-06-21',
+  '2026-09-25', '2026-09-26', '2026-09-27',
+  '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07',
+]);
+/** 生效分界（北京时，与桥侧同一对常量）：2026-08-23 00:00 起周末算谷时、
+ *  2026-09-19 00:00 起节假日算谷时；分界之前的历史分桶仍按旧口径，所以判定要带上时间点。 */
+const WEEKEND_VALLEY_FROM = Date.UTC(2026, 7, 22, 16, 0, 0);
+const HOLIDAY_VALLEY_FROM = Date.UTC(2026, 8, 18, 16, 0, 0);
+/** 毫秒 → 北京日历日 `YYYY-MM-DD`（分时桶按北京自然日聚合，判定也必须用北京日期）。 */
+const bjDayKey = (ms: number): string => new Date(ms + 8 * 3600 * 1000).toISOString().slice(0, 10);
+/** 该北京日是否「全天谷价」：周末（自 8/23 起）或法定节假日（自 9/19 起）。
+ *  `dayMs` 是北京 00:00 的 UTC 时刻（前一天 16:00Z），读星期必须再 +8h，否则差一天。 */
+function isValleyDay(dayKey: string): boolean {
+  const dayMs = Date.parse(`${dayKey}T00:00:00+08:00`);
+  if (!Number.isFinite(dayMs)) return false;
+  if (dayMs >= WEEKEND_VALLEY_FROM) {
+    const dow = new Date(dayMs + 8 * 3600 * 1000).getUTCDay();
+    if (dow === 0 || dow === 6) return true;
+  }
+  if (dayMs >= HOLIDAY_VALLEY_FROM && CN_HOLIDAYS.has(dayKey)) return true;
+  return false;
+}
 const COST_KEY = 'qbm-token-cost-v2';
 
 interface CostCfg {
@@ -2185,7 +2408,7 @@ const COST_DEFAULT: CostCfg = { hitRate: 0.98, pHit: 0.02, pMiss: 1, pOut: 4, pe
  *  宽度收窄到刚够 4~5 位数字，数字居中显示。原样式来自 app.css 的 `.cost-custom input` /
  *  `.cost-price input`（宽 60px、右对齐），此处以行内样式覆盖（行内优先级高于类选择器），
  *  不改动任何 .css 文件，也不涉及字段名、单位与计算口径。 */
-const COST_INPUT_STYLE: CSSProperties = { width: 48, minWidth: 48, padding: '4px 5px', textAlign: 'center' };
+const COST_INPUT_STYLE: CSSProperties = { width: 48, minWidth: 48, maxWidth: 148, padding: '4px 5px', textAlign: 'center' };
 
 function loadCostCfg(): CostCfg {
   try {
@@ -2205,12 +2428,16 @@ function loadCostCfg(): CostCfg {
 /** 预算专用：由未命中输入与假设命中率推算命中 tok（hits = miss × r / (1 − r)） */
 const assumedHit = (miss: number, r: number): number =>
   r >= 0.9995 ? miss * 2000 : (r <= 0 ? 0 : (miss * r) / (1 - r));
-const hourMult = (h: number, m: number): number => (PEAK_HOURS.has(h) ? m : 1);
+/** 倍率：全天谷价日恒为 1；工作日只对 PEAK_HOURS 里的小时乘 peakMult。 */
+const hourMult = (h: number, m: number, valley: boolean): number => (valley || !PEAK_HOURS.has(h) ? 1 : m);
 
 /** 同一份小时数据按两套口径分别计算：
  *  实测：仅统计确实带缓存命中字段的请求（cacheRead / cachePrompt / cacheCompletion），不反推、不外推；
  *  预算：以真实未命中与输出为基数、按假设命中率推算，单独成块。两者不共用任何数字。 */
 function useLiveCost(hours: HourStat[], cfg: CostCfg) {
+  /* 分时桶是「今天（北京自然日）」的（桥侧 meter.hoursDate 保证不跨日），所以谷价日判定用
+     今天的北京日期即可；跨零点后第一次重取会自然翻到新的一天。 */
+  const valleyToday = isValleyDay(bjDayKey(Date.now()));
   return useMemo(() => {
     // 实测子集
     let mHit = 0; let mMiss = 0; let mOut = 0; let mSamples = 0;
@@ -2223,7 +2450,7 @@ function useLiveCost(hours: HourStat[], cfg: CostCfg) {
     for (const h of hours) {
       dayMiss += h.prompt; dayCacheRead += h.cacheRead; dayOut += h.completion;
       dayTotal += h.prompt + h.completion + h.cacheRead;
-      const mult = hourMult(h.hour, cfg.peakMult);
+      const mult = hourMult(h.hour, cfg.peakMult, valleyToday);
 
       if (h.cacheSamples > 0) {
         mHit += h.cacheRead; mMiss += h.cachePrompt; mOut += h.cacheCompletion; mSamples += h.cacheSamples;
@@ -2322,7 +2549,7 @@ function TokenPanel({ hours }: { hours: HourStat[] }) {
 
         <div className="cost-reset">
           <span className="cost-hint">
-            今日 token 合计 <b>{fmtFull(m.dayTotal)}</b>
+            今日 token 合计 <b><StatValue as="span" value={m.dayTotal} text={fmtFull(m.dayTotal)} /></b>
             （未命中 {fmtFull(m.dayMiss)} / 缓存命中 {fmtFull(m.dayCacheRead)} / 输出 {fmtFull(m.dayOut)}）
           </span>
         </div>
@@ -2366,7 +2593,7 @@ function TokenPanel({ hours }: { hours: HourStat[] }) {
                 <NumInput className="" style={COST_INPUT_STYLE} value={cfg.peakMult} onCommit={(n) => patch({ peakMult: Math.max(1, n || 1) })} />
               </span>
             </div>
-            <span className="cost-hint">谷时 命中 ¥{cfg.pHit} / 未命中 ¥{cfg.pMiss} / 输出 ¥{cfg.pOut}；高峰（09-12、14-18）全部 ×{cfg.peakMult}</span>
+            <span className="cost-hint">谷时 命中 ¥{cfg.pHit} / 未命中 ¥{cfg.pMiss} / 输出 ¥{cfg.pOut}；工作日高峰（09-12、14-18）全部 ×（周末与法定节假日全天按谷价）{cfg.peakMult}</span>
           </div>
         </div>
 
@@ -2408,7 +2635,8 @@ function PortraitDetail({ it, detail, busy, err }: { it: PItem; detail: any; bus
     .filter(Boolean).join('；');
   return (
     <div className="lrn-status-detail">
-      {busy && <div className="lrn-dk">正在读取完整资料…</div>}
+      {/* 与上方人格学习栏同一套口径：有旧资料就照常渲染（不再加任何加载线），确实没有才给骨架。 */}
+      {busy && !d && <Skeleton rows={3} />}
       {err && <div className="lrn-dk">读取失败：{err}</div>}
       <div>
         <span className="lrn-dk">资料样本</span>
@@ -2481,7 +2709,13 @@ function PortraitLearnBlock() {
     return isObj(c) && isObj(c.portrait) ? normPortraitCfg(c.portrait) : null;
   });
   const cfgReady = cfg !== null;
-  const [status, setStatus] = useState<any>(null);
+  /* 画像学习状态初值取上次成功读到的那份（read-cache，与右卡「画像学习」栏同一个键、同一份数据）：
+     进页面先把上次的「上次自动学习 / 进行中」渲染出来，后台重读原地替换。 */
+  const statusBootRef = useRef<{ value: any } | null>(null);
+  if (!statusBootRef.current) statusBootRef.current = initialFromCache<any>(KEY_PORTRAIT_STATUS);
+  const [status, setStatus] = useState<any>(statusBootRef.current.value);
+  /** 进页面后的首轮读取是否已结束（成败都算）：ReadBar 只在"已有旧值 且 首轮未结束"时亮。 */
+  const [calDone, setCalDone] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
 
@@ -2495,8 +2729,12 @@ function PortraitLearnBlock() {
     } catch { /* 桥不可达：本次不写入任何值（cfg 保持原状或为 null），字段留空且不可编辑 */ }
     try {
       const s: any = await portraitAction('status');
-      setStatus(isObj(s?.result) ? s.result : s);
+      const st = isObj(s?.result) ? s.result : s;
+      setStatus(st);
+      /* 读到即入缓存（只在成功回包后写）：下次进页面先渲染这份状态，再后台校准。 */
+      writeCacheValue(KEY_PORTRAIT_STATUS, st);
     } catch { /* 忽略 */ }
+    setCalDone(true);   // 本轮（含进页面的首轮）结束：进度条收起
   };
   useEffect(() => { loadAll(); }, []);
 
@@ -2543,7 +2781,7 @@ function PortraitLearnBlock() {
       <div className="lrn-block-title">群友画像学习（自动筛选活跃群成员，结果直接写入 profiles，画像页立即可见）</div>
 
       <div className="lrn-grid">
-        <div className="switch-row" style={{ gridColumn: '1 / -1' }} title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+        <div className="switch-row" style={{ gridColumn: '1 / -1' }}>
           <input type="checkbox" checked={cfg?.enabled === true} disabled={!cfgReady} onChange={(e) => patch({ enabled: e.target.checked })} />
           <div><span>启用画像学习</span><em>关闭后桥侧拒绝画像学习请求（含指令与自动触发）</em></div>
         </div>
@@ -2564,7 +2802,7 @@ function PortraitLearnBlock() {
             onCommit={(n) => patch({ maxTargets: Math.max(1, Math.round(n) || 1) })} />
         </div>
 
-        <div className="switch-row" style={{ gridColumn: '1 / -1' }} title={cfgReady ? undefined : '配置尚未读取到，暂不可修改'}>
+        <div className="switch-row" style={{ gridColumn: '1 / -1' }}>
           <input type="checkbox" checked={cfg?.autoIntervalEnabled === true} disabled={!cfgReady} onChange={(e) => patch({ autoIntervalEnabled: e.target.checked })} />
           <div><span>自动间隔学习</span><em>距上次成功学习达到下列间隔即自动执行一轮</em></div>
         </div>
@@ -2582,7 +2820,6 @@ function PortraitLearnBlock() {
 
       <div className="lrn-actions">
         <button className="btn btn-primary btn-sm" disabled={busy !== null || !cfgReady}
-          title={cfgReady ? undefined : '画像学习配置尚未读取到，暂不可保存'}
           onClick={save}>
           {busy === 'save' ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存配置
         </button>
@@ -2599,9 +2836,11 @@ function PortraitLearnBlock() {
           标题与上方操作按钮（保存配置 / 画像立即学习 / 停止学习）置于滚动区外，始终可见。 */}
       <div className="lrn-status-list" style={{ marginTop: 10, maxHeight: 180, overflowY: 'auto' }}>
         <div className="lrn-status-meta">
+          {!calDone && !status ? <Skeleton rows={1} /> : (<>
           <Clock3 size={13} /> 上次自动学习：{num(status?.config?.lastRunAtMs) > 0 ? bjClock(num(status?.config?.lastRunAtMs)) : '尚未跑过'}
           {' · '}进行中 {LEARNING} 个
           {lastTargets.length > 0 && <> · 最近一轮目标 {lastTargets.length} 个</>}
+          </>)}
         </div>
         {list.length > 0 && (
           <div className="lrn-status-preview">

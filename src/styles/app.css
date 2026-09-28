@@ -80,12 +80,13 @@
  * 页面自己带不带 `.page` 都无所谓。原来写在 `.page` 上的那段动画已删除，避免同一元素
  * 被两段动画同时驱动（会互相抢 opacity/transform）。
  *
- * 观感由三部分叠加而成：
- *   · 进场：460ms 淡入 + 上浮 14px + 缩放 .992 + 去模糊（由虚到实），缓动先快后缓；
- *   · 光带：一道斜向柔光（粉→浅黄→浅蓝，与界面主色同族）扫过整页后消失，把"换页"
- *     这一瞬间读成"推过去"；
- *   · 遮罩：一层近白柔光在切换瞬间盖住 55% 再 260ms 淡出，替代"双页交叉淡入"——
- *     不做真正的旧页退场，是因为桥配置页有 29 万字节，同时挂两份代价太大。
+ * 观感只剩一段进场（2026-09-26 主人要求精简）：
+ *   · 进场：260ms 淡入 + 上浮 10px，缓动先快后缓；
+ *   · 光带与遮罩都已删除。主人原话是「切换界面的时候不要有两道移动的红色动线表示加载中」
+ *     「优化一下切换界面的动画使其更顺滑，感觉现在有点卡」——原来那道斜向三色光带
+ *     （.view-swap::after）与被读成"加载中"的近白遮罩（.view-veil）就是那两道动线；
+ *     整页 filter: blur(5px) 是卡顿主因（桥配置页 29 万字节，模糊每帧都要重算），一并去掉。
+ *     现在只动 opacity 与 transform，合成器就能跑完一帧。
  * 动画只在挂载时跑一次，页面内部的状态刷新不会重放；prefers-reduced-motion 下整段关闭
  * （见本文件末尾的同名媒体查询）。
  * ================================================================================= */
@@ -96,81 +97,55 @@
   display: block;
   height: 100%;
   min-height: 0;
-  animation: view-in .46s cubic-bezier(.16, .84, .28, 1) both;
+  animation: view-in .68s cubic-bezier(.22, .68, .3, 1) both;
   /* 不写 will-change：常驻的 will-change/filter 会让整层一直留在合成层里，且 filter 会
      变成 fixed 后代的包含块；动画本身已由浏览器在运行期自动提升，无需声明。 */
 }
+/* 2026-09-26 主人反馈"切换速度还是有点快"，要求改成首页那套顺滑的。首页的配方是
+   launcher-title-in / launcher-card-in：纯淡入 + 小位移（-8px / 10px），无缩放、无回弹，
+   曲线 cubic-bezier(.22, .68, .3, 1)，时长 .45~.5s。这里照搬同一支曲线与同一形状，
+   只把时长放到 .68s（比原来的 .5s 明显更缓），位移取 16px（整页比卡片走得远一点）。
+   旧版是 translateY(22px) scale(.982) 并在 58% 处回弹到 -3px —— 那个 scale+回弹正是
+   "快而冲"的来源，本次一并去掉。 */
 @keyframes view-in {
-  from { opacity: 0; transform: translateY(14px) scale(.992); filter: blur(5px); }
-  55% { opacity: 1; filter: blur(0); }
-  to { opacity: 1; transform: none; filter: none; }
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
 }
-/* 入场光带：伪元素铺满本层，只画一条斜向渐变色带，从右往左扫过一次即透明。
-   不设 overflow:hidden —— 下拉菜单等浮层不会被裁掉；背景本身受 inset 限制不会外溢。 */
-.view-swap::after {
-  content: '';
-  position: absolute; inset: 0; z-index: 3;
-  pointer-events: none;
-  background-image: linear-gradient(104deg,
-    transparent 22%,
-    hsl(330 100% 78% / .17) 42%,
-    hsl(52 100% 78% / .17) 55%,
-    hsl(199 100% 78% / .17) 68%,
-    transparent 86%);
-  background-size: 260% 100%;
-  background-repeat: no-repeat;
-  opacity: 0;   /* 与 .view-veil 同一条纪律：这层也是"靠动画把自己淡没"的，动画没跑时不能留下光带 */
-  animation: view-sheen .8s cubic-bezier(.3, .7, .3, 1) forwards;
-}
-@keyframes view-sheen {
-  from { background-position: 128% 0; opacity: .95; }
-  to { background-position: -55% 0; opacity: 0; }
-}
-/* 切换遮罩：随视图 key 一起重挂，从 55% 不透明度淡出到 0，替页面之间垫一层柔光过渡。
-   2026-10-01 修复「一层白色纱布盖住界面、消不掉」：这一层是"靠动画把自己淡没"的，
-   只要动画没跑，它就必须本来就看不见。原来写的是 `animation ... both` 且 base 没有 opacity，
-   于是动画一旦不执行（沙盒/RDP 会话里 Windows 关掉动画效果 → prefers-reduced-motion: reduce，
-   媒体查询把 animation 设为 none）它就停在满不透明度：一张 fixed 全屏近白径向渐变永久糊在界面上。
-   改成 base opacity:0 + fill-mode forwards —— 动画跑起来照旧闪一下淡出，不跑就彻底不可见，两种情形都不留白纱。 */
-.view-veil {
-  position: fixed; inset: 0; z-index: 60;
-  pointer-events: none;
-  opacity: 0;
-  background: radial-gradient(120% 80% at 50% 0%, hsl(0 0% 100% / .9), hsl(0 0% 100% / .62));
-  animation: view-veil-out .26s ease-out forwards;
-}
-@keyframes view-veil-out { from { opacity: .55; } to { opacity: 0; } }
+/* 入场光带（.view-swap::after + @keyframes view-sheen）2026-09-26 删除：
+   它从右往左扫过整页，正是主人说的"移动的动线"（还会被读成加载中）。
+   同时删掉的还有它配套的 .view-swap.no-anim::after / reduced-motion 兜底。 */
+/* 切换遮罩（.view-veil + @keyframes view-veil-out）2026-09-26 删除：一层近白柔光在切换
+   瞬间盖住整屏，观感同样像"正在加载"，与上面那道光带一起被主人点名。
+   App.tsx 里那个 <div className="view-veil" /> 也一并撤掉了。 */
 /* 桥配置页的卡片错峰进场（同一段动画，每张晚 35ms 起步）：
    整页不再"一起闪出来"，而是自上而下依次落位。第 1 个子节点是页签栏，故延迟从它开始算。
    页签切换时新页签的内容节点是新建的，因此同一段动画会自然重放一次。 */
-.bridge-body > * { animation: view-in .5s cubic-bezier(.16, .84, .28, 1) both; }
-.bridge-body > :nth-child(2) { animation-delay: .045s; }
-.bridge-body > :nth-child(3) { animation-delay: .09s; }
-.bridge-body > :nth-child(4) { animation-delay: .135s; }
-.bridge-body > :nth-child(5) { animation-delay: .18s; }
-.bridge-body > :nth-child(6) { animation-delay: .225s; }
-.bridge-body > :nth-child(7) { animation-delay: .27s; }
-.bridge-body > :nth-child(n+8) { animation-delay: .3s; }
+.bridge-body > * { animation: view-in .5s cubic-bezier(.22, .9, .24, 1) both; }
+/* 错峰延迟 2026-09-26 压短（原来最大 300ms，叠加 460ms 进场后整页要 0.76s 才落定，
+   读起来就是"卡"）：现在最大 140ms，且每档间隔 20ms。
+   同日稍晚：整页进场从 .5s 放到 .68s（换成首页那条曲线，去掉缩放与回弹），
+   错峰上限仍 140ms，最迟 .68 + .14 = .82s 落定 —— 数字比当年那版更大，
+   但全程等速淡入、没有缩放回弹，观感是"顺滑"，不是"卡"。 */
+.bridge-body > :nth-child(2) { animation-delay: .02s; }
+.bridge-body > :nth-child(3) { animation-delay: .04s; }
+.bridge-body > :nth-child(4) { animation-delay: .06s; }
+.bridge-body > :nth-child(5) { animation-delay: .08s; }
+.bridge-body > :nth-child(6) { animation-delay: .1s; }
+.bridge-body > :nth-child(7) { animation-delay: .12s; }
+.bridge-body > :nth-child(n+8) { animation-delay: .14s; }
 /* 各页内的卡片/面板也用同一支进场：`.card-grid > *`、`.dp-grid > *` 等常见容器逐个错峰。
    只作用于直接子节点，页面内部的每次状态刷新不会重放（元素没被重建）。 */
-.stagger-in > * { animation: view-in .46s cubic-bezier(.16, .84, .28, 1) both; }
-.stagger-in > :nth-child(2) { animation-delay: .05s; }
-.stagger-in > :nth-child(3) { animation-delay: .1s; }
-.stagger-in > :nth-child(4) { animation-delay: .15s; }
-.stagger-in > :nth-child(5) { animation-delay: .2s; }
-.stagger-in > :nth-child(n+6) { animation-delay: .25s; }
-/* 内嵌页面（iframe：官方 DSH 界面 / NapCat 官方界面）明确不走换页动效（见 App.tsx 的 swap(opts)）：
-   进场动画、入场光带与全屏遮罩全部关掉。这里带上 ::after 与 .view-veil 两道，
-   是因为它们都是"由动画负责消失"的层，动画一关就必须本来就不可见。 */
-.view-swap.no-anim, .view-swap.no-anim::after { animation: none !important; }
-.view-swap.no-anim::after { opacity: 0; }
-.view-swap.no-anim .view-veil { display: none; }
+.stagger-in > * { animation: view-in .26s cubic-bezier(.16, .84, .28, 1) both; }
+.stagger-in > :nth-child(2) { animation-delay: .025s; }
+.stagger-in > :nth-child(3) { animation-delay: .05s; }
+.stagger-in > :nth-child(4) { animation-delay: .075s; }
+.stagger-in > :nth-child(5) { animation-delay: .1s; }
+.stagger-in > :nth-child(n+6) { animation-delay: .12s; }
+/* 内嵌页面（iframe：官方 DSH 界面 / NapCat 官方界面）明确不走换页动效（见 App.tsx 的 swap(opts)）。
+   光带与遮罩已删除，这里只剩"关掉进场动画"一条。 */
+.view-swap.no-anim { animation: none !important; }
 @media (prefers-reduced-motion: reduce) {
-  .view-swap, .view-swap::after, .view-veil, .bridge-body > *, .stagger-in > * { animation: none !important; }
-  /* 遮罩与光带都是"由动画负责消失"的层：动画一关就得显式归零（.view-veil 的 base 现在也是 opacity:0，
-     这里再写 display:none 是第二道保险 —— 这条漏写过一次，代价是全屏白纱挂在界面上消不掉）。 */
-  .view-veil { display: none; }
-  .view-swap::after { opacity: 0; }
+  .view-swap, .bridge-body > *, .stagger-in > * { animation: none !important; }
 }
 .page-header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -180,6 +155,11 @@
 .page-title { font-size: 19px; font-weight: 800; color: var(--nc-primary-500); }
 .page-subtitle { font-size: 12px; color: var(--nc-primary-500); margin-top: 2px; }
 .page-body { flex: 1; overflow-y: auto; padding: 20px 24px; }
+/* 直排在页面里的相邻卡片之间留一点间距（2026-09-28 使用方指出语音页两张卡贴在一起）。
+   `.card` 自身没有外边距，`.page-body` 又只是个 padding 容器，所以两张卡会紧紧相接、
+   连边框都叠在一起，看上去像一张卡里套了两块。只约束「page-body 的直系相邻卡」：
+   不动单张卡自己的位置，也不影响卡内的排布（网格/卡内卡片都不受影响）。 */
+.page-body > .card + .card { margin-top: 14px; }
 .notice-bar {
   padding: 10px 15px; margin-bottom: 14px; background: var(--nc-primary-50);
   border: 1px solid var(--nc-primary-200); border-radius: var(--nc-radius-m);
@@ -195,7 +175,7 @@
 .tabs { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
 .cfg-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  gap: 16px; align-items: start;
+  gap: 16px; align-items: stretch;   /* 2026-09-26 主人要求：同一行的卡片高度拉平（NapCat 那张比邻居矮，底下空一截）；stretch 让同行等高 */
 }
 .cfg-card {
   background: hsl(0 0% 100% / .96);
@@ -226,6 +206,37 @@
 .field-row .f-label { font-size: 12px; font-weight: 700; color: var(--nc-foreground-600); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .field-row .input, .field-row .select { font-size: 14px; padding: 7px 11px; border-radius: var(--nc-radius-m); height: auto; }
 .field-row .textarea { font-size: 13px; border-radius: var(--nc-radius-m); }
+/* ===================================================================================
+   输入框宽度分档（2026-09-30 主人要求）
+   -----------------------------------------------------------------------------------
+   「有的输入框不要太长，但是间隔不变」：只给**控件本身**加 max-width，绝不碰
+   `.cfg-fields` / `.form-row` / `.lrn-grid` 的列宽与 gap —— 所以字段之间的间隔、两列对齐、
+   换行位置全都与原来一致，只是控件在列内左对齐、右边留白。
+   **选择器故意不带容器前缀**：各页的容器类不一样（桥配置/语音/学习用 .field-row，
+   实例配置与服务器配置用 .form-group/.form-row，画像学习与费用预算在 .lrn-grid/.cost-field），
+   带前缀就得为每个容器抄一遍，漏一个就静默失效。分档本身靠显式打标，不会误伤：
+     · .is-short 极短内容：时间(04:00)、字数、概率、分钟、端口、群号、人数、比例、费用预算
+     · .is-mid   中等内容：请求地址、密钥、模型名、路径、昵称、令牌
+     · 不打标 / .textarea：保持拉满（长文本、JSON、提示词、描述）
+   顺手覆盖「纯数字」输入：inputMode=numeric/decimal 与 type=number 默认按短字段收窄。
+   注意 `NumInput` 组件渲染的是 type="text" + inputMode="decimal"（不是 number），
+   所以这条兜底对它同样生效；显式打标仍然优先（.is-mid / .full 会被排除在外）。
+   =================================================================================== */
+.input.is-short, .select.is-short, .num.is-short { max-width: 148px; }
+.input.is-mid, .select.is-mid { max-width: 340px; }
+input[inputmode="numeric"]:not(.is-mid):not(.full),
+input[inputmode="decimal"]:not(.is-mid):not(.full),
+input[type="number"]:not(.is-mid):not(.full) { max-width: 148px; }
+/* ===== 2026-09-28 字段行点击目标（配合 src/lib/field-click.ts）=================================
+ * 反馈原话："鼠标悬停同一水平线就可以点击了，而不是正好落在输入框里才能点击"。
+ * 现在点字段标签（或点这一行里与控件同一条水平线的空白）就会聚焦到那一行的控件；
+ * 原先"点标签没反应 / 点标签弹出 ⓘ 说明弹窗"的成因与规则写在 field-click.ts 头部。
+ * 这里**只加 cursor** 作"此处可点"的提示，排版 / 间距 / 配色 / 字号 / 边框一律不动；
+ * `.switch-row` 本来就有 cursor:pointer 与悬停高亮，不再重复加。 */
+.f-label,
+.label,
+.cost-label,
+.pg-filter-label { cursor: pointer; }
 .nested { border: 1px dashed hsl(339.33 90% 80.39% / .7); border-radius: 10px; padding: 10px; background: hsl(339.13 92% 97% / .5); }
 .nested .f-label { color: var(--nc-primary-600); }
 
@@ -390,7 +401,7 @@
 .bridge-body { max-width: 1560px; }
 .cfg-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px 12px; align-items: start;
+  gap: 10px 12px; align-items: stretch;   /* 同上：小窗（3 列/2 列）时也补齐，不留空隙 */
 }
 .cfg-card { padding: 10px 13px 12px; }
 .cfg-card-title {
@@ -427,6 +438,28 @@
 /* 允许/拒绝名单竖排叠卡（两卡等高，占一格） */
 .card-stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .card-stack > .cfg-card { flex: 1 1 auto; min-height: 0; }
+/* 【2026-09-28 使用方指出「NapCat 鉴权令牌 这个地方不要有空地」】上一行只管 .cfg-card，
+   而 NapCat 鉴权令牌那张卡的根是 .card（不是 .cfg-card）—— 于是它停在自身内容高度（实测 440px），
+   格子却有 609px，底部露出 169px 页面底色（同排另外两张卡是拉满的，只有它空一截）。
+   补这一行：.card 跟着格子拉平，像同排别的卡一样是一整块卡面。
+   【同日再补：使用方指出「唯独这个 napcat 鉴权页少了红边框」】.card 是 global.css 的通用卡
+   （灰边 + 20px 内边距），这一页的卡一律是 .cfg-card 的粉边样式 —— 叠在这页格子里的 .card
+   直接照抄同一套卡面（粉边 / 圆角 / 阴影 / 紧凑内边距），看上去就与同排一致了。
+   影响面：src 里 .card-stack 只有三处，其中「NapCat 鉴权令牌」与「工具与规则 → QQ 工具开关」
+   这两张通用卡正好都在这页的格子里，两处都该是这个外观；别的页面的 .card 不受影响。 */
+.card-stack > .card {
+  flex: 1 1 auto; min-height: 0;
+  background: hsl(0 0% 100% / .96);
+  border: 1px solid hsl(339.33 90% 80.39% / .65);
+  border-radius: 14px;
+  padding: 10px 13px 12px;
+  box-shadow: 0 0 0 1px hsl(339.13 92% 95.1% / .5), 0 4px 18px hsl(339.2 90.36% 60% / .09);
+  transition: box-shadow .2s, border-color .2s;
+}
+.card-stack > .card:hover {
+  border-color: hsl(339.33 90% 80.39% / .95);
+  box-shadow: 0 0 0 1px hsl(339.13 92% 95.1% / .5), 0 8px 26px hsl(339.2 90.36% 60% / .14);
+}
 .page-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 /* Home：标题一行小字，整体高度收紧（单屏不滚动、不可缩放） */
@@ -586,8 +619,22 @@ body textarea.json-text, body .log-viewer, body .log-viewer *, body .log-line {
 /* 占位：已确认行没有复选框，用它撑出与未确认行一样的左侧缩进 */
 .lrn-pick-none { display: inline-block; flex: 0 0 auto; width: 16px; margin-top: 3px; }
 .lrn-slang-del { margin-left: 8px; flex: none; }
-/* 黑话库的两组（已确认 / 未确认） */
-.lrn-slang-group { display: flex; flex-direction: column; gap: 8px; }
+/* 黑话库的分组（已确认 / 未确认 / 已拒收）
+   2026-09-30 主人要求：「已确认和未确认黑话分开成两部分，别挤在一起」。
+   原先是三个没有边框的 flex 列、组间只有 8px，读起来像一整条长列表。现在每组各自成一张浅底面板：
+   浅底 + 边框 + 圆角 + 内边距，组与组之间留 14px，标题行下面一条同色分隔线；
+   组内列表各自可滚（上限 46vh），长的那组不会把另一组顶出屏幕。 */
+.lrn-slang-group {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px 12px; margin-bottom: 14px;
+  border: 1px solid hsl(339.33 90% 92%); border-radius: var(--nc-radius-m);
+  background: hsl(339.13 92% 99.2% / .8);
+}
+.lrn-slang-group:last-child { margin-bottom: 0; }
+.lrn-slang-group > .lrn-slang-group-h {
+  padding-bottom: 6px; border-bottom: 1px solid hsl(339.33 90% 93%);
+}
+/* 滚动仍交给弹窗正文（嵌套滚动条在这里弊大于利），面板只负责"这是独立的一块" */
 .lrn-slang-group-h {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 2px 2px 0; font-size: 12.5px; font-weight: 800; color: var(--nc-foreground-700);
@@ -638,6 +685,18 @@ body textarea.json-text, body .log-viewer, body .log-viewer *, body .log-line {
   background: hsl(339.13 92% 97% / .6); padding: 5px 10px; border-radius: 8px;
 }
 .lrn-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* 「高级」折叠开关（2026-09-28）：本地引擎卡里的路径与进程参数默认收起。
+   它们是"换机器/换目录才动"的项，摊在卡面上只会把真正要选的两项（默认角色、语言）淹掉。
+   放在 .cfg-fields 网格里要横跨整行，所以带 grid-column。 */
+.lrn-adv-toggle {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 6px;
+  width: 100%; margin-top: 2px; padding: 4px 2px;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  font-size: 12px; font-weight: 700; color: var(--nc-foreground-500);
+}
+.lrn-adv-toggle:hover { color: var(--nc-primary-500); }
+.lrn-adv-toggle svg { transition: transform .15s ease; transform: rotate(-90deg); }
+.lrn-adv-toggle.is-open svg { transform: rotate(0deg); }
 .lrn-updated { font-size: 11.5px; color: var(--nc-foreground-400); font-weight: 400; margin-left: auto; white-space: nowrap; }
 
 /* 错误横幅 */
@@ -1568,6 +1627,11 @@ select::-webkit-scrollbar-corner { background: transparent; }
   color: #92400e;
   box-shadow: 0 0 0 1px #f59e0b, 0 2px 10px hsl(38 92% 50% / .35);
 }
+/* 2026-09-30 主人要求：「请作者喝奶茶那个不要带粉红边框，要金色边框」。
+   行内 style 已经写了金色 border，但 .btn-soft 还给了一层粉色 1px 外环
+   （box-shadow: 0 0 0 1px var(--nc-primary-100)），看上去才是粉边 —— 常态也换成金色外环。
+   这条必须写在 .btn-soft 那组之后（同优先级靠后生效），下面就是 .btn-tip 段，顺序天然满足。 */
+.btn-tip:not(:disabled) { box-shadow: 0 0 0 1px #fcd34d, 0 2px 10px hsl(38 92% 50% / .18); }
 .btn-tip:focus-visible { outline: 2px solid #f59e0b; outline-offset: 2px; }
 
 /* ===================================================================================
@@ -1835,10 +1899,31 @@ body * {
 .chat-stat-card.c-blue .v { color: #14509b; }
 .chat-stat-card.c-blue .k-sub { color: #3a6491; }
 .chat-stat-card .k { font-size: 12.5px; color: #2f6b45; }
-.chat-stat-card .v { font-size: 26px; font-weight: 800; color: #1f5133; margin-top: 2px; }
+.chat-stat-card .v { display: flex; align-items: baseline; gap: 6px; font-size: 26px; font-weight: 800; color: #1f5133; margin-top: 2px; }
 /* 数字下面的口径小字（2026-09-24 加）：写明窗口、算的是哪一部分、分母是多少，
    让"卡片的数"能和左边会话列表的"条 / 发 / 收"直接对上。 */
 .chat-stat-card .k-sub { font-size: 11px; opacity: .95; line-height: 1.55; margin-top: 6px; }
+/* 新计数浮出的 "+N"（2026-09-26 主人要求：新加的数字在数字旁边显示小的 +N 动效）。
+   原先只挂在聊天记录页的 .chat-stat-card 下，学习页的 token 统计要复用，故选择器提升为通用
+   .stat-delta（外层字号颜色各自沿用原样式类，因此两页观感一致）。
+   只挂在只增不减的计数上：数字一变就浮出来，2.6 秒自己淡掉（与 JS 里 2600ms 的卸载时刻一致）。 */
+.stat-delta {
+  /* 2026-09-27 主人要求「小字动效的字号调稍微大一点」：13px -> 15px（两页共用这一个类，一起变大） */
+  font-size: 15px; font-weight: 700; letter-spacing: .3px;
+  animation: chat-stat-delta 2.6s cubic-bezier(.2, .8, .2, 1) both;
+}
+/* 会跌的数（signed，如平均 token）跌时给中性灰，别用红色：平均值下降不是"出错" */
+.stat-delta.is-down { color: #7b8494; }
+.chat-stat-card.c-pink .stat-delta { color: #d63384; }
+.chat-stat-card.c-yellow .stat-delta { color: #b8791b; }
+.chat-stat-card.c-blue .stat-delta { color: #1b6fc4; }
+@keyframes chat-stat-delta {
+  0% { opacity: 0; transform: translateY(7px) scale(.8); }
+  10% { opacity: 1; transform: translateY(0) scale(1); }
+  72% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-7px) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .stat-delta { animation: none; opacity: .95; } }
 .chat-stat-note { font-size: 11.5px; color: var(--nc-foreground-500); line-height: 1.7; margin: 0 0 14px; }
 .chat-stat-note code { font-size: 11px; }
 
@@ -1859,7 +1944,14 @@ body * {
 }
 .chat-conv-row:hover { background: hsl(339.13 92% 98%); }
 .chat-conv-row.active { background: hsl(339.13 92% 96.5%); border-color: var(--nc-primary-300); }
-.chat-conv-name { font-size: 13.5px; font-weight: 700; color: var(--nc-foreground-800); }
+/* 标题行：左边是群名/对方昵称（可能很长，实测有「AbyssalQuill、落木、幻时、DeepSeek Harness」，
+   所以单行省略），右边挂一枚「群昵称 / 备注」小字，不跟标题抢位置。 */
+.chat-conv-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.chat-conv-name {
+  font-size: 13.5px; font-weight: 700; color: var(--nc-foreground-800);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-conv-nick { font-size: 11px; color: var(--nc-foreground-400); margin-left: auto; white-space: nowrap; }
 .chat-conv-meta { font-size: 11.5px; color: var(--nc-foreground-500); }
 .chat-conv-last { font-size: 12px; color: var(--nc-foreground-600); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -1885,11 +1977,145 @@ body * {
 }
 .chat-live.is-poll { color: #8a5a06; background: #fff8e6; border-color: #ffe08a; }
 
+/* ── 新消息的「顺滑入场 + 金色高亮」（2026-09-26 要求："不要一推消息过来就转圈刷新，
+   而是最新一条顺滑蹦出来 + 金色高亮"）─────────────────────────────────────────────
+   推流命中变化的行加 .is-fresh：金色底 + 光晕，2.8 秒自己褪回常态（时间由页面控制的
+   定时器与这里的动画对齐）。行与行之间的位移由页面用 FLIP 算成 transform，
+   所以过渡挂在 transform 上；两条动画都遵守下面的 prefers-reduced-motion。 */
+.chat-conv-row { transition: background .25s ease, border-color .25s ease, transform .42s cubic-bezier(.22, .61, .36, 1); }
+.chat-conv-row.is-fresh {
+  border-color: #f0c552;
+  background: linear-gradient(90deg, #fff6d8 0%, #fffdf6 70%);
+  animation: chatGoldGlow 2.8s ease-out;
+}
+@keyframes chatGoldGlow {
+  0% { box-shadow: 0 0 0 3px rgba(240, 197, 82, .55); }
+  60% { box-shadow: 0 0 0 3px rgba(240, 197, 82, .20); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 197, 82, 0); }
+}
+.chat-msg-row.is-fresh { animation: chatMsgPop 2.8s ease-out; }
+@keyframes chatMsgPop {
+  0% { opacity: 0; transform: translateY(-10px); background-color: #ffe9a8; box-shadow: inset 3px 0 0 #e0a800; }
+  22% { opacity: 1; transform: translateY(0); background-color: #fff6d8; box-shadow: inset 3px 0 0 #e0a800; }
+  100% { opacity: 1; transform: translateY(0); background-color: transparent; box-shadow: inset 3px 0 0 transparent; }
+}
+
+/* ── 读取态改成"内容不动 + 骨架占位"（2026-09-26 要求：点会话别跳「正在读取」，要瞬时）──────
+   原来点一个会话会把消息栏整块换成「正在读取…」再刷出来，看着像被清空去等。
+   现在：① 读过一次的会话走缓存，点了立刻出内容，后台再悄悄校准；
+   ② 从没读过的会话显示**骨架行**（形状跟真行一致），不出现「正在读取…」那行字；
+   ③ 翻页 / 搜索 / 切方向 / 推流兜底一律原地换（quiet），只在滚动容器顶部挂一条细进度条。 */
+.chat-progress {
+  position: sticky; top: 0; z-index: 2;
+  height: 2px; margin-bottom: -2px; overflow: hidden; background: #fdeaf1;
+}
+.chat-progress::after {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 38%;
+  background: linear-gradient(90deg, transparent, hsl(339.13 92% 76%), transparent);
+  animation: chatProgress 1.1s ease-in-out infinite;
+}
+@keyframes chatProgress { 0% { transform: translateX(-100%); } 100% { transform: translateX(280%); } }
+
+.chat-skel { display: flex; flex-direction: column; gap: 6px; padding: 6px 2px; }
+.chat-skel-row { display: flex; align-items: center; gap: 8px; }
+.chat-skel-row.is-msg { padding: 6px 4px; border-bottom: 1px solid var(--nc-border); }
+.chat-skel-row.is-conv { flex-direction: column; align-items: stretch; gap: 5px; padding: 9px 10px; }
+.chat-skel-bar {
+  display: block; height: 9px; border-radius: 5px;
+  background: linear-gradient(90deg, #f4f4f7 25%, #e8e8ef 37%, #f4f4f7 63%);
+  background-size: 400% 100%;
+  animation: chatSkel 1.3s ease infinite;
+}
+@keyframes chatSkel { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+.w-time { width: 62px; flex: 0 0 auto; }
+.w-name { width: 74px; flex: 0 0 auto; }
+.w-text { flex: 1 1 auto; min-width: 0; }
+.chat-skel-row.is-conv .w-time { width: 46%; height: 11px; }
+.chat-skel-row.is-conv .w-name { width: 72%; height: 8px; }
+.chat-skel-row.is-conv .w-text { width: 88%; height: 8px; }
+
+/* ── 同一套读取态的通用版（src/components/ReadState.tsx 用）──────────────────────────
+   其他页（语音 / 学习 / 桥配置 / 实例配置 / 群画像 / 主页状态行）共用这两件零件：
+   一条 2px 细进度条 + 骨架占位，替掉原来那句「正在读取…」+ 转圈。 */
+.read-skel { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px; }
+.read-skel-row { display: flex; align-items: center; gap: 8px; }
+.read-skel-row.is-line { padding: 6px 2px; }
+.read-skel-row.is-card {
+  flex-direction: column; align-items: stretch; gap: 5px;
+  padding: 10px 12px; border: 1px solid var(--nc-border); border-radius: 12px; background: #fff;
+}
+.read-skel-bar {
+  display: block; height: 9px; border-radius: 5px;
+  background: linear-gradient(90deg, #f4f4f7 25%, #e8e8ef 37%, #f4f4f7 63%);
+  background-size: 400% 100%;
+  animation: chatSkel 1.3s ease infinite;
+}
+.read-skel-bar.w1 { width: 62px; flex: 0 0 auto; }
+.read-skel-bar.w2 { width: 96px; flex: 0 0 auto; }
+.read-skel-bar.w3 { flex: 1 1 auto; min-width: 0; }
+.read-skel-row.is-card .w1 { width: 40%; height: 11px; }
+.read-skel-row.is-card .w2 { width: 66%; height: 8px; }
+.read-skel-row.is-card .w3 { width: 88%; height: 8px; }
+
 /* 2026-09-24 主人要求：动效总开关 —— 上面这些流动渐变/高光/进场动画一律静止。
    清零的是动画本身，不动配色与布局（关掉动效后卡片仍是粉/黄/蓝）。 */
 @media (prefers-reduced-motion: reduce) {
   .chat-stat-card::before,
   .chat-stat-card::after { animation: none !important; }
   .chat-stat-card::after { opacity: 0; }
+  /* 新消息高亮同样静止：只留金色底（不闪、不滑），免得"关了动效还在动"。 */
+  .chat-conv-row,
+  .chat-conv-row.is-fresh,
+  .chat-msg-row.is-fresh { animation: none !important; transition: none !important; }
+  /* 骨架与进度条：关掉动效后就静静显示，不闪不爬。 */
+  .chat-progress::after,
+  .chat-skel-bar,
+  .read-skel-bar { animation: none !important; }
+  .chat-progress::after { opacity: .5; width: 100%; background: hsl(339.13 92% 88%); }
 }
 
+/* =====================================================================
+ * 【2026-09-27】排行榜柱条：改成「对应色的浅色版」并让渐变缓慢流动。
+ * 同一天我曾把首页也换过一套风格（月亮主视觉 + 玻璃卡片），主人看后要求「home 页改回原来的」，
+ * 那一段已整块删除 —— 首页回到上面历史版本的样式，本文件末尾只留这一块柱条样式与黑话库的滚动条。
+ * 放在文件末尾的原因：同属性下后写者胜，不必改动上面历史版本的代码；回滚也只需删掉这一段。
+ * ===================================================================== */
+
+/* 排行榜柱条：浅色对应色 + 缓慢流动的渐变（只动 background-position，不碰布局与宽度）。
+   2026-09-27 主人反馈「不要这种从满的退回空的动画，和 token 面板缓存命中率那种一样」——
+   根因是上一版写了 background-repeat: no-repeat，且渐变首尾不同色：background-position 滑到 260% 时
+   整块渐变被推出元素，只剩下面的灰槽（看着就是"从满退回空"）。
+   现在照 .tb-flowbar 的做法改：渐变首尾同色（对称）+ background-size 260% + 默认 repeat +
+   同样 3.2s 的 0%→260%，颜色因此永远铺满整条，只有一道更亮的浅色光带在里面慢慢滑过。 */
+.pv-bar-flow { animation: pvBarFlow 3.2s linear infinite; }   /* 时长与 token 面板的 tb-flowbar 一致 */
+@keyframes pvBarFlow { from { background-position: 0% 0; } to { background-position: 260% 0; } }
+@media (prefers-reduced-motion: reduce) { .pv-bar-flow { animation: none; } }
+
+
+/* ===== 2026-09-27 主人要求：黑话库弹窗把细滚轮还回来 ==================================
+ * 背景：2026-09-24 全站隐藏了滚动条（见上面 `html, body, body * { scrollbar-width: none }`）。
+ * 黑话库动辄上百条候选，看不见滑槽就判断不出"下面还剩多少、现在翻到哪"，故只给这一个弹窗恢复：
+ * 8px 宽、浅粉滑槽 + 主题浅色滑块。
+ * 写法说明：全站那条用的是 `*::-webkit-scrollbar { display: none !important }`，!important 只能被
+ *   同为 !important 的规则压过，所以这里每条都带 !important；选择器写成带类名（特异性更高），
+ *   同权重下才赢得过 `*`。
+ * 另外 Chrome 121+ 起，元素自身一旦有 `scrollbar-width` 就改用标准属性并忽略 webkit 伪元素，
+ *   所以 scrollbar-width / scrollbar-color 与伪元素要成对写（哪种引擎生效都能看到细滚轮）。 */
+.pfp-modal,
+.pfp-body {
+  scrollbar-width: thin !important;
+  scrollbar-color: var(--nc-primary-300) hsl(339 92% 97.5%);
+}
+.pfp-modal::-webkit-scrollbar,
+.pfp-body::-webkit-scrollbar { width: 8px !important; height: 8px !important; display: block !important; }
+.pfp-modal::-webkit-scrollbar-track,
+.pfp-body::-webkit-scrollbar-track { display: block !important; background: hsl(339 92% 97.5%); border-radius: 999px; }
+.pfp-modal::-webkit-scrollbar-thumb,
+.pfp-body::-webkit-scrollbar-thumb {
+  display: block !important; background: var(--nc-primary-300);
+  border: 2px solid hsl(339 92% 97.5%); border-radius: 999px;
+}
+.pfp-modal::-webkit-scrollbar-thumb:hover,
+.pfp-body::-webkit-scrollbar-thumb:hover { background: var(--nc-primary-400); }
+.pfp-modal::-webkit-scrollbar-corner,
+.pfp-body::-webkit-scrollbar-corner { display: block !important; background: transparent; }

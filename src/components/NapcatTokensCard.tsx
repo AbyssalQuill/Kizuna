@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyRound, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { getNapcatTokens, applyNapcatTokens } from '../api';
+import { initialFromCache, writeCacheValue, dropCacheValue, warmCache } from '../lib/read-cache';
+import { ReadBar, Skeleton } from './ReadState';
 
 /**
  * NapCat 鉴权令牌卡（WebUI / HTTP / WS）
@@ -45,12 +47,48 @@ interface NapStatus {
 
 type TokenKey = 'webui' | 'http' | 'ws';
 
+/* ================= 取数（卡片加载与预热共用同一段） ================= */
+
+/** 现状的一次读取结果。`ok:false` 是后端明确报的错（文案取 r.error），与网络异常分开表示 ——
+ *  组件对两者原有的处置不同（前者顺带清空现状，后者只置错误文本、不动现状），故必须可区分。 */
+type NapcatRead = { ok: true; st: NapStatus } | { ok: false; error: string };
+
+/** NapCat 令牌现状的「取数 + 判定」。卡片里那一次加载与下方 `warmNapcatTokens()` 预热**共用这一段** ——
+ *  写进 `napcat:tokens` 的值因此必然同形（就是后端回包的这一份）。网络异常照旧从这里抛出。 */
+async function readNapcatTokens(): Promise<NapcatRead> {
+  const r: any = await getNapcatTokens();
+  if (r?.ok === false && r?.error) return { ok: false, error: String(r.error) };
+  return { ok: true, st: r as NapStatus };
+}
+
+/* ================= 预热（供外部：进管理器后空闲时 / 鼠标停在入口按钮上时调用） =================
+ * 把现状提前读进读取缓存 —— 用户点进来时首帧就已经走「有旧值」的瞬时路径，不再等一次回包。
+ * 这里是模块级函数：不 setState、不弹错、不 console；去重、写缓存、失败静默都由 warmCache 负责。 */
+
+/** 预热 NapCat 令牌卡的现状（napcat:tokens）。重复调用无副作用（缓存还新即跳过）。 */
+export async function warmNapcatTokens(): Promise<void> {
+  await warmCache('napcat:tokens', async () => {
+    const read = await readNapcatTokens();
+    return read.ok ? read.st : undefined;   // 读失败不写这条键（预热失败当没发生）
+  });
+}
+
 export default function NapcatTokensCard() {
-  const [st, setSt] = useState<NapStatus | null>(null);
+  /* 首帧初值：本会话上一次成功读到的现状（读取缓存，键 napcat:tokens；只在成功回包后写入）。
+     有旧值就先把现状渲染出来，随后照旧发一次真请求在后台静默校准、读到即原地替换；确实没有旧值
+     时才用骨架承接 —— 读取期间不再出现「正在读取 NapCat 令牌现状…」这种把内容整块顶掉的中间态。
+     用 ref 只在挂载时取一次：放在渲染里每帧调用 initialFromCache 会反复构造新对象。 */
+  const bootRef = useRef<{ st: NapStatus | null } | null>(null);
+  if (!bootRef.current) bootRef.current = { st: initialFromCache<NapStatus>('napcat:tokens').value };
+  const boot0 = bootRef.current!;
+  const [st, setSt] = useState<NapStatus | null>(boot0.st);
+  const [reading, setReading] = useState(true);
   const [err, setErr] = useState('');
-  const [webui, setWebui] = useState('');
-  const [http, setHttp] = useState('');
-  const [ws, setWs] = useState('');
+  /* 输入框初值同样取自旧值：与 load() 成功后的口径一致（默认填入 NapCat 当前的令牌），
+     于是"有旧值就照常显示"对这三个框也成立，不必等回包再填一遍。 */
+  const [webui, setWebui] = useState(String(boot0.st?.current?.webui ?? ''));
+  const [http, setHttp] = useState(String(boot0.st?.current?.http ?? ''));
+  const [ws, setWs] = useState(String(boot0.st?.current?.ws ?? ''));
   const [restart, setRestart] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -58,11 +96,18 @@ export default function NapcatTokensCard() {
 
   const load = useCallback(async () => {
     setErr('');
+    setReading(true);
     try {
-      const r: any = await getNapcatTokens();
-      if (r?.ok === false && r?.error) { setErr(String(r.error)); setSt(null); }
+      /* 取数在模块级的 readNapcatTokens 里（与下方 warmNapcatTokens 预热共用同一段逻辑）：
+         它以 `ok:false` 作为「后端明确报错」返回（原文案取自 r.error），网络异常照旧抛到下面的 catch。 */
+      const read = await readNapcatTokens();
+      if (!read.ok) { setErr(read.error); setSt(null); }
       else {
-        setSt(r as NapStatus);
+        const r = read.st;
+        setSt(r);
+        /* 只在成功回包时写读取缓存（失败不写，免得把错误状态当旧值反复渲染）：
+           下次进本页先把这份现状渲染出来，再在后台校准。 */
+        writeCacheValue('napcat:tokens', r as NapStatus);
         /* 2026-09-23输入框默认填入当前值（本机形态下后端在 current 中给出明文），
          * 使用者可直接核对现值，需要修改哪一项就改哪一项。
          * current 缺失时（旧接口 / docker 形态）退回「留空 = 不改动」。
@@ -73,10 +118,16 @@ export default function NapcatTokensCard() {
       }
     } catch (e: any) {
       setErr(String(e?.message ?? e));
-    }
+    } finally { setReading(false); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  /* 2026-09-26 ④：去掉「刷新现状」按钮 —— 进卡片自动刷一次 + 每 15 秒静默重取。
+     下面的 login-stream 只推登录/二维码状态，令牌本体不在 SSE 里，所以这个兜底轮询不能省。 */
+  useEffect(() => {
+    void load();
+    const iv = window.setInterval(() => { void load(); }, 15000);
+    return () => window.clearInterval(iv);
+  }, [load]);
 
   /* 2026-09-24 变更要求：登录态改为 SSE 实时探测：
    * 桥侧的 /api/napcat/login-stream 在"建立连接 / 链路开关 / 登录态变化"时推一份完整诊断，
@@ -142,6 +193,8 @@ export default function NapcatTokensCard() {
         + `；校验：${r?.verify?.note ?? '（见下方登录态）'}`,
       );
       setWebui(''); setHttp(''); setWs('');
+      /* 令牌现状已变（旧令牌此刻立即失效）：先作废读取缓存，紧随其后的 load() 成功会立刻写入新的一份。 */
+      dropCacheValue('napcat:tokens');
       await load();
     } catch (e: any) {
       setMsg(`失败：${e?.message ?? e}`);
@@ -168,6 +221,7 @@ export default function NapcatTokensCard() {
           <span className="lrn-updated">写入 NapCat 自身的配置，重启后生效</span>
         </div>
 
+
         {err ? (
           <div className="lrn-error">
             <AlertTriangle size={15} />
@@ -175,16 +229,23 @@ export default function NapcatTokensCard() {
             <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => void load()}><RefreshCw size={13} /> 重试</button>
           </div>
         ) : !st ? (
-          <div className="lrn-inline-note"><Loader2 size={13} className="spin" /> 正在读取 NapCat 令牌现状…</div>
+          /* 确实一无所有（本次会话第一次进入）时才用骨架占位，
+             替掉原来那句「正在读取 NapCat 令牌现状…」+ 转圈。 */
+          <Skeleton rows={4} />
         ) : (
           <>
             <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
               {/* 【2026-09-16】登录态是"机器人不回复"排查的第一处判据：需扫码，或桥的连接已断开
-                  【2026-09-30】改为 SSE 实时值优先；下面那行小字如实标注推送是否在工作。 */}
+                  【2026-09-30】改为 SSE 实时值优先。
+                  【2026-09-28 反馈修「状态字来回跳」】这里原先挂着一整个状态字：
+                  连接中 →「正在连接实时推送…」、连上后 →「实时推送中」、失败 →「实时推送不可用…」。
+                  进页面时它必然先闪一下「正在连接实时推送…」，随后才变成「实时推送中」，一行字来回跳。
+                  推送**正常**时用户看到的本来就是实时值，那行字只是噪音；所以只在推送**没在工作**时
+                  补一句实话（说明下面这个值是刷新时的读数、不是实时值），正常时不占位、不跳动。 */}
               QQ 登录态：
-              <span className="lrn-updated" style={{ marginLeft: 6 }}>
-                {liveState === 'live' ? '实时推送中' : liveState === 'connecting' ? '正在连接实时推送…' : '实时推送不可用（用一次性读取的值，可点刷新）'}
-              </span>
+              {liveState === 'offline' && (
+                <span className="lrn-updated" style={{ marginLeft: 6 }}>（实时推送没在工作，下面是最近一次刷新的读数）</span>
+              )}
               {view.login?.ok ? (
                 view.login.isLogin ? (
                   <span style={{ color: 'var(--nc-success-600, #16a34a)' }}>
@@ -263,19 +324,19 @@ export default function NapcatTokensCard() {
             <div className="cfg-fields">
               <label className="field-row">
                 <span className="f-label">WebUI 登录令牌（6099）</span>
-                <input className="input" type={show ? 'text' : 'password'} autoComplete="new-password"
+                <input className="input is-mid" type={show ? 'text' : 'password'} autoComplete="new-password"
                   placeholder="留空 = 不改动"
                   value={webui} onChange={(e) => setWebui(e.target.value)} />
               </label>
               <label className="field-row">
                 <span className="f-label">HTTP 令牌（3000）</span>
-                <input className="input" type={show ? 'text' : 'password'} autoComplete="new-password"
+                <input className="input is-mid" type={show ? 'text' : 'password'} autoComplete="new-password"
                   placeholder="留空 = 不改动"
                   value={http} onChange={(e) => setHttp(e.target.value)} />
               </label>
               <label className="field-row">
                 <span className="f-label">WS 令牌（3001）</span>
-                <input className="input" type={show ? 'text' : 'password'} autoComplete="new-password"
+                <input className="input is-mid" type={show ? 'text' : 'password'} autoComplete="new-password"
                   placeholder="留空 = 不改动"
                   value={ws} onChange={(e) => setWs(e.target.value)} />
               </label>
@@ -294,11 +355,9 @@ export default function NapcatTokensCard() {
                 {busy ? <Loader2 size={14} className="spin" /> : <ShieldCheck size={14} />} 写入改动的令牌{restart ? '并重启' : ''}
               </button>
               <button className="btn btn-soft-primary btn-sm" disabled={busy || !st?.bridge?.http}
-                title="无需手工抄录：直接以桥配置中现有的 HTTP/WS 令牌写入 NapCat（WebUI 同用该值），使三处一致"
                 onClick={() => void apply(true)}>
                 {busy ? <Loader2 size={14} className="spin" /> : <KeyRound size={14} />} 用桥里现有的令牌写入
               </button>
-              <button className="btn btn-sm" disabled={busy} onClick={() => void load()}><RefreshCw size={13} /> 刷新现状</button>
               <button className="btn btn-sm" onClick={() => setShow((v) => !v)}>
                 {show ? <EyeOff size={13} /> : <Eye size={13} />} {show ? '隐藏输入' : '显示输入'}
               </button>

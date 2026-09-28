@@ -47,7 +47,6 @@ export default function NoticeBar({ msg, onClose, ms = 6000, kind = 'notice', st
     <div
       className="notice-bar"
       onClick={() => { setHidden(true); onClose(); }}
-      title="点一下立即关闭（也会自动收起）"
       style={{
         cursor: 'pointer',
         ...(style || null),

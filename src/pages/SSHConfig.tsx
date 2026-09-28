@@ -424,12 +424,12 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
               <div className="card" style={{ marginBottom: 14 }}>
                 <div className="card-title">添加服务器</div>
                 <div className="form-row">
-                  <div className="form-group"><label className="label">名称</label><input className="input" placeholder="用于标识该服务器，例如 VPS-01" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-                  <div className="form-group"><label className="label">主机地址</label><input className="input" placeholder="服务器 IP 或域名" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">名称</label><input className="input is-mid" placeholder="用于标识该服务器，例如 VPS-01" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">主机地址</label><input className="input is-mid" placeholder="服务器 IP 或域名" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} /></div>
                 </div>
                 <div className="form-row">
                   <div className="form-group"><label className="label">端口</label><NumInput className="input" value={form.port} onCommit={(n) => setForm({ ...form, port: Math.round(n) || 22 })} /></div>
-                  <div className="form-group"><label className="label">用户名</label><input className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">用户名</label><input className="input is-mid" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></div>
                 </div>
                 <div className="form-group">
                   <label className="label">认证</label>
@@ -437,9 +437,9 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                     options={[{ value: 'password', label: '密码' }, { value: 'key', label: '私钥' }]} />
                 </div>
                 {form.authType === 'password' ? (
-                  <div className="form-group"><label className="label">密码</label><input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">密码</label><input className="input is-mid" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
                 ) : (
-                  <div className="form-group"><label className="label">私钥路径</label><input className="input" value={form.privateKey} placeholder="例如 C:\Users\你\.ssh\id_rsa" onChange={(e) => setForm({ ...form, privateKey: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">私钥路径</label><input className="input is-mid" value={form.privateKey} placeholder="例如 C:\Users\你\.ssh\id_rsa" onChange={(e) => setForm({ ...form, privateKey: e.target.value })} /></div>
                 )}
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn btn-primary" onClick={addServer}>保存</button>
@@ -452,12 +452,12 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
               <div className="card" style={{ marginBottom: 14, borderColor: 'var(--nc-primary-400)' }}>
                 <div className="card-title">配置服务器</div>
                 <div className="form-row">
-                  <div className="form-group"><label className="label">名称</label><input className="input" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} /></div>
-                  <div className="form-group"><label className="label">主机地址</label><input className="input" value={editDraft.host} onChange={(e) => setEditDraft({ ...editDraft, host: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">名称</label><input className="input is-mid" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">主机地址</label><input className="input is-mid" value={editDraft.host} onChange={(e) => setEditDraft({ ...editDraft, host: e.target.value })} /></div>
                 </div>
                 <div className="form-row">
                   <div className="form-group"><label className="label">端口</label><NumInput className="input" value={editDraft.port} onCommit={(n) => setEditDraft({ ...editDraft, port: Math.round(n) || 22 })} /></div>
-                  <div className="form-group"><label className="label">用户名</label><input className="input" value={editDraft.username} onChange={(e) => setEditDraft({ ...editDraft, username: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">用户名</label><input className="input is-mid" value={editDraft.username} onChange={(e) => setEditDraft({ ...editDraft, username: e.target.value })} /></div>
                 </div>
                 <div className="form-row">
                   <div className="form-group">
@@ -466,13 +466,13 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                       options={[{ value: 'password', label: '密码' }, { value: 'key', label: '私钥' }]} />
                   </div>
                   {editDraft.authType === 'password' ? (
-                    <div className="form-group"><label className="label">密码</label><input className="input" type="password" value={editDraft.password} onChange={(e) => setEditDraft({ ...editDraft, password: e.target.value })} /></div>
+                    <div className="form-group"><label className="label">密码</label><input className="input is-mid" type="password" value={editDraft.password} onChange={(e) => setEditDraft({ ...editDraft, password: e.target.value })} /></div>
                   ) : (
-                    <div className="form-group"><label className="label">私钥路径</label><input className="input" value={editDraft.privateKey} placeholder="例如 C:\Users\你\.ssh\id_rsa" onChange={(e) => setEditDraft({ ...editDraft, privateKey: e.target.value })} /></div>
+                    <div className="form-group"><label className="label">私钥路径</label><input className="input is-mid" value={editDraft.privateKey} placeholder="例如 C:\Users\你\.ssh\id_rsa" onChange={(e) => setEditDraft({ ...editDraft, privateKey: e.target.value })} /></div>
                   )}
                 </div>
                 {editDraft.authType === 'key' && (
-                  <div className="form-group"><label className="label">私钥口令（可选）</label><input className="input" type="password" value={editDraft.passphrase} onChange={(e) => setEditDraft({ ...editDraft, passphrase: e.target.value })} /></div>
+                  <div className="form-group"><label className="label">私钥口令（可选）</label><input className="input is-mid" type="password" value={editDraft.passphrase} onChange={(e) => setEditDraft({ ...editDraft, passphrase: e.target.value })} /></div>
                 )}
                 <div className="card-title" style={{ fontSize: 13, marginTop: 10 }}>远程端口（默认 6099 / 3000 / 3080 / 3100）</div>
                 <div className="form-row">
@@ -498,7 +498,7 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                     <Rocket size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
                     整套复刻{deployFor ? ` → ${deployFor.name}` : '（进行中）'}
                   </div>
-                  <button className="icon-btn" onClick={closeDeploy} title="关闭"><X size={15} /></button>
+                  <button className="icon-btn" onClick={closeDeploy}><X size={15} /></button>
                 </div>
                 {deployFor && (
                 <>
@@ -584,9 +584,6 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                   style={{ paddingLeft: 10, paddingRight: 12 }}
                   disabled={autoSaving}
                   onClick={toggleAutoConnect}
-                  title={autoConnectOn
-                    ? '已开启：下次打开应用时将自动连接该服务器。点击可关闭。'
-                    : '已关闭：下次打开应用时不自动连接，仍可手动点击「连接」。点击可开启。'}
                 >
                   {autoSaving
                     ? <Loader2 size={14} className="spin" />
@@ -595,7 +592,7 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                 </button>
                 {state?.connect && state.connect.phase !== 'idle' && state.connect.phase !== 'ready' && (
                   <span style={{ color: 'var(--nc-foreground-500)', fontSize: 12 }}>
-                    当前：{({ connecting: '正在连接', tunnels: '正在建立隧道', 'server-starting': '服务端启动中', warming: '正在完成界面鉴权', failed: '连接失败' } as Record<string, string>)[state.connect.phase] || state.connect.phase}
+                    当前：{({ connecting: '正在连接', tunnels: '正在建立隧道', 'server-starting': '服务端启动中', warming: '正在完成界面鉴权', partial: '已连接（部分组件没在运行）', failed: '连接失败' } as Record<string, string>)[state.connect.phase] || state.connect.phase}
                   </span>
                 )}
               </div>
@@ -618,10 +615,11 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                       <div style={{ color: 'var(--nc-foreground-500)', fontSize: 12, marginTop: 2 }}>
                         {s.username}@{s.host}:{s.port}
                       </div>
-                      {/* 【2026-09-22】该服务器正在连接或正在启动服务端时，就地写出状态机所处阶段 */}
+                      {/* 【2026-09-22】该服务器正在连接或正在启动服务端时，就地写出状态机所处阶段
+                          【2026-10-01】partial 也写出来（连上了、但组件没起来），并带上 note 指明是谁没在运行 */}
                       {connected && state?.connect && state.connect.phase !== 'ready' && state.connect.phase !== 'idle' && (
                         <div style={{ fontSize: 12, marginTop: 2, color: 'var(--nc-foreground-500)' }}>
-                          {({ connecting: '正在连接…', tunnels: '正在建立隧道…', 'server-starting': '服务端启动中…', warming: '正在完成界面鉴权…', failed: '连接失败（将自动重试）' } as Record<string, string>)[state.connect.phase] || state.connect.phase}
+                          {({ connecting: '正在连接…', tunnels: '正在建立隧道…', 'server-starting': '服务端启动中…', warming: '正在完成界面鉴权…', partial: '已连接（部分组件没在运行）', failed: '连接失败（将自动重试）' } as Record<string, string>)[state.connect.phase] || state.connect.phase}
                           {state.connect.note ? ` · ${state.connect.note}` : ''}
                         </div>
                       )}
@@ -631,17 +629,17 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                         {testing === s.id ? <Loader2 size={12} className="spin" /> : <TestTube2 size={12} />} 测试
                       </button>
                       <button className="btn btn-sm btn-primary" onClick={() => startEdit(s)}><Settings size={12} /> 配置</button>
-                      <button className="btn btn-sm" title="将整套（DSH + 桥 + NapCat 登录态）克隆部署到该服务器" onClick={() => openDeploy(s)}><Rocket size={12} /> 部署</button>
-                      <button className="btn btn-sm" title="将该服务器的代码／记忆／表情包同步到本地，或将本地内容同步至该服务器" onClick={() => openSync(s)} disabled={syncingId === s.id}>
+                      <button className="btn btn-sm" onClick={() => openDeploy(s)}><Rocket size={12} /> 部署</button>
+                      <button className="btn btn-sm" onClick={() => openSync(s)} disabled={syncingId === s.id}>
                         {syncingId === s.id ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} 同步
                       </button>
-                      <button className="btn btn-sm" title="在服务器上启动整套（DSH → NapCat → 桥）；已在运行的服务将跳过，桥若已存在则不改动" disabled={!!stackBusy} onClick={() => stackCtl(s, 'start')}>
+                      <button className="btn btn-sm" disabled={!!stackBusy} onClick={() => stackCtl(s, 'start')}>
                         {stackBusy === `${s.id}:start` ? <Loader2 size={12} className="spin" /> : <Play size={12} />} 启动Bot
                       </button>
-                      <button className="btn btn-sm btn-danger" title="在服务器上停止整套（桥 → NapCat → DSH）" disabled={!!stackBusy} onClick={() => stackCtl(s, 'stop')}>
+                      <button className="btn btn-sm btn-danger" disabled={!!stackBusy} onClick={() => stackCtl(s, 'stop')}>
                         {stackBusy === `${s.id}:stop` ? <Loader2 size={12} className="spin" /> : <Square size={12} />} 终止Bot
                       </button>
-                      <button className="btn btn-sm btn-danger" title="删除该服务器上的整套（桥 + DSH + NapCat，移动为备份）" onClick={() => removeStack(s)} disabled={removingId === s.id}>
+                      <button className="btn btn-sm btn-danger" onClick={() => removeStack(s)} disabled={removingId === s.id}>
                         {removingId === s.id ? <Loader2 size={12} className="spin" /> : <Trash2 size={12} />} 清整套
                       </button>
                       {connected ? (

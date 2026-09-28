@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { instanceAction, startAllInstances, remoteStackById, sshServiceAction } from '../api';
 import { pendingConnect, activeScopeInfo } from '../config-cache';
+import { readCacheValue, writeCacheValue } from '../lib/read-cache';
+import { warmInstancePage } from './InstanceConfig';
+/* 桥那张卡的「配置」进的是桥配置页；预热函数由那一页导出（无参数，作用域自己认）。
+   `BridgeConfig.tsx` 不 import 本文件，故这里不会形成循环依赖。 */
+import { warmBridgePage } from './BridgeConfig';
 import type { ManagerState, LocalInstance } from '../stores/types';
 import { Settings, Loader2, Rocket, BookOpen, X, RotateCw, Square, AlertTriangle } from 'lucide-react';
 
@@ -64,6 +69,10 @@ const CONNECT_FOOT: Record<string, string> = {
   tunnels: '服务端连接中 · 建立隧道',
   'server-starting': '服务端连接中 · 服务端组件启动中',
   warming: '服务端连接中 · 界面鉴权',
+  /* 2026-10-01 主人反馈「状态机不对」：SSH 连着、组件却没起来（桥停着），旧文案写「组件启动中」，
+     既不真又把各卡片自己的「运行中 / 未运行」盖住。partial 是"已连上"的终态，不再算中间态
+     （见下面的 connectBusy），卡片小字因此交回服务端各组件的真实状态；这条只作兜底。 */
+  partial: '服务端已连接 · 部分组件没在运行',
   failed: '服务端连接失败（会自动重试）',
 };
 
@@ -122,6 +131,32 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
   const typed = useTypewriterLoop(SLOGAN);
 
   const inst = (id: SvcId) => state?.instances.find((i) => i.id === id);
+
+  /* 【2026-09-26】鼠标停在「配置」入口上就先预热那一页要读的数据：进配置页时已经是"有旧值"的路径，
+   * 切换不再先摆骨架。用 120ms 延时（鼠标扫过卡片不该发请求），mouseleave 即清掉定时器；
+   * 同一个 id 只预热一次（`warmedRef` 记着）。这里只把数据提前读进缓存：不 setState、不弹错、失败静默，
+   * 页面自身照旧读一次真值（warmCache 的纪律见 `src/lib/read-cache.ts`）。 */
+  const warmedRef = useRef(new Set<string>());
+  const warmTimerRef = useRef<number | null>(null);
+  const cancelWarm = () => {
+    if (warmTimerRef.current !== null) { window.clearTimeout(warmTimerRef.current); warmTimerRef.current = null; }
+  };
+  const warmEntry = (id: SvcId) => {
+    if (warmedRef.current.has(id)) return;
+    cancelWarm();
+    warmTimerRef.current = window.setTimeout(() => {
+      warmTimerRef.current = null;
+      warmedRef.current.add(id);
+      /* 桥那张卡的「配置」进的是桥配置页（预热的就是它那份读数）：与 App.tsx 那轮空闲预热同一口径 ——
+         连上服务器时预热服务端那份，未连上预热本机那份（`warmBridgePage` 自己认作用域）。
+         其余两张进的是本机实例配置页，卡片 id 就是实例 id。 */
+      if (id === 'bridge-local') {
+        const sv = state?.connected && state.activeServer ? state.activeServer : null;
+        void warmBridgePage(sv ? { id: sv.id, name: sv.name } : null);
+      } else void warmInstancePage(id);
+    }, 120);
+  };
+  useEffect(() => () => cancelWarm(), []);
 
   /* 2026-09-17 单点登录互斥 L3state 尚未返回的一两秒内 serverMode 为 false，卡片语义会退回"本机"，
    * 此时点「启动」拉起的是本机 NapCat；状态到达后再点一次又去拉服务端，同一 QQ 号在两处登录会被互踢。
@@ -244,6 +279,19 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
     return null;
   };
 
+  /* 【2026-10-01】把每一轮"确实读到"的服务端状态记下来（键按组件分）。下面状态行在本轮没读到
+   *（`serverUpOf` 返回 null：探测失败、缓存冷、刚重连）时改为沿用这里记下的旧结论 ——
+   *  有旧值就继续显示上次读到的状态，读到了再换；只有本次会话从未读到过才显示「正在读取服务端状态…」。
+   *  只在读到明确结论时写：没读到的轮次不写，免得把"不知道"当成旧值反复渲染。
+   *  这份记录只供那行小字使用；按钮与 phase 仍严格按本轮真实的 remoteUp 判定，不受它影响。 */
+  useEffect(() => {
+    for (const id of ['napcat-local', 'dsh-isolated', 'bridge-local'] as SvcId[]) {
+      const up = serverUpOf(id);
+      if (up !== null) writeCacheValue('home:remote:' + id, up);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
   /* 2026-09-23连接状态机的中间态 → 卡片小字（见 CONNECT_FOOT 注释）。
    * 除 idle/ready 之外均属"连接进行中"，此时小字不再直接表述「未运行」，
    * 而是写出当前阶段，以避免"未启动 → 运行中"的突兀跳变。 */
@@ -253,10 +301,12 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
    * 2026-09-24 主人要求（原话）："不要有正在核实的状态机和不能点的卡片状态机，就是我们刚启动应用的时候"
    * —— 首帧（/api/state 尚未返回）不再禁用任何按钮：按钮上的转圈只出现在真正在飞的那个动作上
    * （`allBusy` / `busy === id`）。单点登录保护不靠置灰，由后端在真正拉起实例时把关并回报原因。 */
-  const connectBusy = connPhase !== 'idle' && connPhase !== 'ready';
+  /* 2026-10-01：partial（连上了、但服务端组件没起来）不算"连接进行中" —— 它是终态，
+     卡片小字要走各自的服务端状态（「服务端运行中 / 服务端未运行」），并允许点「启动服务端」。 */
+  const connectBusy = connPhase !== 'idle' && connPhase !== 'ready' && connPhase !== 'partial';
   const connectFailed = connPhase === 'failed';
 
-  /* 2026-09-29：消除"未连接远程 / 桥不可达"的空窗。此前的反馈是：连服务器时仍会短暂出现
+  /* 2026-09-28：消除"未连接远程 / 桥不可达"的空窗。此前的反馈是：连服务器时仍会短暂出现
    * "不可达 / 未连接"这类结论性文案，而这些结论此刻其实还不成立 ——
    *   · 页面刚打开的那几百毫秒：`/api/state` 尚未返回，`state` 为 null，此前一律显示"未连接远程"；
    *   · 自启动连接刚起步：首帧 `connect.phase` 仍是 `idle`（后端此刻才开始连），此前同样显示"未连接"。
@@ -286,12 +336,12 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
       {/* 【2026-09-12】Home 页标题悬停不弹出说明（已去掉原生 title 提示框） */}
       <div className="launcher-title">
         <div className="typewriter">{typed}</div>
-        <div className="launcher-tag">MoonBot · 一键配置本地和服务器的拟人 QQ Bot</div>
+        <div className="launcher-tag">Kizuna · 一键配置本地和服务器的拟人 QQ Bot</div>
       </div>
 
       {/* 新手教程：位于副标题下方、一键启动上方，居中窄按钮 */}
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
-        <button className="btn btn-primary tutorial-btn" onClick={() => setTutorialOpen(true)} title="首次使用请先阅读本教程">
+        <button className="btn btn-primary tutorial-btn" onClick={() => setTutorialOpen(true)}>
           <BookOpen size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> 新手教程
         </button>
       </div>
@@ -341,6 +391,11 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
         {svcs.map((t) => {
           const i = inst(t.id);
           const remoteUp = sshConn ? serverUpOf(t.id) : null;
+          /* 状态行专用的取值：本轮没读到（null）就沿用上一次读到的状态（有旧值就不退回「正在读取服务端状态…」，
+             读到再换）；本次会话从未读到过才为 null，那时才显示那句话。轮询与退避逻辑一概未动。 */
+          const remoteUpShown: boolean | null = remoteUp !== null
+            ? remoteUp
+            : (readCacheValue<boolean>('home:remote:' + t.id)?.value ?? null);
           const isRemote = serverMode;
           // 连上服务器时：状态取自服务端、按钮操作服务端、打开的是服务端界面；否则完全按本机原有逻辑。
           const phase: Phase = isRemote ? (remoteUp ? 'running' : 'idle') : phaseOf(i);
@@ -361,7 +416,8 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
           // 无失败时此处为空，小字完全由服务端 phase 状态机决定。
           const footErrText = footErr[t.id] || footErr['*'] || '';
           return (
-            <div className="big-tile" key={t.id}>
+            <div className="big-tile" key={t.id}
+              onMouseEnter={() => warmEntry(t.id)} onMouseLeave={cancelWarm}>
               <div className="big-tile-head">
                 <span className="big-name">{t.label}</span>
                 <span className="big-sub">{t.sub}</span>
@@ -380,13 +436,11 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
                     <button className="btn btn-primary btn-block" onClick={handleOpen}>打开</button>
                     <button
                       className="icon-btn"
-                      title={isRemote ? '重启服务端' : '重启'}
                       disabled={busy === t.id}
                       onClick={restartAct}
                     >{acting === `${t.id}:restart` ? <Loader2 size={16} className="spin" /> : <RotateCw size={16} />}</button>
                     <button
                       className="icon-btn"
-                      title={t.id === 'bridge-local' ? '终止' : '停止'}
                       disabled={busy === t.id}
                       onClick={stopAct}
                     >{acting === `${t.id}:stop` ? <Loader2 size={16} className="spin" /> : <Square size={15} />}</button>
@@ -396,9 +450,10 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
                     {busy === t.id ? <><Loader2 size={16} className="spin" /> {isRemote ? '下发中…' : '启动中…'}</> : phase === 'failed' ? '重试启动' : (isRemote ? '启动服务端' : '启动')}
                   </button>
                 )}
-                <button className="icon-btn" title="配置" onClick={() => onOpenConfig(t.id)}><Settings size={17} /></button>
+                <button className="icon-btn" onClick={() => onOpenConfig(t.id)}
+                  onMouseEnter={() => warmEntry(t.id)} onMouseLeave={cancelWarm}><Settings size={17} /></button>
               </div>
-              <div className="big-foot" title={footErrText || ((probe || connectBusy) ? (probe || state?.connect?.note || '') : (isRemote ? (state?.connect?.note || '') : (phase === 'failed' ? (i?.error || '') : (i?.note || ''))))}>
+              <div className="big-foot">
                 {/* 【2026-09-23 关键顺序】中间态必须排在 isRemote 之前。
                     isRemote = !!state.activeServer，而 connecting / tunnels 这两个最早阶段 SSH 尚未连上，
                     后端此时不会下发 activeServer（resolveServices 中服务端那组仅在 sshConnections 存在该连接时才拼装）
@@ -408,7 +463,7 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
                 {connectBusy
                   ? <><span className={`status-dot ${connectFailed ? 'offline' : 'loading'}`} />{connectFailed ? <AlertTriangle size={12} /> : null}<span>{connectFootText}</span></>
                   : probe
-                    /* 2026-09-29缓存说"上次是连着的"，而本次状态尚未核实（phase 仍为 idle：
+                    /* 2026-09-28缓存说"上次是连着的"，而本次状态尚未核实（phase 仍为 idle：
                        后端此刻才开始连）—— 此时说"未启动 / 未运行"都是武断结论，改用中性一行。 */
                     ? <><span className="status-dot loading" /><span>{probe}</span></>
                     : isRemote
@@ -417,11 +472,12 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
                       /* 服务端未运行 + 上一轮动作 / 整套启动失败 → 先说明是哪一次失败、原因何在 */
                       : (!remoteUp && footErrText
                         ? <><span className="status-dot offline" /><AlertTriangle size={12} /><span>{footErrText}</span></>
-                        /* remoteUp === null：这一轮没拿到服务端状态（既非 running，也非明确的
-                           down）。此前会写成「服务端未运行」——把"没读到"说成了"没在跑"。如实写"正在读取"。 */
-                        : remoteUp === null
+                        /* remoteUpShown === null：这一轮没拿到服务端状态（既非 running，也非明确的
+                           down）。此前会写成「服务端未运行」——把"没读到"说成了"没在跑"。如实写"正在读取"，
+                           但仅限"本次会话从未读到过"；读到过就继续显示上次读到的那份状态。 */
+                        : remoteUpShown === null
                           ? <><span className="status-dot loading" /><span>正在读取服务端状态…</span></>
-                          : <><span className={`status-dot ${remoteUp ? 'online' : 'offline'}`} /><span>{remoteUp ? '服务端运行中' : '服务端未运行'}</span></>))
+                          : <><span className={`status-dot ${remoteUpShown ? 'online' : 'offline'}`} /><span>{remoteUpShown ? '服务端运行中' : '服务端未运行'}</span></>))
                     /* 本机：仅当状态机未给出结论（idle）时使用动作失败原因，不得覆盖 starting / failed 的真实阶段 */
                     : (footErrText && phase === 'idle'
                       ? <><span className="status-dot offline" /><AlertTriangle size={12} /><span>{footErrText}</span></>
@@ -440,7 +496,7 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
             <button className="btn btn-soft btn-block" onClick={onOpenSSH}>进入</button>
           </div>
           <div className="big-foot">
-            {/* 【2026-09-29】连接尚未核实时（缓存说上次是连着的）不再写"未连接远程"这一结论；
+            {/* 【2026-09-28】连接尚未核实时（缓存说上次是连着的）不再写"未连接远程"这一结论；
                 断线自动重连期间也说"重连中"，与三张卡的小字口径一致。 */}
             <span className={`status-dot ${sshConn ? 'online' : (sshReconnecting || probe) ? 'loading' : 'offline'}`} />
             <span>{sshConn ? '远程已连接' : sshReconnecting ? '服务端重连中…' : (probe ?? '未连接远程')}</span>
@@ -448,7 +504,7 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
         </div>
       </div>
 
-      <div className="launcher-footer">© 2026 AbyssalQuill · MoonBot · 一键配置本地与服务器的拟人 QQ Bot</div>
+      <div className="launcher-footer">© 2026 AbyssalQuill · Kizuna · 一键配置本地与服务器的拟人 QQ Bot</div>
 
       {tutorialOpen && (
         <div className="help-overlay" style={{ zIndex: 120 }} onClick={() => setTutorialOpen(false)}>

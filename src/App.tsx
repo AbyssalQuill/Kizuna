@@ -9,7 +9,15 @@ import Learning from './pages/Learning';
 import GroupPortrait from './pages/GroupPortrait';
 import ChatHistory from './pages/ChatHistory';
 import VoiceConfig from './pages/VoiceConfig';
-import { getState, getOwnerQQ, setOwnerQQ } from './api';
+/* 读取预热：进管理器后空闲时先把各页首屏数据读进缓存，切换时就没有等待感。
+   实现见 src/lib/read-cache.ts 的 warmCache 与各页导出的 warmXxxPage()。 */
+import { warmBridgePage } from './pages/BridgeConfig';
+import { warmVoicePage } from './pages/VoiceConfig';
+import { warmLearningPage } from './pages/Learning';
+import { warmPortraitPage } from './pages/GroupPortrait';
+import { warmChatPage } from './pages/ChatHistory';
+import { warmAllInstances } from './pages/InstanceConfig';
+import { getState, getOwnerQQ, setOwnerQQ, getNapcatWebuiReady } from './api';
 import { lastConnect } from './config-cache';
 import type { ManagerState } from './stores/types';
 
@@ -46,12 +54,12 @@ export default function App() {
   const [ownerVal, setOwnerVal] = useState('');
   const [ownerBusy, setOwnerBusy] = useState(false);
   const [ownerErr, setOwnerErr] = useState('');
+  /** 静默预热只打一次（失败重挂）；见下面轮询成功分支里的说明。 */
+  const napcatWarmed = useRef(false);
   const ownerDismissed = useRef(false);
 
   const back = () => setView({ name: 'launch' });
   const refresh = () => setTick((t) => t + 1);
-  /* 立即重试：清除提示并触发一次轮询周期（与自动重试同一入口） */
-  const retryNow = () => { setStateErr(null); refresh(); };
 
   useEffect(() => {
     let alive = true;
@@ -71,18 +79,36 @@ export default function App() {
       try {
         const s = await getState();
         if (alive) { setState(s); setStateErr(null); }
+        /* 2026-09-26 ⑦：静默预热 NapCat 鉴权 —— 连上之后就在后台把 WebUI 令牌/可登录状态问一遍，
+           而不是等主人点进 NapCat 页面才开始问（那时页面已经先报了一次 Unauthorized）。
+           只做一次，失败会在下次变成 ready 时重试；**不**替页面登录 —— 令牌只存在 NapCat 页面那个
+           origin 的 localStorage 里，后端替不了，这里只是把后端侧的令牌缓存/落盘焐热。 */
+        const nmReady = String(s?.connect?.phase ?? '') === 'ready'
+          || (s?.instances ?? []).some((i) => { const p = String(i.phase); return p === 'running' || p === 'ready'; });
+        if (nmReady && !napcatWarmed.current) {
+          napcatWarmed.current = true;
+          getNapcatWebuiReady().catch(() => { napcatWarmed.current = false; });
+        }
         const instanceTransient = (s?.instances ?? []).some((i) => i.phase === 'starting' || i.phase === 'stopping');
-        const connectTransient = !!s?.connect && s.connect.phase !== 'idle' && s.connect.phase !== 'ready';
+        /* 2026-10-01：partial（连上了、服务端组件没起来）是终态，不按 1.2 秒快速轮询 ——
+           它不会再自己变成 ready，4 秒一轮足够发现"用户刚把组件启动起来"。 */
+        const connectTransient = !!s?.connect && !['idle', 'ready', 'partial'].includes(s.connect.phase);
         const warmingUp = Date.now() - mountedAt < 20000;
         const transient = instanceTransient || connectTransient || warmingUp;
         if (alive) iv = setTimeout(load, transient ? 1200 : 4000);
       } catch (e: any) {
-        /* 失败不停在等待态：保留上一次成功的 state，前台显示一行原因与「立即重试」，
+        /* 失败不停在等待态：保留上一次成功的 state，前台只显示一行原因；
            后台仍按 4 秒退避重试（后端未启动时不至于把浏览器打满）。
-           2026-09-29：这条提示是"请求确实失败"后才出现的（确定失败），故照实显示；
+           2026-09-28：这条提示是"请求确实失败"后才出现的（确定失败），故照实显示；
            但若本地已有上次成功留下的连接/配置缓存，补一句说明，免得看起来像整页失效。 */
+        const raw = String(e?.message || e || '请求失败');
+        /* 2026-09-28：把浏览器那句 "Failed to fetch" 翻成人话 —— 它只说明"连不上后端进程"，
+           对用户没有任何信息量（现场反馈里那句话就是原样截图发过来的）。 */
+        const reason = /Failed to fetch|NetworkError|fetch failed|Load failed/i.test(raw)
+          ? '连不上后端进程（后端可能刚被重启，或还没起来）'
+          : raw;
         const cachedHint = lastConnect() ? '（当前显示的是上次缓存的信息，恢复后会自动刷新）' : '';
-        if (alive) setStateErr(`状态接口无响应：${String(e?.message || e || '请求失败')}；界面保持可用，后台每 4 秒自动重试。${cachedHint}`);
+        if (alive) setStateErr(`状态接口无响应：${reason}；界面保持可用，后台每 4 秒自动重试。${cachedHint}`);
         if (alive) iv = setTimeout(load, 4000);
       }
     };
@@ -108,6 +134,45 @@ export default function App() {
       .catch(() => { /* 后端未启动或该接口不存在：静默跳过，不打断启动流程 */ });
     return () => { alive = false; };
   }, []);
+
+  /* ================= 读取预热（2026-09-26 主人反馈「切换时内容还是有延迟显示」） =================
+   * 原因：某一页"本次会话还没读过"时，首帧只能给骨架，看起来就是切过去要等一下。
+   * 做法：进管理器后空闲时按当前作用域（本机 / 连上的服务器）跑一轮预热，把各页首屏要用的数据
+   *       先读进进程内缓存；点下去时缓存里已经有值，走的就是那条瞬时路径。
+   *       鼠标停在入口按钮上还会再抢一轮（见 BridgeConfig 的 hoverWarm）。
+   * 边界：作用域变化时重跑一轮（各页的 key 里都带作用域，两侧不会串用）；延时 1500ms 起步、每步之间
+   *       200ms，避开首屏自己那几发请求；全部 fire-and-forget，单步失败静默 —— 预热失败不该弹任何东西，
+   *       进页面时照常自己读一遍。 */
+  const warmScope = state ? (state.connected && state.activeServer ? `remote:${state.activeServer.id}` : 'local') : '';
+  const warmedScope = useRef('');
+  useEffect(() => {
+    if (!warmScope || warmedScope.current === warmScope) return;
+    warmedScope.current = warmScope;
+    const remote = state?.connected && state.activeServer
+      ? { id: state.activeServer.id, name: state.activeServer.name } : null;
+    let alive = true;
+    const t = setTimeout(() => {
+      void (async () => {
+        const steps: Array<() => Promise<void>> = [
+          () => warmBridgePage(remote),
+          /* 聊天记录排在第二位：这一页的三个数字要等隧道那条读回来（实测 0.3-1s），
+             预热点晚了的话，点进去先是一排 `—` 才出数字。列表与消息的预热原本更靠后，一并对齐。 */
+          warmChatPage,
+          warmVoicePage,
+          warmLearningPage,
+          warmPortraitPage,
+          warmAllInstances,
+        ];
+        for (const step of steps) {
+          if (!alive) return;
+          try { await step(); } catch { /* 单步失败不影响后面的步骤 */ }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      })();
+    }, 1500);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [warmScope]);
 
   const closeOwner = () => {
     ownerDismissed.current = true;   // 关闭后本次会话不再自动弹出
@@ -149,10 +214,11 @@ export default function App() {
    * 没有任何过渡层，观感仍是硬切。现在改成"入口唯一"：**所有**视图（服务器配置 / 桥配置 /
    * 聊天记录 / 语音 / 人设 / 学习 / 实例配置 / WebView / 启动器）都套进同一个
    * `<div className="view-swap">`，并按其身份换 `key`（cfg 带实例 id、web 带 url，其余用视图名）。
-   * key 变化 → React 重建这一层 → 进场动画（淡入+上浮+去模糊）与入场光带必然重放，
+   * key 变化 → React 重建这一层 → 进场动画（淡入+上浮 10px，260ms）必然重放，
    * 页面自身带不带 `.page` 都不影响覆盖面。
-   * `view-veil` 是切换那一瞬间的一层近白柔光（260ms 淡出），垫在下一页与上一页之间，
-   * 免去"同时挂两份 29 万字节的桥配置页"的代价。
+   * 2026-09-26 主人要求「切换界面不要有两道移动的动线表示加载中」「更顺滑，现在有点卡」：
+   * 原来叠在这一层上的入场光带（::after）与近白柔光遮罩（view-veil）都已删除，
+   * 这一层现在只剩一段 260ms 的淡入 + 上浮（见 app.css 顶部说明）。
    * 注意：这里只对子层换 key，App 本身不重挂 —— 上方那条 `/api/state` 轮询因此不受影响。 */
   const viewKey = view.name === 'web' ? `web:${view.url}`
     : view.name === 'cfg' ? `cfg:${view.id}`
@@ -164,7 +230,6 @@ export default function App() {
   const swap = (node: ReactNode, opts?: { instant?: boolean }) => (
     <div className={opts?.instant ? 'view-swap no-anim' : 'view-swap'} key={viewKey}>
       {node}
-      {opts?.instant ? null : <div className="view-veil" />}
     </div>
   );
 
@@ -194,16 +259,14 @@ export default function App() {
   if (view.name === 'cfg') return swap(<InstanceConfig state={state} instanceId={view.id} onBack={back} onRefresh={refresh} />);
   return swap(
     <>
-      {/* 状态接口失败提示：一行原因 + 立即重试；不遮挡界面，首页照常可用。
+      {/* 状态接口失败提示：一行原因（2026-09-26 起不再给「立即重试」按钮）；不遮挡界面，首页照常可用；
           自动重试由上方轮询保证，与本条提示是否显示无关。 */}
       {stateErr && (
         <div
           className="notice-bar"
           style={{ maxWidth: 720, margin: '12px auto 0', textAlign: 'left', cursor: 'default' }}
-          title="管理器后端未响应；界面保持可用，后台每 4 秒自动重试"
         >
           {stateErr}
-          <button className="btn btn-sm" style={{ marginLeft: 8 }} onClick={retryNow}>立即重试</button>
         </div>
       )}
 

@@ -2,14 +2,157 @@
 <html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>" />
+    <!-- 站点图标：2026-09-28 换成新应用图标（Kizuna 立绘）生成的多档 favicon.ico，
+         与 app.ico 同一套母图（打包仓库 tools/make-icons.mjs 生成）。
+         之前那个 🐋 的内联 data-URI 是 MoonBot 时期的旧标，一并替换。 -->
+    <link rel="icon" href="/favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64" />
+    <link rel="apple-touch-icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <!-- 界面是浅色主题：显式声明 color-scheme，避免浏览器/系统深色模式下把原生下拉列表等
          系统控件渲染成黑底白字（与界面配色不符）。 -->
     <meta name="color-scheme" content="light" />
-    <title>MoonBot</title>
+    <title>Kizuna</title>
+    <!-- 【2026-09-27 主人要求 · 第二版】启动封面：纯白屏 + 内置 home 页那套粉色的 AaCute「Kizuna」。
+           · 六个字母从**四面八方**依次蹦进来（各自带着旋转与缩放，错峰 240ms、单字 1.1s —— 比以前慢）；
+           · 字母全部站定后，一道白光**从左到右**扫过整个单词（"流动"那一下）；
+           · 不要粉色雾气：删掉了上一版的径向柔光与投影，只剩干净的粉字白底。
+         配色取的就是 home 页标题那套变量（global.css 的 :root）：常态 --nc-primary-500，
+         渐变用 home 标题同一条 linear-gradient（600 → 400 → 600）。变量写在样式表里，
+         启动层这边只引用 —— 所以"没加载完样式表"时用 var() 的兜底值顶上，颜色不会翻车。
+         字体：AaCute（/fonts/AaCute.ttf，global.css 的 @font-face）。
+         逐字动画必须等字体真就绪才开始，否则会先按后备字形弹一遍再换字；探不到就 1.6→1.9s 兜底开播，
+         另外 .bs-ch 的基线样式自带一份 2s 起播的动画（内联脚本整个挂掉也照样演完）。
+         这一层刻意写死在 HTML 里（而不是在 React 里画）：JS 加载前就已在屏上，不会先白屏一闪。
+         摘除时机见 src/main.tsx：最短 4.2s 后淡出（0.9s 交叉淡化），另有 12s 硬兜底。 -->
+    <style>
+      /* 纯白屏：连 <html> 的底色一起刷白 —— 启动层出现之前那一帧同样是白的，不会闪出别的颜色 */
+      html { background: #fff; }
+      #boot-splash {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center;
+        overflow: hidden; background: #fff;
+        user-select: none; -webkit-user-select: none;
+        animation: bsFadeIn .45s ease both;
+      }
+      /* 淡出（0.9s，与 main.tsx 里 900ms 的摘除延时对齐）：
+         fill: both 让动画期间与结束都稳定停在 opacity:0，不会被容器的基态弹回去。 */
+      #boot-splash.is-out { animation: bsFadeOut .9s ease both; pointer-events: none; }
+      #boot-splash .bs-word { position: relative; display: flex; align-items: flex-end; }
+      #boot-splash .bs-ch {
+        display: inline-block;
+        /* AaCute 自带文件只有 400 这一个字重，写 700 会被浏览器合成加粗（边缘发糊），所以固定 400 */
+        font-family: 'AaCute', 'AaCute-full', sans-serif;
+        font-weight: 400;
+        font-size: clamp(64px, 13.5vw, 220px); line-height: 1;
+        letter-spacing: -0.01em;
+        /* 兜底色 = home 页标题的常态粉（--nc-primary-500）；不支持 background-clip 的内核就用它 */
+        color: var(--nc-primary-500, hsl(339.2 90.36% 51.18%));
+        transform-origin: 50% 78%;
+        will-change: transform, opacity;
+        /* 基线动画：延迟 2s 起播 —— 那是「内联脚本没能加上 .bs-go」时的兜底（见下面 script），
+           正常路径会在字体就绪时加 .bs-go，把延迟改回 0 并立即开演。 */
+        opacity: 0;
+        animation: bsPop 1.1s linear both;
+        animation-delay: calc(2000ms + var(--i) * 240ms);
+      }
+      #boot-splash.bs-go .bs-ch { animation-delay: calc(var(--i) * 240ms); }
+      /* 渐变填充（与 home 页标题同一条）：不支持 background-clip:text 的内核自动退回上面的实色粉，
+         不会出现「透明字 + 一整块渐变底」的翻车形态。 */
+      @supports ((background-clip: text) or (-webkit-background-clip: text)) {
+        #boot-splash .bs-ch {
+          background-image: linear-gradient(100deg, var(--nc-primary-600, hsl(339 86.54% 40.78%)) 0%, var(--nc-primary-400, hsl(339 90% 60.78%)) 45%, var(--nc-primary-600, hsl(339 86.54% 40.78%)) 100%);
+          -webkit-background-clip: text; background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
+      }
+      /* 从左到右的「流动」：一道白光扫过整个单词。
+         底是纯白，所以这道光在白底上完全看不见，只在与粉色字重叠的地方把字提亮 —— 不会留下任何色块。
+         起播时间 2.45s ≈ 最后一个字母（1.2s 起、1.1s 演完）刚刚站定。 */
+      #boot-splash .bs-word::after {
+        content: '';
+        position: absolute; top: -8%; bottom: -8%; left: 0; width: 34%;
+        background: linear-gradient(100deg, hsl(0 0% 100% / 0) 0%, hsl(0 0% 100% / .92) 50%, hsl(0 0% 100% / 0) 100%);
+        opacity: 0;
+        animation: bsShine 1.15s ease-in-out 2.45s both;
+      }
+      @keyframes bsFadeIn { from { opacity: 0 } to { opacity: 1 } }
+      @keyframes bsFadeOut { from { opacity: 1 } to { opacity: 0 } }
+      /* 一个字的一生：从各自的来向（--fx/--fy）缩着转着（--fr）飞进来 → 过冲一点 → 回落站定。
+         用 linear 配关键帧自己做缓动：入场段 0→62% 快、回弹段慢，比单条 cubic-bezier 更像「蹦」。 */
+      @keyframes bsPop {
+        0%   { opacity: 0; transform: translate(var(--fx, 0%), var(--fy, 60%)) scale(.32) rotate(var(--fr, -18deg)); }
+        8%   { opacity: 1; }
+        62%  { transform: translate(0, 0) scale(1.13) rotate(calc(var(--fr, -18deg) * -0.14)); }
+        80%  { transform: translate(0, 0) scale(.95) rotate(calc(var(--fr, -18deg) * 0.06)); }
+        100% { opacity: 1; transform: none; }
+      }
+      @keyframes bsShine {
+        0%   { opacity: 0; transform: translateX(-130%); }
+        14%  { opacity: 1; }
+        86%  { opacity: 1; }
+        100% { opacity: 0; transform: translateX(320%); }
+      }
+      /* 【动效总开关】关掉动效的人不该看「等字体 → 逐字蹦 + 扫光」：字母直接就是最终态。
+         .bs-go 那条规则的选择器是 id + 两个类，优先级更高，所以这里必须带 !important 才压得住。 */
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash { animation: none; }
+        #boot-splash.is-out { animation: none; opacity: 0; }
+        #boot-splash .bs-ch { opacity: 1; animation: none !important; }
+        #boot-splash .bs-word::after { animation: none !important; opacity: 0; }
+      }
+      /* 【启动期间会先闪一眼首页】启动层从 opacity:0 淡进来是有代价的：同一份文档里
+         #root 会在第一帧就照常画出来，于是变成「闪一眼首页 → 启动层盖住 → 淡出回首页」。
+         这里在启动动画期间把应用本体一起藏起来（照样挂载、只是不画），
+         等要淡出时（main.tsx 给 <html> 加 .app-ready）两边同时过渡 —— 一次交叉淡化。
+         挂在 <html> 的类上、不用兄弟选择器：#boot-splash 与 #root 确实是兄弟，但 12s 硬兜底
+         会 remove() 掉启动层，那一刻兄弟关系消失，#root 会被打回 opacity:0（整个界面变白）。 */
+      html:not(.app-ready) #root { opacity: 0; }
+      #root { transition: opacity .9s ease; }
+    </style>
   </head>
   <body>
+    <div id="boot-splash" role="status" aria-label="正在启动 Kizuna">
+      <!-- 六个字母各自的来向（--fx/--fy）、入场旋转（--fr）、出场次序（--i）都写在这一行里：
+           改「从哪蹦出来」只动 style 上的数字即可，不必碰关键帧。
+           字母之间不留空白字符（flex 会忽略元素间的文本节点，这里贴着写是为了万一日后改成 inline 排版也不会多出空隙）。 -->
+      <div class="bs-word" aria-hidden="true"
+        ><span class="bs-ch" style="--i:0; --fx:-190%; --fy:6%;   --fr:-28deg">K</span
+        ><span class="bs-ch" style="--i:1; --fx:-95%;  --fy:-175%; --fr:22deg">i</span
+        ><span class="bs-ch" style="--i:2; --fx:4%;    --fy:180%;  --fr:-16deg">z</span
+        ><span class="bs-ch" style="--i:3; --fx:98%;   --fy:-170%; --fr:18deg">u</span
+        ><span class="bs-ch" style="--i:4; --fx:125%;  --fy:155%;  --fr:-24deg">n</span
+        ><span class="bs-ch" style="--i:5; --fx:195%;  --fy:22%;   --fr:30deg">a</span></div>
+    </div>
+    <script>
+      /* 逐字动画必须等 AaCute 就绪再开始：字体是本机 11MB 的 ttf，先按后备字形弹一遍再换成 AaCute，
+         观感是「字形突然换了」。所以这里用 document.fonts.load 探到字体可用才加 .bs-go。
+         @font-face 由打包后的样式表声明，样式表可能还没解析到 —— 探不到就每 120ms 重试，
+         最多 8 次；无论如何 1.9s 兜底开播（宁可字形先用后备字体，也不能把动画卡住不演）。 */
+      (function () {
+        var splash = document.getElementById('boot-splash');
+        if (!splash) return;
+        var started = false;
+        var tries = 0;
+        function go() { if (started) return; started = true; splash.classList.add('bs-go'); }
+        function tryMore() { tries += 1; if (tries <= 8) window.setTimeout(probe, 120); }
+        function probe() {
+          if (started) return;
+          if (!document.fonts || !document.fonts.load) { tryMore(); return; }
+          document.fonts.load('400 1em AaCute').then(function (list) {
+            if (list && list.length) go(); else tryMore();
+          })['catch'](tryMore);
+        }
+        window.setTimeout(go, 1900);
+        if (document.fonts && document.fonts.load) probe();
+      })();
+
+      /* 硬兜底：万一 React 那一侧（main.tsx）没跑起来，12s 后也要把应用本体放出来，
+         否则 <html> 上永远没有 .app-ready，界面会一直停在 opacity:0 的白屏。
+         12s 与 main.tsx 里的硬超时同刻，谁先到都行（add 是幂等的）。 */
+      window.setTimeout(function () {
+        document.documentElement.classList.add('app-ready');
+      }, 12000);
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

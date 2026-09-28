@@ -106,7 +106,7 @@ export default function WebView({ url, title, onBack }: Props) {
       try {
         r = await getNapcatWebuiReady();
       } catch (e: any) {
-        /* 2026-09-29查询失败只是"这一轮没问到"（下方每 4 秒还会重试，最多 15 次），
+        /* 2026-09-28查询失败只是"这一轮没问到"（下方每 4 秒还会重试，最多 15 次），
          * 不是结论 —— 不再写「无法查询 NapCat 状态」这种终局措辞，改为中性一行并说明会自动重试。 */
         if (alive) setNote('暂时查不到 NapCat 状态（管理器未响应），将继续自动重试：' + String(e?.message ?? e));
         return true;
@@ -182,7 +182,7 @@ export default function WebView({ url, title, onBack }: Props) {
         <code style={{ fontSize: 12 }}>{src}</code>
         <span style={{ fontSize: 12, color: 'var(--nc-foreground-500)' }}>{note || '令牌自动跟随'}</span>
         <button className="btn btn-sm btn-outline" onClick={reauth} disabled={busy}
-          title="目标服务重启后会更换访问令牌；此处立即取回最新令牌并以新地址重开，同时实时查询一次 NapCat 是否已可登录">
+>
           {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} 重新鉴权
         </button>
         <a className="btn btn-sm btn-outline" href={src} target="_blank" rel="noopener noreferrer">
