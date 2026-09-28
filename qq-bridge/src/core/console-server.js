@@ -210,6 +210,7 @@ import {
 import {
   warmGroupName, getGroupDisplayName, formatGroupListLine, warmGroupInfo,
   getCachedGroupInfo, formatGroupInfoLine, initGroupCacheCore, setGroupCacheBot,
+  getConvDisplayName, warmConvNames,
 } from './group-cache.js';
 import { handleIncoming, pumpMux, initMuxCore, setMuxApi, setMuxBot } from './mux.js';
 
@@ -275,6 +276,70 @@ function trustLevelForToken(token) {
   return null;
 }
 const NOT_TRUSTED_MSG = '这个只有主人或管理员能改：私聊里直接说，或在群里等主人/管理员亲口说那句（10 分钟内有效）。';
+
+/* ── 2026-09-26：Agent 配置读写（主人要求「让机器人可以调桥配置的所有配置，包括语音页面」）──
+ * 这一组纯函数服务于 /api/agent/config 一条路由：读配置一律**脱敏**，写配置一律**就地改写真实配置**。
+ *
+ * 「为什么不能让模型自己把读到的配置再回写」：读回来的密钥是掩码（tp-****xfji），
+ * 而 voice 的保存逻辑见「非空即覆盖」—— 模型照着读到的内容回写，会把掩码当成真密钥写进配置，
+ * 四把密钥一次性全毁。所以写路径必须在服务端读真配置、改一个字段、再落盘，模型永远不碰真值。 */
+const SECRET_PATH_RE = /(api[_-]?key|apikey|secret|password|passwd|token|cookie|authorization|credential)/i;
+/** 路径里任一段像密钥就算密钥路径：读要打码，写直接拒绝。 */
+const isSecretPath = (p) => String(p ?? '').split('.').filter(Boolean).some((seg) => SECRET_PATH_RE.test(seg.replace(/\[\d+\]$/, '')));
+/** 递归脱敏：把密钥字段的值换成 '***'（保留"有没有设置"这个信息）。 */
+function maskSecretsDeep(v, depth = 0) {
+  if (depth > 8 || v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map((x) => maskSecretsDeep(x, depth + 1));
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    out[k] = SECRET_PATH_RE.test(k) ? (val ? '***' : '') : maskSecretsDeep(val, depth + 1);
+  }
+  return out;
+}
+/** 按点路径取值：a.b.0.c（数组下标用数字段）。空路径 = 取整份。取不到返回 undefined。 */
+function pickPath(obj, pathStr) {
+  const segs = String(pathStr ?? '').split('.').filter((s) => s !== '');
+  let cur = obj;
+  for (const s of segs) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = cur[s];
+  }
+  return cur;
+}
+/** 把"看起来像 JSON"的字符串还原成结构（模型常常把数组/对象写成字符串传进来）。 */
+function coerceJsonish(v) {
+  if (typeof v !== 'string') return v;
+  const t = v.trim();
+  if (!(t.startsWith('[') || t.startsWith('{'))) return v;
+  try { return JSON.parse(t); } catch { return v; }
+}
+/** 按类型收敛：原值是数字/布尔时把字符串收敛回数字/布尔（避免把 "0.15" 当字符串写进配置，
+ *  这在历史上真的把 linearEnabled 之类的开关写成过字符串 "false"）。原值不存在时按 JSON 字符串还原。 */
+function coerceLike(prev, v) {
+  if (typeof prev === 'number') { const n = Number(v); return Number.isFinite(n) ? n : v; }
+  if (typeof prev === 'boolean') {
+    if (typeof v === 'boolean') return v;
+    return v === 1 || /^(true|on|1|yes|开|打开)$/i.test(String(v).trim());
+  }
+  return coerceJsonish(v);
+}
+/** 按点路径写值（中间层不存在就建对象；数组下标段按数组处理）。返回是否发生了变化。 */
+function setPathInto(obj, pathStr, value) {
+  const segs = String(pathStr ?? '').split('.').filter((s) => s !== '');
+  if (!segs.length) throw new Error('path 不能为空（例如 voice.defaultVoice 或 social.wake.probability）');
+  let cur = obj;
+  for (let i = 0; i < segs.length - 1; i += 1) {
+    const s = segs[i];
+    const wantArray = /^\d+$/.test(segs[i + 1]);
+    if (cur[s] === undefined || cur[s] === null || typeof cur[s] !== 'object') cur[s] = wantArray ? [] : {};
+    cur = cur[s];
+  }
+  const last = segs[segs.length - 1];
+  const next = coerceLike(cur[last], value);
+  const changed = JSON.stringify(cur[last]) !== JSON.stringify(next);
+  cur[last] = next;
+  return changed;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 学习管理 / 用量统计（学习系统重构：console 侧 REST + 配置落盘，纯追加模块级代码，
@@ -1650,6 +1715,22 @@ export function startConsoleServer() {
             send: cfgRef.social?.send ?? {},
             wait: cfgRef.social?.wait ?? {},
             proactive: cfgRef.social?.proactive ?? {}
+          },
+          /* 2026-09-26：主人报「群聊唤醒坏了，bot 也不知道有这些开关」。
+           * 这三个状态原来只活在管理器界面里，模型手里没有任何一处能看到 —— 主人问
+           * 「群里怎么不理我」时它只能猜，甚至不知道 qq_deepsleep 能关掉总开关。
+           * 这里只读地如实给出；改动仍走 qq_deepsleep / 管理器（不在这里开写入面）。 */
+          silence: {
+            deepsleep: cfgRef.social?.deepsleep === true,
+            deepsleepGroups: Array.isArray(cfgRef.social?.deepsleepGroups) ? cfgRef.social.deepsleepGroups.map(String) : [],
+            paused: social?.paused === true
+          },
+          allow: {
+            groups: Array.isArray(cfgRef.allow?.groups) ? cfgRef.allow.groups.map(String) : [],
+            private: Array.isArray(cfgRef.allow?.private) ? cfgRef.allow.private.map(String) : [],
+            denyGroups: Array.isArray(cfgRef.deny?.groups) ? cfgRef.deny.groups.map(String) : [],
+            allGroups: cfgRef.allowAllGroups === true,
+            allWhenEmpty: cfgRef.allowAllWhenEmpty === true
           },
           enabledTools,
           unreadCount: st.unread.length,
@@ -3077,6 +3158,11 @@ export function startConsoleServer() {
         let locTextAfter = '';  // 位置卡片：图片/卡片发完后再补一条"地点文字 + 地图链接"
         let locMode = '';       // 位置卡片实际用的模式（tuwen/map/native），回执里如实告诉模型
         const require = (v, msg) => { if (v === undefined || v === null || String(v).trim() === '') throw new Error(msg); };
+        /* 2026-09-26「只发真卡」开关（`social.send.musicCardOnly`，默认关）：
+         * 主人私聊定案 —— 音乐分享**只认真卡**（签名服务签出来的 tuwen/news 图文卡，就是真机分享那种版式）。
+         * 卡片没生成时不再降级成"NapCat 原生 id 卡"或"一条官方分享链接"：那两种在他眼里等于"没发出来"。
+         * 打开后，做不到就返回错误（让模型知道并改口），而不是悄悄发一条链接。 */
+        const musicOnly = cfgRef?.social?.send?.musicCardOnly === true;
         try {
           if (type === 'music') {
             // NapCat 4.18 原生支持音乐卡片：music 段由 NapCat 调 musicSignUrl 生成 Ark。
@@ -3115,6 +3201,12 @@ export function startConsoleServer() {
                 }
               }
               if (!seg) {
+                /* 2026-09-26「只发真卡」：卡片没生成就不要发那条官方分享链接 —— 见上面 musicOnly 的说明。 */
+                if (musicOnly) {
+                  log(`[rich] 只发真卡模式：QQ 音乐卡片未生成 ${key}（mid=${mid}），不发链接兜底`);
+                  sendJson({ ok: false, error: 'QQ 音乐卡片未生成（只发真卡模式，不发链接兜底）：这首歌的封面/信息没解析出来，请重试或换一首' }, 502);
+                  return;
+                }
                 const shareUrl = `https://i.y.qq.com/v8/playsong.html?platform=11&appshare=android_qq&appversion=20080008&hosteuin=null&songmid=${mid}&type=0&appsongtype=1&_wv=1&source=qq&ADTAG=qfshare`;
                 const shareText = `${title}${artist ? ' ' + artist : ''} ${shareUrl}`;
                 // 复用 send-message 文本通道发送（走记录/审计），记录为卡片语义
@@ -3155,6 +3247,11 @@ export function startConsoleServer() {
                 //  · 其它（custom 等）→ 没有可用卡片形态，直接走链接兜底（若调用方给了 musicUrl）。
                 const murl2 = String(body.musicUrl ?? body.url ?? '').trim();
                 log(`[rich] 音乐卡片构建失败(platform=${mt}) ${key}: ${cardBuildError?.message ?? cardBuildError}`);
+                /* 2026-09-26「只发真卡」：原生 id 卡（163/qq…）与链接兜底一样，都不是真卡版式 → 直接报错。 */
+                if (musicOnly) {
+                  sendJson({ ok: false, error: `音乐卡片构建失败（只发真卡模式，不发原生卡/链接兜底）：${cardBuildError?.message ?? cardBuildError}` }, 502);
+                  return;
+                }
                 if (/^(163|qq|kugou|kuwo|migu)$/.test(mt)) {
                   musicPlan = null;
                   seg = { type: 'music', data: { type: mt, id: mid } };
@@ -3267,7 +3364,7 @@ export function startConsoleServer() {
              * 所以做的是"看起来就是腾讯地图那张卡"的图文卡：来源角标(腾讯地图)+官方图标+
              * 腾讯地图跳转链接+地图缩略图。`social.send.locationApp='amap'` 可切回高德身份。 */
             const locApp = String(process.env.QQBRIDGE_LOCATION_APP ?? cfgRef?.social?.send?.locationApp ?? 'tencent').trim().toLowerCase();
-            const tencentLink = `https://apis.map.qq.com/uri/v1/marker?marker=coord:${lat},${lon};title:${encodeURIComponent(locTitle || '位置')}&referer=moonbot`;
+            const tencentLink = `https://apis.map.qq.com/uri/v1/marker?marker=coord:${lat},${lon};title:${encodeURIComponent(locTitle || '位置')}&referer=kizuna`;
             const amapLink = `https://uri.amap.com/marker?position=${lon},${lat}&coordinate=gaode&callnative=1${locTitle ? `&name=${encodeURIComponent(locTitle)}` : ''}`;
             const mapLink = locApp === 'amap' ? amapLink : tencentLink;
             const locLine = `地点：${locTitle || `${lat},${lon}`}${locContent ? `\n${locContent}` : ''}\n${mapLink}`;
@@ -3391,6 +3488,9 @@ export function startConsoleServer() {
             seg,
             options: { replyToMessageId: actualReplyToMessageId, atUserId },
             sendRichFn: sendRich,
+            /* 2026-09-26：音乐分享走"只发真卡"（`social.send.musicCardOnly`）时，梯子只保留 primary
+             * —— 不发原生 id 卡、不发纯链接；失败就抛错回执给模型。视频卡片不受这个开关影响。 */
+            only: musicOnly === true && type === 'music',
             sendText: async (text) => {
               // 兜底走 send-message 文本通道（与 QQ 音乐分享同一条路，同样进会话历史/审计）
               const sentMsg = await sendMessages(key, [text]);
@@ -3743,7 +3843,32 @@ export function startConsoleServer() {
         const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
         const r = chatConvList({ kind, limit, offset });
         if (!r.ok) { sendJson({ ok: false, error: r.error || '读取失败' }, 500); return; }
-        sendJson({ ok: true, kind, total: r.total, count: r.count, convs: r.convs });
+        /* 标题口径（2026-09-26）：群聊 = 群名（另附「我的群昵称」groupNick），私聊 = 对方昵称
+         * （备注 remark 单列），**不再**用 chat_convs.name 那条「最近一条消息的发送者名」——
+         * 线上实测那一列是群里某个人或机器人自己的名字，于是左栏标题会出现「我」「幻时」
+         * 「坐忘道」这种跟会话本身无关的东西。
+         * 名字走 group-cache 的 10 分钟缓存：本轮缺名的先预热最多 12 个、整体最多等 2.5s，
+         * 超时先按已有数据返回，剩下的下一轮自然补齐（界面每 5 秒推流一次）。 */
+        const decorate = (c) => {
+          const info = getConvDisplayName(c.key);
+          const gid = String(c.kind) === 'group' ? c.key.slice(6) : '';
+          const fallback = String(c.name || '');
+          return {
+            ...c,
+            name: String(info?.name || fallback),
+            groupName: gid ? String(info?.groupName || getGroupDisplayName(gid) || '') : '',
+            groupNick: String(info?.groupNick || ''),
+            remark: String(info?.remark || ''),
+            nameSource: info?.name ? (gid ? 'group' : 'friend') : (fallback ? 'db' : ''),
+          };
+        };
+        let convs = r.convs.map(decorate);
+        const missing = convs.filter((c) => !getConvDisplayName(c.key)).slice(0, 12).map((c) => c.key);
+        if (missing.length) {
+          await warmConvNames(missing, 2500);
+          convs = r.convs.map(decorate);
+        }
+        sendJson({ ok: true, kind, total: r.total, count: r.count, convs });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/chat-messages') {
@@ -3798,7 +3923,12 @@ export function startConsoleServer() {
         const sender = String(url.searchParams.get('sender') ?? '').trim();
         const date = String(url.searchParams.get('date') ?? '').trim();
         const direction = String(url.searchParams.get('direction') ?? '').trim();
-        const limit = Math.min(60, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+        /* 2026-09-26 记忆检索灵活化（主人：不要写死翻页数）：删掉写死的"一次最多 60"。
+         * 页大小由调用方定（默认 30，不传就是 30），这里只在"一次拉爆库"的量级兜底。
+         * 省上下文靠下面的逐条截断 + 总量封顶 —— 页压小只会让模型多翻几次，页数写死等于替模型做决定。 */
+        const SEARCH_LIMIT_CEILING = 500;
+        const askedLimit = Number(url.searchParams.get('limit')) || 30;
+        const limit = Math.min(SEARCH_LIMIT_CEILING, Math.max(1, askedLimit));
         const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
         if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (key && req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -3825,10 +3955,16 @@ export function startConsoleServer() {
           if (m.recalled) row.recalled = true;
           return row;
         });
-        let out = { ok: true, total: result.total, count: msgs.length, messages: msgs };
+        /* 自我描述的翻页信息：模型不用猜页大小，照着 more/nextOffset 走就行。 */
+        let out = { ok: true, total: result.total, count: msgs.length, limit, offset: result.offset || 0, messages: msgs };
         while (out.messages.length > 1 && JSON.stringify(out).length > MAX_RESULT_CHARS) { out.messages.pop(); out.truncated = true; }
-        if ((result.offset || 0) + out.messages.length < result.total) out.more = true;
-        if (out.truncated) out.hint = '结果过大已截断：用 query/date/sender 收窄，或用 offset 翻页';
+        if ((result.offset || 0) + out.messages.length < result.total) {
+          out.more = true;
+          out.nextOffset = (result.offset || 0) + out.messages.length;
+        }
+        if (askedLimit > SEARCH_LIMIT_CEILING) out.limitCappedFrom = askedLimit;
+        if (out.truncated) out.hint = `结果过大已截断（本页 ${out.messages.length}/${msgs.length} 条）：用 query/date/sender 收窄，或按 nextOffset 接着翻`;
+        else if (out.more) out.hint = `共 ${out.total} 条，本页 ${out.count} 条：按 nextOffset=${out.nextOffset} 接着翻（想少翻几次就把 limit 开大）`;
         sendJson(out);
         return;
       }
@@ -5381,6 +5517,84 @@ export function startConsoleServer() {
         }, 500);
         return;
       }
+      /* ── Agent 配置读写（2026-09-26）──────────────────────────────────────────────
+       * 主人要求：「让机器人可以调桥配置的所有配置，包括语音页面」。
+       * 鉴权与 /api/social/admin-set、/api/social/whitelist 完全同一套：
+       * agent token + 会话准入 + 工具开关 + 「只有主人/管理员能改」（trustLevelFor）。
+       * 语义：读一律脱敏；写只在服务端读**真配置**、改**一个**点路径、再整份落盘 ——
+       * 绝不让模型把读到的掩码回写（那会把四把密钥一次性毁掉，见文件上方 maskSecretsDeep 的说明）。 */
+      if (url.pathname === '/api/agent/config') {
+        const body = req.method === 'POST' ? await readBody() : {};
+        const qs = url.searchParams;
+        const key = String(body.key ?? qs.get('key') ?? '').trim();
+        const token = String(body.token ?? req.headers['x-agent-token'] ?? qs.get('token') ?? '').trim();
+        const target = String(body.target ?? qs.get('target') ?? 'bridge').trim();
+        const pathStr = String(body.path ?? qs.get('path') ?? '').trim();
+        const action = String(body.action ?? qs.get('action') ?? (req.method === 'GET' ? 'get' : 'set')).trim();
+        const fail = (error, code = 400) => sendJson({ ok: false, error }, code);
+        if (!['get', 'set'].includes(action)) { fail('action 只能是 get / set'); return; }
+        if (!key) { fail('参数缺少 key（会话 key）'); return; }
+        if (!agentTokenOk(key, token)) { fail('Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions', 403); return; }
+        if (!SessionAllowed(key)) { fail('目标不在当前模式允许范围内', 403); return; }
+        if (action === 'set' && !ToolEnabled('configSet')) { fail('工具未启用：qq_config_set', 403); return; }
+        if (action === 'get' && !ToolEnabled('configGet')) { fail('工具未启用：qq_config_get', 403); return; }
+        if (!trustLevelFor(key, token)) { fail(NOT_TRUSTED_MSG, 403); return; }
+        if (!['bridge', 'voice', 'social'].includes(target)) { fail('target 只能是 bridge / voice / social'); return; }
+        if (action === 'set' && target === 'social') { fail('social 段的写请走 POST /api/social/config（qq_config_set 已经这么转发），那条路有按字段的校验'); return; }
+        if (action === 'set' && !pathStr) { fail('set 需要 path（例如 voice.defaultVoice / voice.send.probability）'); return; }
+        if (action === 'set' && isSecretPath(pathStr)) {
+          fail('密钥类字段（apiKey / token / password 之类）不能由机器人改，请在管理端「语音」页填；读它们只会回掩码。', 403);
+          return;
+        }
+        if (action === 'set' && body.value === undefined) { fail('set 需要 value（新值；数组/对象可以直接传 JSON 文本）'); return; }
+        if (action === 'set' && target === 'bridge' && /^social(\.|$)/.test(pathStr)) {
+          fail('social 段的写请改用 target=social：那条路有一套按字段做的类型与取值范围校验');
+          return;
+        }
+        try {
+          if (target === 'social') {
+            const sec = maskSecretsDeep(cfgRef.social ?? {});
+            sendJson({ ok: true, target, path: pathStr, value: pathStr ? pickPath(sec, pathStr) : sec, note: 'default Agent 的 social 段配置（只读；写请用 qq_config_set target=social）' });
+            return;
+          }
+          if (target === 'voice') {
+            const voiceMod = await import('../core/voice.js');
+            if (action === 'get') {
+              const pub = voiceMod.voiceConfigPublic();
+              sendJson({ ok: true, target, path: pathStr, value: pathStr ? pickPath(pub, pathStr) : pub, note: '密钥只回掩码；要改配置就调 qq_config_set（服务端读真值后只改你指定的那一个字段）' });
+              return;
+            }
+            const cur = voiceMod.voiceConfig();
+            const changed = setPathInto(cur, pathStr, body.value);
+            if (!changed) { sendJson({ ok: true, target, path: pathStr, value: pickPath(maskSecretsDeep(cur), pathStr), changed: false, note: '原值就是这样，没有改动' }); return; }
+            /* 整份回写（不是只发那一个字段）：saveVoiceConfig 里 `enabled` 只认严格 true、
+               apiKey 只认非空覆盖 —— 只发一个字段会把总开关或别的字段按默认值洗掉。 */
+            const saved = voiceMod.saveVoiceConfig(cur);
+            log(`[command] config set voice.${pathStr} = ${JSON.stringify(body.value)} by ${key}（trust=${trustLevelFor(key, token)}）`);
+            sendJson({ ok: true, target, path: pathStr, value: pickPath(maskSecretsDeep(saved), pathStr), changed: true });
+            return;
+          }
+          const configFile = path.join(ROOT, 'config.json');
+          const file = readJsonSafe(configFile, null, true) ?? {};
+          if (action === 'get') {
+            sendJson({ ok: true, target, path: pathStr, value: pathStr ? pickPath(maskSecretsDeep(file), pathStr) : maskSecretsDeep(file), note: '密钥字段已打码；写请用 qq_config_set（只改你指定的那一个点路径）' });
+            return;
+          }
+          const changed = setPathInto(file, pathStr, body.value);
+          if (changed) {
+            atomicWriteJson(configFile, file);
+            // 进程内同步该顶层段（桥另有 config.json 文件监听会热加载，这里只是让本次请求后立刻一致）
+            const top = String(pathStr).split('.')[0];
+            if (top && Object.prototype.hasOwnProperty.call(file, top)) cfgRef[top] = file[top];
+            log(`[command] config set bridge.${pathStr} = ${JSON.stringify(body.value)} by ${key}（trust=${trustLevelFor(key, token)}）`);
+          }
+          sendJson({ ok: true, target, path: pathStr, value: pickPath(maskSecretsDeep(file), pathStr), changed, note: changed ? '已写入 config.json，桥会自动热加载' : '原值就是这样，没有改动' });
+          return;
+        } catch (error) {
+          sendJson({ ok: false, error: error?.message ?? String(error) }, 400);
+          return;
+        }
+      }
       // ── 语音（MiMo-V2.5-TTS / VoiceDesign / VoiceClone / ASR）────────────────────
       // 配置与试听走管理端（consoleToken 统一校验，见上方）；发送/识别走 agent token + 白名单，与其它发送工具同规矩。
       // 模块动态 import：开发期文件缺失时不影响其它路由。
@@ -5409,6 +5623,84 @@ export function startConsoleServer() {
           }
           return;
         }
+        /* 本地引擎（Genie / GPT-SoVITS ONNX sidecar，2026-09-28 新增）
+         *   GET  /api/voice/local                      → 环境探测 + 进程/内存读数 + 本地音色档案（localVoices）
+         *   POST /api/voice/local {action:'self-test'}  → 真拉起引擎合成一句，回耗时与内存（"到底装没装成"的最终判据）
+         *   POST /api/voice/local {action:'preview', text?, character?, voiceId?} → 用指定角色（或指定本地音色档案）合成一句并把音频回给界面（试听）
+         *   POST /api/voice/local {action:'voice-create', name, baseCharacter?, sampleBase64?|fromVoiceId?, promptText?} → 新建一个本地音色（2026-10-02）
+         *   POST /api/voice/local {action:'voice-delete', id} → 删掉一个本地音色（连同它自己的样本文件，2026-10-02）
+         *   POST /api/voice/local {action:'stop'}       → 关掉引擎进程（把那几百 MB 常驻内存还回去）
+         * 为什么不在这里装引擎：装 = 建 venv + pip 下载 ~200MB + 再下 391MB 数据，塞进一个 HTTP 处理器里
+         * 既做不好进度反馈也容易超时，统一交给 `node tools/genie-setup.mjs`（--install / --download）。 */
+        if (url.pathname === '/api/voice/local') {
+          try {
+            if (req.method === 'GET') {
+              sendJson(await voiceMod.localEngineState({ force: url.searchParams.get('force') === '1' }));
+              return;
+            }
+            if (req.method === 'POST') {
+              const action = String(body.action ?? '').trim();
+              if (action === 'self-test') {
+                sendJson(await voiceMod.localEngineSelfTest({ text: body.text }));
+                return;
+              }
+              if (action === 'preview') {
+                sendJson(await voiceMod.localEnginePreview({ text: body.text, character: body.character, voiceId: body.voiceId }));
+                return;
+              }
+              /* 新建本地音色（2026-10-02）：样本两条来路，与 `POST /api/voice/voices` 完全同一套口径 ——
+               *   ① body.sampleBase64：界面选的音频文件（走 base64 JSON，见下面「为什么不用 multipart」）；
+               *   ② body.fromVoiceId：拿某个已有音色（内置/自建/复刻）的声音当样本，这里现取成 base64。
+               * 两条都没给时由 voice.js 的 saveLocalVoice 报一句人话（400）。 */
+              if (action === 'voice-create') {
+                try {
+                  /* 「为什么走 base64 JSON 而不是 multipart」（2026-10-02 定的，写清免得下次反复）：
+                   *   ① 这一层的请求体读取器只认 JSON（上面 readBody 末尾 JSON.parse，且写操作被 CSRF 防护
+                   *      要求 `Content-Type: application/json`），multipart 要另开一套解析器并绕开那道防护；
+                   *   ② 管理端转发那一层（server/index.js 的 voiceLocalRoute）也是原样透传 JSON body 的，
+                   *      multipart 得在那里再做一次流转发。
+                   * 代价是请求体放大 4/3，所以样本上限取 640KB 原始字节（桥的 MAX_BODY_BYTES 是 1MB，
+                   * 640KB → base64 约 874KB，留出余量；常量在 core/voice.js 的 MAX_LOCAL_SAMPLE_BYTES）。 */
+                  let sampleBase64 = body.sampleBase64;
+                  let kindNote = '上传的音频样本';
+                  const fromId = String(body.fromVoiceId ?? '').trim();
+                  if (!String(sampleBase64 ?? '').trim() && fromId) {
+                    const got = await voiceMod.sampleFromVoice(fromId, {});
+                    sampleBase64 = got.base64;
+                    kindNote = `样本取自音色「${got.name}」（${got.from}，${got.bytes} 字节）`;
+                  }
+                  const saved = voiceMod.saveLocalVoice({
+                    name: body.name, baseCharacter: body.baseCharacter, sampleBase64, promptText: body.promptText
+                  });
+                  if (saved?.ok) log(`控制台：本地音色已新建「${saved.voice?.name}」（基础角色=${saved.voice?.baseCharacter || '引擎默认'}，${kindNote}，${saved.voice?.sampleBytes ?? 0} 字节）`);
+                  sendJson(saved);
+                } catch (error) {
+                  sendJson({ ok: false, error: error?.message ?? String(error) }, Number(error?.statusCode) || 400);
+                }
+                return;
+              }
+              if (action === 'voice-delete') {
+                try {
+                  const r = voiceMod.deleteLocalVoice(body.id);
+                  log(`控制台：本地音色已删除「${r?.deleted?.name ?? body.id}」（id=${r?.deleted?.id ?? body.id}${r?.deleted?.sampleRemoved ? '，样本文件已删' : ''}）`);
+                  sendJson(r);
+                } catch (error) {
+                  sendJson({ ok: false, error: error?.message ?? String(error) }, Number(error?.statusCode) || 400);
+                }
+                return;
+              }
+              if (action === 'stop') {
+                sendJson({ ok: true, ...(await voiceMod.localEngineStop()) });
+                return;
+              }
+              sendJson({ ok: false, error: `未知 action：${action || '（空）'}（可用：self-test / preview / voice-create / voice-delete / stop）` }, 400);
+              return;
+            }
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+            return;
+          }
+        }
         // 音色库
         if (req.method === 'GET' && url.pathname === '/api/voice/voices') {
           sendJson(voiceMod.listVoices());
@@ -5416,7 +5708,24 @@ export function startConsoleServer() {
         }
         if (req.method === 'POST' && url.pathname === '/api/voice/voices') {
           try {
-            sendJson(voiceMod.saveCustomVoice({ name: body.name, kind: body.kind, description: body.description, sampleBase64: body.sampleBase64 }));
+            /* 2026-09-26 新增第三条建音色的路：body.fromVoiceId =「用已有音色的声音当样本」
+             * （主人要求：「用文字合成的音色也可以当样本，为 clone 发出」）。
+             * 两条老路原样不动：传了 sampleBase64 就按上传样本存（永远用用户传的那份），
+             * 什么都没传就按 description 存成文字设计音色；只有"既没有样本、又指定了 fromVoiceId"
+             * 时才去取别人的样本，且取到后按 clone 存（有样本的音色一律是复刻型）。 */
+            let sampleBase64 = body.sampleBase64;
+            let kind = body.kind;
+            let fromNote = '';
+            const fromId = String(body.fromVoiceId ?? '').trim();
+            if (!String(sampleBase64 ?? '').trim() && fromId) {
+              const got = await voiceMod.sampleFromVoice(fromId, { format: body.format });
+              sampleBase64 = got.base64;
+              kind = 'clone';
+              fromNote = `，样本取自音色「${got.name}」（${got.from}，${got.bytes} 字节）`;
+            }
+            const saved = voiceMod.saveCustomVoice({ name: body.name, kind, description: body.description, sampleBase64 });
+            if (saved?.ok) log(`控制台：音色已新建「${saved.voice?.name}」（${saved.voice?.kind === 'clone' ? '音频复刻' : '文字设计'}${fromNote}）`);
+            sendJson(saved);
           } catch (error) {
             sendJson({ ok: false, error: error?.message ?? String(error) }, 400);
           }
@@ -5427,6 +5736,35 @@ export function startConsoleServer() {
             sendJson(voiceMod.deleteCustomVoice(url.searchParams.get('id')));
           } catch (error) {
             sendJson({ ok: false, error: error?.message ?? String(error) }, 400);
+          }
+          return;
+        }
+        /* 取某个音色的**样本文件**（2026-10-01 新增，管理端「导出」按钮用）：回音频字节本身。
+         * 与 /api/voice/preview 的分工：preview 是现场合成一段试听（要请求语音服务），
+         * 这里只读磁盘上那份样本，不合成、不改库（见 voice.js 的 sampleFileOf）。
+         * 「为什么回字节、而不是把 base64 塞进 JSON」：
+         *   ① 导出要落盘的就是原文件，直传字节不必在两侧各做一次 base64 编解码（7MB 样本会膨胀成 9.3MB 字符串）；
+         *   ② 这样才带得上按**内容**判定的 Content-Type —— 管理端正是靠它决定导出的音频是 .mp3 还是 .wav。
+         * 没有样本文件的音色（内置音色、纯文字设计音色、样本已丢失的复刻音色）→ 404 + 一句中文原因，
+         * 管理端据此如实提示"只能导出配置信息"。 */
+        if (req.method === 'GET' && url.pathname === '/api/voice/sample') {
+          try {
+            const f = voiceMod.sampleFileOf(url.searchParams.get('id'));
+            /* Content-Disposition 给中文名（filename* 走 RFC 5987 百分号编码），同时留一个纯 ASCII 的
+             * filename 兜底：老浏览器/中间代理不认 filename* 时至少还有个能用的名字。
+             * 管理端不依赖这个名字（它按 Content-Type 定后缀、自己按音色名重命名），这里只是"直接拿这个
+             * URL 去下载"时也说得过去。 */
+            const zhName = `音色-${String(f.name).replace(/[\\/:*?"<>|\r\n\t]+/g, '_').slice(0, 60) || f.id}.${f.ext}`;
+            res.writeHead(200, {
+              'content-type': f.mime,
+              'content-length': String(f.bytes),
+              'content-disposition': `attachment; filename="voice-${f.id}.${f.ext}"; filename*=UTF-8''${encodeURIComponent(zhName)}`,
+              ...SECURITY_HEADERS
+            });
+            res.end(f.buffer);
+            log(`控制台：音色样本已取出「${f.name}」（${f.bytes} 字节，${f.ext}）`);
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, Number(error?.statusCode) || 400);
           }
           return;
         }
@@ -6169,7 +6507,10 @@ async function handleNapcatLoginStream(req, res, tokMod) {
   } catch { /* 老版本模块没有订阅接口也不影响首帧 */ }
 
   // 30 秒兜底重探：抓"WS 没断但登录态已被 QQ 静默作废"这种情况
-  const slow = setInterval(() => { void push(true); }, 30000);
+  /* 【2026-09-26 主人要求：SSE 探针改到 0.1 秒量级】这里原来是 30 秒一次**强探**（每次都真打 OneBot
+     的 get_login_info）。改成 1 秒一次且 force=false：真探测被 napcat-tokens 的 3 秒 TTL + 结论不变
+     不推送这两道闸收口，所以 1 秒探针只花一次内存比较，最长滞后 3 秒 —— 比原来 30 秒快一个量级。 */
+  const slow = setInterval(() => { void push(false); }, 1000);
   if (typeof slow.unref === 'function') slow.unref();
   // 20 秒注释心跳：防中间代理/浏览器掐空闲连接
   const hb = setInterval(() => {

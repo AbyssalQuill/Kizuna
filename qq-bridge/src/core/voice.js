@@ -27,6 +27,7 @@ import { STATE_DIR } from '../lib/paths.js';
 import { log } from '../lib/log.js';
 import { napcatImageFileArg, resolveStickerTmpDir } from '../lib/napcat-file.js';
 import { readJsonSafe, atomicWriteJson } from '../lib/json-fs.js';
+import * as genieEngine from '../lib/genie-tts.js';
 import { isDeliveredUnconfirmed, deliveredUnconfirmedResult, onebotErrText } from '../lib/onebot-delivery.js';
 
 const VOICE_CFG_FILE = path.join(STATE_DIR, 'voice-config.json');
@@ -34,6 +35,11 @@ const VOICE_LIB_FILE = path.join(STATE_DIR, 'voice-voices.json');
 const VOICE_USAGE_FILE = path.join(STATE_DIR, 'voice-usage.json');
 const CACHE_SUBDIR = 'voice-cache';
 const RECV_TMP_SUBDIR = 'voice-recv';
+/* 音色样本（上传的复刻样本 + design 音色的冻结锚点）自己的目录。
+ * 2026-09-26：以前它们和"发出去的音频缓存"混在 napcat 可见的临时目录里（见 cacheDir 的注释），
+ * 而样本只是桥读进来转 base64 的**输入**，不需要 napcat 读得到 —— 线上就出现过旧复刻音色的样本文件
+ * 消失（hasSample=false，一用就报"音色复刻需要上传音频样本"）。样本必须放在不会被清理的 state 下。 */
+const SAMPLE_SUBDIR = 'voice-samples';
 
 /** 官方内置音色（文档 mimo-v2.5-tts 的 voice 取值表，2026-09-15 抄录） */
 export const BUILTIN_VOICES = [
@@ -99,6 +105,28 @@ function defaults() {
       // 全语音发送模式：true = 回复一律以语音发出（不再发文字），失败自动退回文字。
       // 【默认关闭且只认严格布尔 true】字段缺失（老配置）= 关闭，行为与加这个开关之前完全一致。
       allVoice: false
+    },
+    /* 本地语音引擎（Genie / GPT-SoVITS ONNX sidecar，2026-09-28 新增）
+     * 打开后 tts / clone 两种模式改由**本机**引擎合成：不出网、不要 Key、不按字数计费，
+     * 也不吃 dailyChars 那份云端额度；design（用文字描述造音色）本地没有对应模型，仍然回落云端。
+     * 【默认关闭】老配置里没有这一段 → 行为与本功能加入之前完全一致。
+     * 字段与 src/lib/genie-tts.js 的 LOCAL_DEFAULTS 一一对应（那边的默认值是"字段缺失兜底"，
+     * 这里的默认值才是出厂值；两处都改才算改全）。 */
+    local: {
+      enabled: false,
+      engine: 'genie',
+      rootDir: '',            // 引擎根目录（默认 qq-bridge/python）
+      pythonPath: '',         // 指定解释器（默认用 rootDir/.venv 下的那个）
+      dataDir: '',            // GenieData（hubert / speaker_encoder / G2P）
+      modelsDir: '',          // 角色模型目录（每个角色一个内含 .onnx 的子目录）
+      character: '',          // 默认角色名；留空 = 用请求的音色名去匹配，匹配不到就用第一个角色
+      language: 'zh',         // zh / en / jp / kr
+      port: 4610,
+      autoStart: true,        // 需要合成时自动拉起引擎进程
+      idleShutdownMs: 600000, // 空闲多久回收进程（0 = 常驻不回收）
+      startupTimeoutMs: 120000,
+      timeoutMs: 180000,
+      fallbackToCloud: true   // 本地失败（没装/超时/报错）时回落云端；false = 失败就失败
     }
   };
 }
@@ -155,6 +183,9 @@ export function voiceConfigPublic() {
     enabled: c.enabled === true,
     defaultVoice: String(c.defaultVoice ?? ''),
     style: String(c.style ?? ''),
+    /* 2026-09-30「音色稳定模式」：为 true 时忽略每条消息的语气标注，只用上面这条全局风格。
+     * 起因见 synthesize() 里 styleText 那段注释：每条的侧写不同会把音色往不同方向拉。 */
+    stableVoice: c.stableVoice === true,
     format: String(c.format ?? 'mp3'),
     maxChars: Number(c.maxChars) > 0 ? Number(c.maxChars) : 120,
     dailyChars: Number(c.dailyChars) >= 0 ? Number(c.dailyChars) : 0,
@@ -169,6 +200,10 @@ export function voiceConfigPublic() {
       allVoice: c.send?.allVoice === true
     },
     usage: usageToday(),
+    /* 本地引擎（Genie / GPT-SoVITS，2026-09-28）：只回**配置字段**，这里**不做环境探测** ——
+     * 探测要 import genie_tts（冷启动十几秒），不能挂在"每次打开语音页都会读"的这个接口上。
+     * 引擎装没装、进程在不在、吃多少内存，由 GET /api/voice/local 单独查。 */
+    local: genieEngine.normalizeLocal(c.local),
     roles: VOICE_ROLES.map((r) => ({ ...r })),
     presets: { tokenPlanCn: DEFAULT_BASE_URL, official: ALT_BASE_URL },
     builtinVoices: BUILTIN_VOICES,
@@ -196,6 +231,9 @@ export function saveVoiceConfig(patch = {}) {
     if (next.models[role]) next.models[role].apiKey = '';
   }
   next.enabled = patch?.enabled === true;
+  /* 「音色稳定模式」：与 allVoice 同一纪律 —— **只认严格布尔**（字符串 "false" 是真值，
+   * 放进来会悄悄把开关打开），前端传的不是布尔时保持原值。 */
+  if (typeof patch?.stableVoice === 'boolean') next.stableVoice = patch.stableVoice;
   next.maxChars = Math.max(1, Math.min(MAX_TTS_CHARS, Number(patch?.maxChars) || cur.maxChars));
   next.dailyChars = Math.max(0, Number(patch?.dailyChars ?? cur.dailyChars) || 0);
   next.format = DEFAULT_FORMATS.has(String(patch?.format ?? cur.format)) ? String(patch?.format ?? cur.format) : 'mp3';
@@ -212,8 +250,31 @@ export function saveVoiceConfig(patch = {}) {
     // 前端传的不是布尔（如 undefined / 1 / "true"）时保持原值，避免一次半成品保存把开关洗掉。
     if (typeof patch.send.allVoice === 'boolean') next.send.allVoice = patch.send.allVoice;
   }
+  /* 本地引擎（Genie / GPT-SoVITS，2026-09-28）：与 allVoice / stableVoice 同一纪律 ——
+   * 布尔只认严格 true/false（字符串 "false" 是真值），数字夹到合法区间，字符串 trim。
+   * 而且**从已校验的基准上重建**（normalizeLocal(cur.local)），界面没传的字段保持原值、
+   * 顺手丢弃不认识的多余字段，避免一次半成品保存把配置洗掉或塞进垃圾键。 */
+  if (patch?.local && typeof patch.local === 'object' && !Array.isArray(patch.local)) {
+    const pl = patch.local;
+    const cl = genieEngine.normalizeLocal(cur.local);
+    for (const k of ['rootDir', 'pythonPath', 'dataDir', 'modelsDir', 'character']) {
+      if (typeof pl[k] === 'string') cl[k] = pl[k].trim();
+    }
+    if (typeof pl.enabled === 'boolean') cl.enabled = pl.enabled;
+    if (typeof pl.autoStart === 'boolean') cl.autoStart = pl.autoStart;
+    if (typeof pl.fallbackToCloud === 'boolean') cl.fallbackToCloud = pl.fallbackToCloud;
+    if (typeof pl.engine === 'string' && pl.engine.trim() === 'genie') cl.engine = 'genie';
+    if (typeof pl.language === 'string' && ['zh', 'en', 'jp', 'kr'].includes(pl.language.trim())) cl.language = pl.language.trim();
+    const port = Number(pl.port);
+    if (Number.isFinite(port)) cl.port = Math.max(1, Math.min(65535, Math.round(port)));
+    for (const k of ['idleShutdownMs', 'startupTimeoutMs', 'timeoutMs']) {
+      const n = Number(pl[k]);
+      if (Number.isFinite(n) && n >= 0) cl[k] = Math.round(n);
+    }
+    next.local = cl;
+  }
   atomicWriteJson(VOICE_CFG_FILE, next);
-  log(`[voice] 配置已保存（启用=${next.enabled}, 默认音色=${next.defaultVoice}, 单条上限=${next.maxChars}字, 每日上限=${next.dailyChars}字/天, 发语音概率=${next.send.probability}, 冷却=${Math.round(next.send.cooldownMs / 1000)}s, 全语音模式=${next.send.allVoice === true ? '开' : '关'}）`);
+  log(`[voice] 配置已保存（启用=${next.enabled}, 默认音色=${next.defaultVoice}, 单条上限=${next.maxChars}字, 每日上限=${next.dailyChars}字/天, 发语音概率=${next.send.probability}, 冷却=${Math.round(next.send.cooldownMs / 1000)}s, 全语音模式=${next.send.allVoice === true ? '开' : '关'}, 本地引擎=${next.local?.enabled === true ? '开' : '关'}）`);
   return voiceConfigPublic();
 }
 
@@ -387,6 +448,193 @@ const anchorRebuildTried = new Set();
  *   存在的意义：调用方（全语音模式）与测试可以钉死一份配置，不必依赖磁盘上的现读值。
  * @returns {{ ok:true, filePath:string, bytes:number, mime:string, cached:boolean, ms:number, finalTextPreview:string|null, mode:string }}
  */
+// ── 本地引擎（Genie / GPT-SoVITS ONNX）—— 2026-09-28 新增 ────────────────────
+/* 为什么本地这条路要单独写一段，而不是"把 chatCall 的地址换成本机"：
+ * 两边接口形状完全不同 —— 云端是 OpenAI 兼容的 /chat/completions（文本进、base64 音频出），
+ * 本地是 sidecar 的 /tts（文本进、二进制 wav 出），而且本地**没有 design（文字造音色）这一档**。
+ * 共用的部分（缓存键、缓存目录、落盘、记账、发消息）仍然留在 synthesize 里，这里只负责"取字节"。 */
+
+/** wav → mp3（本机有 ffmpeg 才转；没有就保持 wav —— 宁可文件大一点，也不能因为缺 ffmpeg 就合成不出来）。 */
+function transcodeToMp3(fromPath, toPath) {
+  try {
+    const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', fromPath, '-b:a', '96k', toPath], { encoding: 'utf8', timeout: 120000 });
+    if (r.status === 0) {
+      const st = fs.existsSync(toPath) ? fs.statSync(toPath) : null;
+      if (st && st.size > 0) return true;
+    }
+    return false;
+  } catch { return false; }
+}
+
+/**
+ * 试着用本地引擎合成一条。返回 null = "这次没走通，请按原逻辑继续（回落云端）"。
+ * 所有可预期的失败（没装/没角色/进程起不来/超时/引擎报错）都在这里消化成 null + 一行日志，
+ * 因为语音这条链的既有约定是"任何一步失败都不能吞掉一条要发出去的消息"。
+ */
+async function trySynthesizeLocal({ cfg, mode, text, voice, voiceRefPath, dir, fmt, refTextHint = '', characterHint = '' }) {
+  const local = genieEngine.normalizeLocal(cfg.local);
+  const bail = (why) => {
+    log(`[voice] 本地引擎没走通（${why}）${local.fallbackToCloud !== false ? '，本条改用云端合成' : ''}`);
+    return null;
+  };
+  try {
+    /* 快路径：引擎已经在跑就不用再花一次解释器探测（探测要 import genie_tts，冷启动几秒到十几秒）。 */
+    const st = await genieEngine.serverStatus(local).catch(() => null);
+    let probe = null;
+    if (!st?.running) {
+      probe = genieEngine.probeLocal(local);
+      if (!probe.ready) return bail(probe.reasons[0] || '引擎环境不完整（用 node tools/genie-setup.mjs 装）');
+    }
+    const rawChars = st?.health?.characters ?? probe?.characters ?? [];
+    const chars = rawChars.map((x) => (typeof x === 'string' ? x : x?.name)).filter(Boolean);
+    /* 角色选择：配置里的默认角色优先；其次"请求的音色名正好是一个本地角色"（这样 9 个内置音色名
+     * 可以直接对应成同名的本地角色目录）；再不行交给 sidecar 用它自己的顺序挑第一个。 */
+    const wanted = String(local.character || '').trim();
+    const byVoice = mode === 'tts' ? String(voice || '').trim() : '';
+    /* characterHint 只在"用某个本地音色档案合成"时非空（档案自带基础角色）——那时以它为准，
+     * 因为"角色 + 这段参考音频"才是这个音色的定义；为空时下面这一串与改动前逐字相同。 */
+    const character = (characterHint && chars.includes(characterHint)) ? characterHint
+      : ((wanted && chars.includes(wanted)) ? wanted
+        : ((byVoice && chars.includes(byVoice)) ? byVoice : wanted));
+
+    /* 复刻样本：桥这边一直是 DataURL/base64 进来的，先落到 state/genie-refs（同内容只写一次）再交给引擎。
+     * 参考文本能给就给：冻结锚点（frozen-*.mp3）用的正是 ANCHOR_TEXT 那段固定文本；
+     * 上传样本的文本我们不知道，留空（引擎侧会自行处理）。 */
+    let referenceAudio = '';
+    let referenceText = '';
+    if (mode === 'clone') {
+      const { buf } = genieEngine.decodeDataUrl(voice);
+      if (!buf?.length) return bail('复刻样本为空');
+      /* 落盘后缀跟着样本的来源走：以前硬编码 mp3，上传的是 wav 也写成 .mp3 —— 引擎按内容解码所以没炸，
+       * 但文件名骗人（排查"参考音频到底喂进去没有"时会被带偏）。冻结锚点 frozen-*.mp3 仍按 mp3 落盘。 */
+      const refExt = path.extname(String(voiceRefPath || '')).replace(/^\./, '').toLowerCase() || 'wav';
+      referenceAudio = genieEngine.writeReference(local, buf, { ext: refExt });
+      if (!referenceAudio) return bail('复刻样本落盘失败');
+      if (voiceRefPath && path.basename(String(voiceRefPath)).startsWith('frozen-')) referenceText = ANCHOR_TEXT;
+      /* 本地音色档案带的参考文本（用户填的"样本里念的是什么"）：有就用它。
+       * 与 frozen- 锚点互斥（档案样本的文件名是 lv-xxxx.<ext>，不可能以 frozen- 开头）。 */
+      if (!referenceText && refTextHint) referenceText = String(refTextHint);
+    }
+
+    /* 本地输出是 wav；只有"配置要 mp3 且本机有 ffmpeg"时才转码。
+     * 缓存键里带上 local:<engine> 与最终格式 —— 与云端那些 .mp3 缓存彻底分开，互不覆盖。 */
+    const localFormat = (fmt === 'mp3' && ffmpegAvailable()) ? 'mp3' : 'wav';
+    const sampleTag = mode === 'clone'
+      ? `sample:${crypto.createHash('sha1').update(String(voice)).digest('hex').slice(0, 12)}`
+      : character || 'auto';
+    const ck = cacheKeyFor({
+      mode, model: `local:${local.engine}`, text, voice: sampleTag,
+      style: '', description: referenceAudio ? path.basename(referenceAudio) : '', format: localFormat
+    });
+    const wavPath = path.join(dir, `${ck}.wav`);
+    const mp3Path = path.join(dir, `${ck}.mp3`);
+    const wantPath = localFormat === 'mp3' ? mp3Path : wavPath;
+    if (cfg.cacheEnabled !== false && fs.existsSync(wantPath) && fs.statSync(wantPath).size > 0) {
+      bumpUsage({ cacheHits: 1, calls: 1 });
+      log(`[voice] ${MODE_LABEL[mode]} 命中本地缓存：${path.basename(wantPath)}（${fs.statSync(wantPath).size} 字节）`);
+      return {
+        ok: true, filePath: wantPath, bytes: fs.statSync(wantPath).size,
+        mime: localFormat === 'mp3' ? 'audio/mpeg' : 'audio/wav',
+        cached: true, ms: 0, finalTextPreview: null, mode, engine: 'local', character: character || ''
+      };
+    }
+
+    const r = await genieEngine.synthesizeLocal({
+      cfg: local, text, character, referenceAudio, referenceText, format: 'wav'
+    });
+    fs.writeFileSync(wavPath, r.buf);
+    let outPath = wavPath;
+    let bytes = r.buf.length;
+    let mime = 'audio/wav';
+    if (localFormat === 'mp3' && transcodeToMp3(wavPath, mp3Path)) {
+      outPath = mp3Path;
+      bytes = fs.statSync(mp3Path).size;
+      mime = 'audio/mpeg';
+      try { fs.unlinkSync(wavPath); } catch { /* 删不掉就留着，prune 会回收 */ }
+    }
+    /* 记账：本地合成不吃云端额度，所以**只记次数不记字数** ——
+     * chars 是 dailyChars 那份云端配额的计量口径，本地要是也往里加，之后切回云端时会平白被挡。 */
+    bumpUsage({ calls: 1 });
+    pruneCache(dir, Math.max(20, Number(cfg.maxCacheFiles) || 300));
+    log(`[voice] ${MODE_LABEL[mode]} 完成（本地引擎 ${r.character}）：${text.length} 字 → ${bytes} 字节（${r.ms}ms${r.serverStarted ? '，含引擎冷启动' : ''}，引擎常驻内存 ${r.rssMb ?? '?'}MB）`);
+    return {
+      ok: true, filePath: outPath, bytes, mime, cached: false, ms: r.ms,
+      finalTextPreview: null, mode, engine: 'local', character: r.character
+    };
+  } catch (e) {
+    return bail(`${e?.message ?? e}`);
+  }
+}
+
+/** 本地引擎状态（管理端「语音」页用；force = 跳过探测缓存）。 */
+export async function localEngineState({ force = false } = {}) {
+  const st = await genieEngine.localState(voiceConfig().local ?? {}, { force });
+  /* 本地音色档案随探测一起回（2026-10-02 新增）：界面「我的音色」列读的就是 `localVoices`。
+   * **刻意不混进 `characters`** —— 那是引擎 models/ 下的真实角色模型目录（几百 MB 的 .onnx），
+   * 与"用户自建的一个音色"是两种东西；混在一起会让「默认角色」下拉列出选不了的东西。 */
+  return { ...st, localVoices: listLocalVoices() };
+}
+
+/** 本地引擎自检：拉起进程 + 合成一句短文本，回启动耗时、合成耗时与内存读数。 */
+export async function localEngineSelfTest({ text = '本地引擎自检，一二三四五。' } = {}) {
+  const local = genieEngine.normalizeLocal(voiceConfig().local ?? {});
+  const t0 = Date.now();
+  const r = await genieEngine.synthesizeLocal({ cfg: local, text, format: 'wav' });
+  const st = await genieEngine.serverStatus(local);
+  return {
+    ok: true, character: r.character, ms: r.ms, totalMs: Date.now() - t0,
+    bytes: r.buf.length, serverStarted: r.serverStarted, rssMb: r.rssMb ?? st.rssMb, pid: st.pid,
+    text
+  };
+}
+
+/** 试听：用指定的本地角色合成一句短文本，把音频直接回给界面（管理端本地卡片上的「试听」）。
+ * 为什么单独做一个：self-test 的文本是写死的、也没法指定角色 —— 而"选角色/挑音色"这件事
+ * 必须能当场听出来才算真的选过。出错一律抛给调用方（界面要看到原因），不在这里静默回落云端。
+ *
+ * 2026-10-02 扩展：带上 `voiceId` = 用**本地音色档案**试听（而不是光用角色）。
+ * 仍然是既有那条 clone 路（角色 + 参考音频），只是参考音频直接用档案的样本文件路径 ——
+ * 引擎自己按路径读，不必先拷进 state/genie-refs（那份缓存是给"云端传来的 base64 样本"用的）。 */
+export async function localEnginePreview({ text = '', character = '', voiceId = '' } = {}) {
+  const local = genieEngine.normalizeLocal(voiceConfig().local ?? {});
+  const want = String(text || '').trim() || '你好，我是本地语音引擎。';
+  let wantChar = String(character || '').trim();
+  let rec = null;
+  let referenceAudio = '';
+  let referenceText = '';
+  const wantId = String(voiceId ?? '').trim();
+  if (wantId) {
+    rec = findLocalVoice(wantId);
+    if (!rec) throw new Error(`本地音色「${wantId}」不在桥的档案里（可能刚被删掉，或这个档案在另一侧的桥上）：点「检测状态」刷新一下列表`);
+    const p = localVoiceSamplePath(rec);
+    if (!p || !fs.existsSync(p)) throw new Error(`本地音色「${rec.name}」的样本文件已丢失（${p || '桥侧未记录文件名'}）：在「我的音色」里删掉它重新建一个`);
+    referenceAudio = p;
+    referenceText = String(rec.promptText ?? '');
+    // 档案自带基础角色时以它为准（"角色 + 这段参考音频"才是这个音色的定义）
+    wantChar = String(rec.baseCharacter || '').trim() || wantChar;
+  }
+  const t0 = Date.now();
+  const r = await genieEngine.synthesizeLocal({
+    cfg: local, text: want, character: wantChar, referenceAudio, referenceText, format: 'wav'
+  });
+  const st = await genieEngine.serverStatus(local).catch(() => null);
+  return {
+    ok: true, character: r.character, ms: r.ms, totalMs: Date.now() - t0,
+    bytes: r.buf.length, mime: 'audio/wav', audioBase64: r.buf.toString('base64'),
+    rssMb: r.rssMb ?? st?.rssMb ?? null, text: want,
+    voiceId: rec?.id ?? '', voiceName: rec?.name ?? '',
+    reference: referenceAudio ? path.basename(referenceAudio) : ''
+  };
+}
+
+/** 关掉本地引擎进程（管理端"卸载/回收"按钮、桥退出时用）。
+ * 带上 cfg：`stopServer` 对"不是本进程拉起的引擎"（上一次桥崩了留下的）要靠路径算出
+ * 端口才能请它退出，configuration 这里给全，别让它退回默认根目录去猜。 */
+export async function localEngineStop() {
+  const cfg = voiceConfig().local || {};
+  return genieEngine.stopServer({ cfg });
+}
+
 export async function synthesize({
   text, mode = 'tts', voice = '', style = '', description = '', sampleBase64 = '', format = '', cfg: cfgIn = null
 } = {}) {
@@ -408,13 +656,35 @@ export async function synthesize({
   // 这次合成用的到底是"哪一种音色来源" + 具体是哪个文件：**只进日志**，是线上定位音色漂移的唯一证据
   let voiceSrc = '';
   let voiceRefPath = '';
+  /* 2026-10-02：本次用的是「本地音色档案」（本地这侧自建的音色）时，把它的参考文本与基础角色
+   * 一并带给本地那条路（见 trySynthesizeLocal 的 refTextHint / characterHint）。非档案路径下两者恒为空串。 */
+  let localRefText = '';
+  let localCharacterHint = '';
   // 2026-09-18：本音色是从音色库里的**描述型自建音色**解析来的，记一下 —— 合成成功后要把它冻结
   let designRec = null;
   if (m === 'tts') {
     const wanted = resolvedVoice || String(cfg.defaultVoice ?? '').trim();
     if (wanted && !BUILTIN_VOICES.some((v) => v.id === wanted)) {
-      const hit = findCustomVoice(wanted);
-      if (hit?.kind === 'clone' && hit.samplePath && fs.existsSync(hit.samplePath)) {
+      /* 2026-10-02：先看是不是**本地音色档案**（本地这侧新建的音色，id 形如 lv-xxxx，或直接用名字）。
+       * 命中就按 clone 处理（角色 + 这份样本）—— 本地引擎开着时由本机合成；本地不可用而回落云端时，
+       * 送出去的也是同一段样本（云端 clone），不会突然变成"另一个人的声音"。
+       * 放在 findCustomVoice 之前：两类音色 id 前缀不重叠（lv- / design- / clone-），先问哪个都不冲突，
+       * 但档案是"用户刚在本地这侧建的那个"，优先按它走更合直觉。 */
+      const lv = findLocalVoice(wanted);
+      const hit = lv ? null : findCustomVoice(wanted);
+      if (lv) {
+        const lvPath = localVoiceSamplePath(lv);
+        if (!lvPath || !fs.existsSync(lvPath)) {
+          throw new Error(`默认音色「${wanted}」的样本文件在桥侧已丢失：到管理端「语音」页的本地引擎卡里删掉它重建，或改选别的默认音色`);
+        }
+        m = 'clone';
+        wantSample = fs.readFileSync(lvPath).toString('base64');
+        voiceSrc = '本地音色档案';
+        voiceRefPath = lvPath;
+        localRefText = String(lv.promptText ?? '');
+        localCharacterHint = String(lv.baseCharacter ?? '').trim();
+        resolvedVoice = '';
+      } else if (hit?.kind === 'clone' && hit.samplePath && fs.existsSync(hit.samplePath)) {
         m = 'clone';
         wantSample = fs.readFileSync(hit.samplePath).toString('base64');
         voiceSrc = '音色库复刻样本';
@@ -448,9 +718,9 @@ export async function synthesize({
           resolvedVoice = '';
           designRec = hit;
         }
-      } else if (/^(design|clone)-/i.test(wanted)) {
-        // 以我们自己的自建音色 id 前缀开头却查不到 → 多半是音色被删了，给一句人话而不是 400
-        throw new Error(`默认音色「${wanted}」在音色库里已经不存在了（可能刚被删除）：请到管理端「语音」页重新选一个默认音色`);
+      } else if (/^(design|clone|lv)-/i.test(wanted)) {
+        // 以我们自己的音色 id 前缀开头却查不到 → 多半是音色被删了，给一句人话而不是 400
+        throw new Error(`默认音色「${wanted}」已经不存在了（可能刚被删除）：请到管理端「语音」页重新选一个默认音色`);
       }
     }
   }
@@ -462,7 +732,20 @@ export async function synthesize({
   if (m === 'design' && !wantDesc.trim()) throw new Error('音色设计需要一段音色描述文字');
   // 复刻模型要求 audio.voice 是 DataURL（裸 base64 会被 400 拒），这里统一归一化
   const cloneVoice = m === 'clone' ? toVoiceDataUrl(useVoice) : '';
-  const styleText = String(style || cfg.style || '').trim();
+  /* 2026-09-30 修「音色抖动」，线上日志给了决定性证据：7 次合成的参考样本 sha1 完全一致
+   * （`样本来源=冻结样本(fixed-text)`，112632 字节，锚点稳定生效），但**每条的风格都不一样**
+   * （试试好不好使 / 随口问问 / 小声说一句 / 压着嗓子说 / 小声嘟哽）。
+   * 官方文档明确说合成文本与风格都会影响音色（见上面 ANCHOR_TEXT 那段说明），风格换来换去
+   * 就等于每次都把音色往不同方向拉一把。
+   * 而原先 `style || cfg.style` 的写法还有一个更直接的毛病：**只要模型给了语气标注，全局风格就被整条丢掉** ——
+   * 于是主人特意写在全局风格里的那句「尽量音色相同」在绝大多数消息上根本没送到服务端，
+   * 稳定化手段自己失效了。
+   * 现在改为**全局风格 + 本条语气标注**（全局在前、本条在后，模型对靠后的指令更敏感），
+   * 两条都在时用「；」连接；只有一条时就是那一条（此时与原来完全一致）。
+   * 另外支持 `stableVoice: true`（管理端「语音」页的「音色稳定模式」开关）：为 true 时忽略每条消息的
+   * 语气标注，只用全局风格 —— 这是"宁可少点情绪、也要每条都一样"的那一档。 */
+  const styleFromMessage = cfg.stableVoice === true ? '' : String(style ?? '').trim();
+  const styleText = [String(cfg.style ?? '').trim(), styleFromMessage].filter(Boolean).join('；');
 
   /* 2026-09-18 修「音色抖动」的关键日志：每次合成到底用了哪种模式、哪个参考样本、样本哈希是多少。
    * 线上连发三条语音，看这行就知道该怎么定论：
@@ -494,8 +777,30 @@ export async function synthesize({
     const st = fs.statSync(filePath);
     if (st.size > 0) {
       bumpUsage({ cacheHits: 1, calls: 1 });
-      log(`[voice] ${MODE_LABEL[m]} 命中缓存：${path.basename(filePath)}（${st.size} 字节）`);
-      return { ok: true, filePath, bytes: st.size, mime: fmt === 'wav' ? 'audio/wav' : 'audio/mpeg', cached: true, ms: 0, finalTextPreview: null, mode: m };
+      /* 2026-09-26：老缓存里可能留着带回声的版本（修复前生成的，比如那句"我爱你"= 8.8 秒）。
+       * 命中缓存也过一遍裁剪，否则同一句话重发又会把"奇怪的尾音"放出去。 */
+      const fixedHit = trimEchoTail(filePath, log, { chars: clean.length });
+      const hitBytes = fixedHit ? fixedHit.bytes : st.size;
+      log(`[voice] ${MODE_LABEL[m]} 命中缓存：${path.basename(filePath)}（${hitBytes} 字节${fixedHit ? '，已裁回声' : ''}）`);
+      return { ok: true, filePath, bytes: hitBytes, mime: fmt === 'wav' ? 'audio/wav' : 'audio/mpeg', cached: true, ms: 0, finalTextPreview: null, mode: m };
+    }
+  }
+
+  /* ── 本地引擎优先（2026-09-28）─────────────────────────────────────────────
+   * 位置有讲究，三点原因：
+   *   ① 在"云端缓存命中"**之后** —— 缓存仍然是最快的路径，且老缓存能被继续复用；
+   *   ② 在"每日额度"**之前** —— dailyChars 是云端按字数计费的闸门，本地合成不花那份钱，
+   *      不该被它挡住（本地这条路自己只记次数不记字数，见 trySynthesizeLocal）；
+   *   ③ design 模式**不试**本地：文字描述造音色是云端 voicedesign 模型的能力，本地没有对应模型。 */
+  const localCfg = genieEngine.normalizeLocal(cfg.local);
+  if (localCfg.enabled === true && m !== 'design') {
+    const localRes = await trySynthesizeLocal({ cfg, mode: m, text: clean, voice: useVoice, voiceRefPath, dir, fmt, refTextHint: localRefText, characterHint: localCharacterHint });
+    if (localRes) return localRes;
+    /* 本地没走通、而且管理端明确关掉了「失败回落云端」：这里必须**报错**，不能悄悄改走云端 ——
+     * 关这个开关的人要的就是"宁可这条语音不发（退回文字），也不要去动云端额度/密钥"。
+     * 注意方向：这条错误会被上层按既有约定降级成文字发送，绝不会吞掉消息。 */
+    if (localCfg.fallbackToCloud === false) {
+      throw new Error('本地语音引擎不可用，且已关闭「失败回落云端」（管理端「语音」页可改）；本条按失败处理，改回云端或修好引擎后重试');
     }
   }
 
@@ -518,6 +823,11 @@ export async function synthesize({
   const buf = Buffer.from(b64, 'base64');
   if (!buf.length) throw new Error('语音服务返回的音频为空');
   fs.writeFileSync(filePath, buf);
+  /* 落盘后立刻裁回声（见 trimEchoTail 上方说明）：缓存文件本身就被修干净，
+   * 之后命中缓存重发的也是裁过的版本；裁不动时 outBytes 就是原始大小。 */
+  let outBytes = buf.length;
+  const trimmedEcho = trimEchoTail(filePath, log, { chars: clean.length });
+  if (trimmedEcho) outBytes = trimmedEcho.bytes;
   /* 2026-09-18 修「音色小幅漂移」：第一次按描述设计出来的音色，立刻把这段音频冻成参考样本，
    * 之后每次合成都会走 clone 复用同一个锚点 —— 否则每次都是"重新设计一个音色"，必然轻微漂移。
    * 放在这里（而不是只放在 synthesizeWithSavedVoice）是因为全语音模式走的是 synthesize({text,cfg})
@@ -547,11 +857,11 @@ export async function synthesize({
   bumpUsage({ chars: clean.length, calls: 1 });
   pruneCache(dir, Math.max(20, Number(cfg.maxCacheFiles) || 300));
   const ms = Date.now() - t0;
-  log(`[voice] ${MODE_LABEL[m]} 完成：${clean.length} 字 → ${buf.length} 字节（${ms}ms，音色=${m === 'clone' ? '样本复刻' : useVoice}）`);
+  log(`[voice] ${MODE_LABEL[m]} 完成：${clean.length} 字 → ${outBytes} 字节（${ms}ms，音色=${m === 'clone' ? '样本复刻' : useVoice}${trimmedEcho ? `，已裁回声 ${trimmedEcho.tail.toFixed(1)} 秒` : ''}）`);
   return {
     ok: true,
     filePath,
-    bytes: buf.length,
+    bytes: outBytes,
     mime: fmt === 'wav' ? 'audio/wav' : 'audio/mpeg',
     cached: false,
     ms,
@@ -561,6 +871,63 @@ export async function synthesize({
 }
 
 // ── 识别 ────────────────────────────────────────────────────────────────────
+
+// ── 合成结果裁回声（2026-09-26）──────────────────────────────────────────────
+// 线上症状：主人说"语音那个『我爱你』多了奇怪的尾音"。实测那条 3 字语音有 8.8 秒
+// （缓存文件 603d7583…mp3）：前 1.1 秒是正文，接着 3.7 秒静音，最后 4.0 秒又是人声
+// ——复刻接口偶发把参考样本的尾巴接在正文后面。下面按可测量的特征裁掉这一段。
+let _ffmpegOn = null;
+
+/** ffmpeg/ffprobe 是否可用。只探测一次并缓存；缺了就所有裁剪静默跳过（不影响发语音）。 */
+function ffmpegAvailable() {
+  if (_ffmpegOn !== null) return _ffmpegOn;
+  try {
+    _ffmpegOn = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', timeout: 5000 }).status === 0
+      && spawnSync('ffprobe', ['-version'], { encoding: 'utf8', timeout: 5000 }).status === 0;
+  } catch { _ffmpegOn = false; }
+  if (!_ffmpegOn) log('[voice] 本机没有 ffmpeg/ffprobe，合成结果不做回声裁剪（只影响音质，不影响发送）');
+  return _ffmpegOn;
+}
+
+/**
+ * 裁掉「正文 + 长静音 + 回声尾巴」。
+ * 判据只用四件可测量的事，避免误伤正常长句：末尾那段静音 ≥0.9 秒、静音之后还有 ≥1.2 秒音频、
+ * 尾巴比正文本身更长、且头部时长按字数算已达正常语速（说明正文已经念完）。命中就 `-c copy` 截断（不重编码，音质无损）；返回 null 表示没裁。
+ * 任何一步失败都原样放行 —— 修音质绝不能挡掉一条要发出去的语音。
+ */
+export function trimEchoTail(filePath, logFn = log, { chars = 0 } = {}) {
+  if (!ffmpegAvailable()) return null;
+  if (path.extname(filePath).toLowerCase() !== '.mp3') return null;
+  try {
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filePath], { encoding: 'utf8', timeout: 15000 });
+    const dur = Number(String(probe.stdout ?? '').trim());
+    if (!Number.isFinite(dur) || dur < 2.2) return null;
+    /* 注意别加 `-v error`：silencedetect 的检测结果走 info 级 stderr，压掉就什么都读不到 */
+    const scan = spawnSync('ffmpeg', ['-hide_banner', '-i', filePath, '-af', 'silencedetect=noise=-45dB:d=0.9', '-f', 'null', '-'], { encoding: 'utf8', timeout: 20000 });
+    const err = String(scan.stderr ?? '');
+    const starts = [...err.matchAll(/silence_start:\s*([\d.]+)/g)].map((m) => Number(m[1]));
+    const ends = [...err.matchAll(/silence_end:\s*([\d.]+)/g)].map((m) => Number(m[1]));
+    if (!starts.length) return null;
+    const head = starts[starts.length - 1];
+    const gapEnd = ends.length && ends[ends.length - 1] > head ? ends[ends.length - 1] : null;
+    if (gapEnd === null) return null;                 // 静音一直持续到文件末尾 = 单纯的长尾静音，不动
+    const tail = dur - gapEnd;
+    if (head < 0.3 || tail < 1.2 || tail <= head) return null;
+    /* 再加一道"正文已经念完"的判据，避免误伤"短促开头 + 长停顿 + 后半句"的正常念法：
+     * 头部时长 ÷ 字数 ≥ 0.15 秒/字（正常语速下限）时，这个长度足够念完整句，
+     * 静音后面的那段就只可能是回声。字数未知（chars=0）时不启用这条。 */
+    if (chars > 0 && head < chars * 0.15) return null;
+    const cut = head + 0.12;                          // 留一点点余量，避免切口蹭到最后一个字的尾音
+    const tmp = `${filePath}.trim.mp3`;
+    const run = spawnSync('ffmpeg', ['-hide_banner', '-y', '-i', filePath, '-t', cut.toFixed(3), '-c', 'copy', '-f', 'mp3', tmp], { timeout: 20000, encoding: 'utf8' });
+    if (run.status !== 0 || !fs.existsSync(tmp)) { try { fs.unlinkSync(tmp); } catch { /* 忽略 */ } return null; }
+    const bytes = fs.statSync(tmp).size;
+    if (!bytes) { try { fs.unlinkSync(tmp); } catch { /* 忽略 */ } return null; }
+    fs.renameSync(tmp, filePath);
+    logFn(`[voice] 合成结果尾部是参考样本回声，已裁掉 ${tail.toFixed(1)} 秒（${dur.toFixed(1)} → ${(cut).toFixed(1)} 秒）：${path.basename(filePath)}`);
+    return { bytes, cut, dur, tail };
+  } catch { return null; }
+}
 
 function sniffAudio(buf) {
   if (buf.length >= 3 && (buf.slice(0, 3).toString('latin1') === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0))) return { mime: 'audio/mpeg', format: 'mp3' };
@@ -649,6 +1016,9 @@ function findCustomVoice(idOrName) {
 }
 
 export function listVoices() {
+  /* 顺手把样本目录迁一次（老位置在 napcat 的临时目录下，会被清理带走）。
+   * 「为什么挂在这里」：管理端一打开语音页就会调它，而那时 cfgRef 一定已就绪（cacheDir 才算得准）。 */
+  migrateSamplesOnce();
   const lib = loadVoiceLib();
   return {
     ok: true,
@@ -670,9 +1040,104 @@ export function listVoices() {
   };
 }
 
+/* ── 音色的样本文件（导出用，2026-10-01 新增）──────────────────────────────────
+ * 需求（主人原话）：给"生成的音色"一个导出按钮，支持选择导出文件夹，然后保存到本地。
+ * 与既有两条路的区别（**那两条一行都没动**）：
+ *   · /api/voice/preview → 现场合成一段试听音频（要请求语音服务、要花钱、要等几秒到十几秒）；
+ *   · sampleFromVoice()  → 把任意音色的声音取来当**新音色**的复刻样本（内置音色会现录一段）。
+ * 导出要的是"我当初存进去的那个文件"，所以这里：**只读 samplePath 指向的样本文件，
+ * 不合成、不冻结、不改动音色库**（一次 readFileSync 既拿内容又拿准确长度）。
+ * 没有样本文件的音色一律抛错 —— 内置音色（声音由语音服务现合成）、纯文字设计音色（本就没有文件）、
+ * 样本已丢失的复刻音色 —— 由管理端如实告诉用户「只能导出配置信息」，
+ * **绝不现场合成一段来冒充样本**（那会是"看起来导出成功、其实是别的声音"）。
+ * 错误带 statusCode：404 = 找不到这个音色/它没有样本文件（HTTP 语义上就是"没有这个文件"），
+ * 400 = 只缺参数。console-server 原样取用（与本文件 readBody 的 statusCode 同一套用法）。 */
+export function sampleFileOf(idOrName) {
+  const want = String(idOrName ?? '').trim();
+  if (!want) {
+    const err = new Error('缺少参数 id：请指明要导出哪个音色的样本');
+    err.statusCode = 400;
+    throw err;
+  }
+  const make404 = (why) => { const err = new Error(why); err.statusCode = 404; return err; };
+  const hit = findCustomVoice(want);
+  if (!hit) {
+    if (BUILTIN_VOICES.some((v) => v.id === want)) {
+      throw make404(`「${want}」是内置音色：它的声音由语音服务现合成，桥侧没有样本文件，只能导出配置信息`);
+    }
+    throw make404(`音色库里没有「${want}」这个音色（可能是刚被删除，刷新一下再看）`);
+  }
+  const p = String(hit.samplePath ?? '');
+  if (!p || !fs.existsSync(p)) {
+    throw make404(hit.kind === 'clone'
+      ? `音色「${hit.name}」的样本文件已丢失（${p || '桥侧未记录样本路径'}），取不到音频：只能导出配置信息`
+      : `音色「${hit.name}」是文字设计音色，桥侧没有样本文件：只能导出配置信息`);
+  }
+  const buf = fs.readFileSync(p);
+  /* 后缀与 MIME 以**文件内容**为准（sniffAudio），不信扩展名：历史上样本文件被搬过目录，
+   * 名字与内容对不上的情况是有的；管理端正是拿这个 Content-Type 决定导出成 .mp3 还是 .wav。 */
+  const sniff = sniffAudio(buf);
+  return {
+    id: hit.id,
+    name: hit.name,
+    kind: hit.kind,
+    path: p,
+    bytes: buf.length,
+    mime: sniff?.mime ?? 'audio/mpeg',
+    ext: sniff?.format || (path.extname(p).replace(/^\./, '') || 'mp3'),
+    buffer: buf
+  };
+}
+
+/** 旧样本目录（迁移来源）：仍然按 napcat 可见的那个 cacheDir 算。
+ *  `cfgRef` 还没挂上时返回空串 —— 那种情况下 cacheDir() 会落到 state 下（也就是**新**目录），
+ *  拿它当"旧位置"去搬家是错的；此时迁移函数会直接放弃并且**不记账**，等下次再试。 */
+function legacySampleDir() {
+  if (!cfgRef) return '';
+  try { return path.join(cacheDir(), 'samples'); } catch { return ''; }
+}
+
+/** 一次性迁移（每个进程只跑一次）：把旧目录里的样本搬进 state/voice-samples，
+ *  并把音色库里指向旧路径的 samplePath / frozenSamplePath 改写成新路径。
+ *  「为什么必须改写」：`frozenSampleOf()` 是"路径不存在就当作没有锚点"，不改写等于把已有的锚点全丢掉，
+ *  于是每次合成都退回"现设计" —— 那正是主人最不想要的音色漂移。
+ *  「为什么只搬存在过的」：两处都找不到文件的条目保持原样，界面如实显示 hasSample=false，
+ *  不假装修好了（那个音色确实需要重新上传样本）。 */
+let samplesMigrated = false;
+function migrateSamplesOnce() {
+  if (samplesMigrated) return;
+  try {
+    const legacy = legacySampleDir();
+    if (!legacy) return;   // 配置尚未就绪：这次什么都不做，也不记账，等下一次调用
+    samplesMigrated = true;
+    const next = path.join(STATE_DIR, SAMPLE_SUBDIR);
+    if (legacy === next || !fs.existsSync(legacy)) return;
+    ensureDir(next);
+    let moved = 0;
+    for (const f of fs.readdirSync(legacy)) {
+      try { fs.renameSync(path.join(legacy, f), path.join(next, f)); moved += 1; } catch { /* 单个文件失败不影响其它 */ }
+    }
+    const lib = loadVoiceLib();
+    let rewritten = 0;
+    for (const v of lib.voices) {
+      for (const k of ['samplePath', 'frozenSamplePath']) {
+        const p = String(v?.[k] ?? '');
+        if (!p) continue;
+        const dest = path.join(next, path.basename(p));
+        if (!fs.existsSync(p) && fs.existsSync(dest)) { v[k] = dest; rewritten += 1; }
+      }
+    }
+    if (rewritten) atomicWriteJson(VOICE_LIB_FILE, lib);
+    log(`[voice] 音色样本已迁到 ${next}（搬移 ${moved} 个文件，改写库内路径 ${rewritten} 处）`);
+  } catch (e) {
+    log(`[voice] 音色样本迁移失败（不影响本次使用，样本仍在原处）：${e?.message ?? e}`);
+  }
+}
+
+/** 音色样本目录：上传的复刻样本 + design 音色的冻结锚点都放这里（state 下，不会被 napcat 临时目录清理带走）。 */
 function sampleDir() {
-  const dir = path.join(ensureDir(cacheDir()), 'samples');
-  ensureDir(dir);
+  migrateSamplesOnce();
+  const dir = ensureDir(path.join(STATE_DIR, SAMPLE_SUBDIR));
   return dir;
 }
 
@@ -727,6 +1192,162 @@ export function deleteCustomVoice(id) {
     log(`[voice] 默认音色「${def}」已被删除，自动退回内置音色 冰糖`);
   }
   return { ok: true };
+}
+
+/* ── 本地音色档案（2026-10-02 新增）─────────────────────────────────────────────
+ * 需求（使用方原话）：「我先用云端 tts 合成样本，然后用本地的克隆这样可行吗，改造它的配置和云端那样
+ * 可上传样本音频并新建角色」—— 也就是本地这侧也要能"传一段音频 → 起个名字 → 存成一个音色"。
+ *
+ * 一个档案 = { 名字, 参考音频文件, 基础角色, 可选参考文本 }。**不新增任何合成路径**：
+ * 用它合成 = 既有 clone 那条路（本地角色 + 参考音频），只是参考音频由本机这份样本文件直接给出。
+ *
+ * 「为什么不塞进引擎根 models/」：models/ 下每个目录都是引擎**真实的角色模型**（几百 MB 的 .onnx），
+ * 界面上的「默认角色」列的就是它；把样本丢进去会让"角色清单"变成两种东西的混合。
+ * 样本与元数据都落在桥自己的 state/ 下：state/local-voices/<id>.<ext> + state/local-voices.json，
+ * 与既有的 state/genie-refs（引擎参考样本缓存）、state/voice-samples（云端音色样本）同一风格。
+ *
+ * 命名与幂等（规则写清，免得下次靠猜）：
+ *   · id 由桥生成（lv-<8 位十六进制>），样本文件名 = <id>.<ext>，ext 按**内容**嗅探（mp3/wav）——
+ *     同一个档案永远指向同一个文件，重复创建不会留下"半新半旧"的档案；
+ *   · **同名（trim 后完全相同）直接报错（409）**，不静默覆盖 —— 覆盖会悄悄改掉用户正在用的那个音色；
+ *   · 删除只删这个档案自己的样本文件（文件名按 basename 拼回本目录，且删之前再确认它就在这个目录里），
+ *     别人的一个不碰；删掉的正巧是当前默认音色时，按 deleteCustomVoice 的老规矩退回内置「冰糖」。
+ */
+const LOCAL_VOICE_LIB_FILE = path.join(STATE_DIR, 'local-voices.json');
+const LOCAL_VOICE_SUBDIR = 'local-voices';
+/* 样本大小上限：桥控制台的单次请求体上限是 1MB（console-server.js 的 readBody，MAX_BODY_BYTES），
+ * 而界面走的是 base64 JSON 上传（multipart 要另开一套解析器，还会撞上"写操作必须是 application/json"
+ * 那道 CSRF 防护，见 console-server.js），base64 会把字节放大 4/3 —— 所以原始样本封在 640KB：
+ * 约 20 秒 16kHz 单声道 wav、约 50 秒 96kbps mp3，做复刻参考够用；再大的样本硬塞会撞 413。 */
+const MAX_LOCAL_SAMPLE_BYTES = 640 * 1024;
+const MAX_LOCAL_VOICE_NAME = 40;
+
+/** 本地音色的样本目录（**只算路径，不建目录** —— 列清单不该有副作用；写的时候才 ensureDir）。 */
+function localVoiceDir() {
+  return path.join(STATE_DIR, LOCAL_VOICE_SUBDIR);
+}
+
+function loadLocalVoiceLib() {
+  const j = readJsonSafe(LOCAL_VOICE_LIB_FILE, null);
+  return (j && Array.isArray(j.voices)) ? j : { voices: [] };
+}
+
+/** 元数据里存的是**文件名**（不是绝对路径）：档案跟着桥的 state 一起搬，天然挡住路径穿越。 */
+function localVoiceSamplePath(rec) {
+  const f = path.basename(String(rec?.sampleFile ?? ''));
+  return f ? path.join(localVoiceDir(), f) : '';
+}
+
+/** 给界面的形状（不含绝对路径：界面用不到，也不该由界面拼路径）。 */
+function localVoicePublic(rec) {
+  const p = localVoiceSamplePath(rec);
+  return {
+    id: rec.id,
+    name: rec.name,
+    baseCharacter: rec.baseCharacter ?? '',
+    sampleFile: String(rec.sampleFile ?? ''),
+    sampleBytes: Number(rec.sampleBytes) || 0,
+    sampleExt: rec.sampleExt ?? '',
+    promptText: rec.promptText ?? '',
+    createdAt: rec.createdAt ?? '',
+    hasSample: Boolean(p && fs.existsSync(p))
+  };
+}
+
+/** 列出所有本地音色档案（`GET /api/voice/local` 的 localVoices 就是它）。 */
+export function listLocalVoices() {
+  return loadLocalVoiceLib().voices.map(localVoicePublic);
+}
+
+/** 按 id 或名字找一个档案（找不到返回 null）。读的是**磁盘上的库**，所以刚建完就能用。 */
+function findLocalVoice(idOrName) {
+  const want = String(idOrName ?? '').trim();
+  if (!want) return null;
+  return loadLocalVoiceLib().voices.find((v) => v?.id === want || (v?.name && v.name === want)) ?? null;
+}
+
+/**
+ * 新建一个本地音色档案。样本两条来路（与云端「新建音色」完全同一套口径）：
+ *   · sampleBase64 —— 界面上传的文件（或界面刚从云端取来的那段音频）；
+ *   · 都没有则报错；**fromVoiceId 那条不在这里**，由 console-server 先取成 base64 再传进来
+ *     （与 `POST /api/voice/voices` 那段一字不差的同一段逻辑，这样本函数保持同步、可单测）。
+ * @returns {{ ok:true, voice:object, voices:object[] }}
+ */
+export function saveLocalVoice({ name = '', baseCharacter = '', sampleBase64 = '', promptText = '' } = {}) {
+  const nm = String(name ?? '').trim();
+  if (!nm) throw new Error('本地音色名字不能为空');
+  if (nm.length > MAX_LOCAL_VOICE_NAME) throw new Error(`本地音色名字太长（${nm.length} 字，上限 ${MAX_LOCAL_VOICE_NAME} 字）`);
+  if (/[\\/:*?"<>|\r\n\t]/.test(nm)) throw new Error('本地音色名字里不能有 \\ / : * ? " < > | 这些字符');
+  const lib = loadLocalVoiceLib();
+  const dup = lib.voices.find((v) => String(v?.name ?? '').trim() === nm);
+  if (dup) {
+    const err = new Error(`已经有一个叫「${nm}」的本地音色了（id=${dup.id}）：换个名字，或先在「我的音色」里删掉它`);
+    err.statusCode = 409;
+    throw err;
+  }
+  // 基础角色：给了就必须是引擎里真实存在的角色（引擎没装、列不出角色时不拦，先存下来）
+  const base = String(baseCharacter ?? '').trim();
+  if (base) {
+    const chars = genieEngine.probeLocal(genieEngine.normalizeLocal(voiceConfig().local ?? {})).characters ?? [];
+    if (chars.length && !chars.includes(base)) {
+      throw new Error(`引擎里没有「${base}」这个角色（现有：${chars.join('、')}）：改选一个，或先用 node tools/genie-setup.mjs --add-character 装上它`);
+    }
+  }
+  const raw = String(sampleBase64 ?? '').replace(/^data:[^,]+,/, '').trim();
+  if (!raw) throw new Error('本地音色需要一个音频样本：上传一段 mp3/wav，或选一个已有音色当样本');
+  const buf = Buffer.from(raw, 'base64');
+  if (!buf.length) throw new Error('音频样本解析失败');
+  if (buf.length > MAX_LOCAL_SAMPLE_BYTES) {
+    throw new Error(`样本太大（${(buf.length / 1024).toFixed(0)}KB，上限 ${MAX_LOCAL_SAMPLE_BYTES / 1024}KB）：剪短一些再传（约 20 秒 wav / 50 秒 mp3）`);
+  }
+  const sniff = sniffAudio(buf);
+  if (!sniff) throw new Error('样本格式不支持（只支持 mp3 / wav）');
+  const id = `lv-${crypto.randomBytes(4).toString('hex')}`;
+  const sampleFile = `${id}.${sniff.format}`;
+  ensureDir(localVoiceDir());
+  fs.writeFileSync(path.join(localVoiceDir(), sampleFile), buf);
+  const rec = {
+    id,
+    name: nm,
+    baseCharacter: base,
+    sampleFile,
+    sampleBytes: buf.length,
+    sampleExt: sniff.format,
+    promptText: String(promptText ?? '').trim().slice(0, 1000),
+    createdAt: new Date().toISOString()
+  };
+  lib.voices.push(rec);
+  atomicWriteJson(LOCAL_VOICE_LIB_FILE, lib);
+  log(`[voice] 本地音色已新建：${nm}（id=${id}，样本 ${buf.length} 字节 ${sniff.format}，基础角色=${base || '（引擎默认）'}）`);
+  return { ok: true, voice: localVoicePublic(rec), voices: listLocalVoices() };
+}
+
+/** 删掉一个本地音色档案（连同它自己的样本文件）。别人的文件一个不碰。 */
+export function deleteLocalVoice(id) {
+  const want = String(id ?? '').trim();
+  if (!want) throw new Error('缺少参数 id：要删哪个本地音色');
+  const lib = loadLocalVoiceLib();
+  const idx = lib.voices.findIndex((v) => v?.id === want || (v?.name && v.name === want));
+  if (idx < 0) throw new Error(`没有「${want}」这个本地音色（可能已经删过了，点「检测状态」刷新一下）`);
+  const [gone] = lib.voices.splice(idx, 1);
+  atomicWriteJson(LOCAL_VOICE_LIB_FILE, lib);
+  let sampleRemoved = false;
+  try {
+    const f = path.basename(String(gone?.sampleFile ?? ''));
+    const p = f ? path.join(localVoiceDir(), f) : '';
+    // 双保险：拼出来的必须是**本目录下的直接文件**（元数据被手改过也不顺着它去删别处）
+    if (p && path.dirname(p) === localVoiceDir() && fs.existsSync(p)) { fs.unlinkSync(p); sampleRemoved = true; }
+  } catch { /* 样本没删掉不影响档案已删除这件事，日志里如实说 */ }
+  log(`[voice] 本地音色已删除：${gone?.name ?? want}（id=${gone?.id ?? want}${sampleRemoved ? '，样本文件已一并删除' : '，本来就没有样本文件'}）`);
+  // 与 deleteCustomVoice 同一规矩：删掉的正好是当前默认音色时退回内置「冰糖」，
+  // 否则默认音色指着一个已不存在的档案，之后每次合成都会报「Unknown voice」。
+  const cfg = voiceConfig();
+  const def = String(cfg.defaultVoice ?? '');
+  if (def && (def === gone?.id || def === gone?.name)) {
+    atomicWriteJson(VOICE_CFG_FILE, { ...readStored(), defaultVoice: '冰糖' });
+    log(`[voice] 默认音色「${def}」是被删掉的本地音色，已自动退回内置音色 冰糖`);
+  }
+  return { ok: true, deleted: { id: gone?.id ?? want, name: gone?.name ?? '', sampleRemoved }, voices: listLocalVoices() };
 }
 
 /* ── 2026-09-18 修「每次发送的语音音色有小幅漂移」：────────────────────────────
@@ -864,6 +1485,51 @@ export function unfreezeVoice(id) {
   anchorRebuildTried.delete(String(v.id));
   log(`[voice] 音色「${v.name}」已解冻，下次合成会重新设计音色`);
   return { ok: true };
+}
+
+/* ── 2026-09-26 新增：「用文字合成的音色也可以当样本，为 clone 发出」────────────────
+ * 主人原话（音色库里已有「御姐音」这个文字设计音色之后提的）。
+ * 与既有路径的关系（**老路一条都没动**）：
+ *   · 文字描述建音色（kind=design，description）      → 原样不变；
+ *   · 上传音频建音色（kind=clone，sampleBase64）        → 原样不变，样本永远是用户传的那份；
+ *   · 新增第三条（本节）：把**任意已有音色的声音**取出来当新音色的复刻样本。
+ * 三种来源分别取什么（都是"固定文本那一段"，不是某条回复）：
+ *   自建复刻音色 → 它上传的样本；自建文字音色 → 它的冻结锚点（没有就现冻一个）；
+ *   内置音色     → 用 ANCHOR_TEXT 现合成一段（内置音色本来没有样本文件）。
+ * 「为什么值得单独做」：文字设计音色的锚点藏在音色库里、界面拿不到文件，用户想"把这段声音固定下来
+ * 变成一份真正的复刻样本"此前只能靠手动下载再上传；而 design 音色一旦锚点丢失就会退化成每次现设计
+ * （音色漂），把样本显式做成 clone 音色后，它就是一份落盘、可备份、不会再被重新设计的音频。 */
+export async function sampleFromVoice(idOrName, { format = '' } = {}) {
+  const want = String(idOrName ?? '').trim();
+  if (!want) throw new Error('请先选择一个音色（它的声音会被当作样本）');
+  const hit = findCustomVoice(want);
+  if (hit) {
+    if (hit.kind === 'clone') {
+      const p = String(hit.samplePath ?? '');
+      if (!p || !fs.existsSync(p)) {
+        throw new Error(`音色「${hit.name}」的复刻样本文件已丢失，取不到声音：请重新上传它的样本，或改选别的音色`);
+      }
+      return { name: hit.name, from: '音色库复刻样本', base64: fs.readFileSync(p).toString('base64'), bytes: fs.statSync(p).size, ext: path.extname(p).replace(/^\./, '') || 'mp3' };
+    }
+    let anchor = frozenSampleOf(hit);
+    let from = '它已冻结的锚点';
+    if (!anchor) {
+      anchor = await rebuildFixedAnchor(hit, { format });
+      if (!anchor) throw new Error(`音色「${hit.name}」还没有可用锚点，现冻也失败了：稍后再试，或先用它试听一次`);
+      from = '现场新冻的锚点';
+    }
+    return { name: hit.name, from, base64: fs.readFileSync(anchor).toString('base64'), bytes: fs.statSync(anchor).size, ext: path.extname(anchor).replace(/^\./, '') || 'mp3' };
+  }
+  /* 内置音色：没有样本文件，用固定锚点文本现合成一段当样本。
+   * mimo_default 交给 synthesize 的默认分支（= 配置里的默认音色），与内置音色的语义一致。 */
+  const builtinId = want === 'mimo_default' ? '' : want;
+  const r = await synthesize({ text: ANCHOR_TEXT, mode: 'tts', voice: builtinId, format });
+  if (!r?.filePath || !fs.existsSync(r.filePath)) throw new Error('内置音色取样失败：合成没有产出音频文件');
+  return {
+    name: builtinId || (String(voiceConfig().defaultVoice ?? '').trim() || 'MiMo 默认'),
+    from: '内置音色现录一段', base64: fs.readFileSync(r.filePath).toString('base64'),
+    bytes: fs.statSync(r.filePath).size, ext: path.extname(r.filePath).replace(/^\./, '') || 'mp3'
+  };
 }
 
 // ── 全语音发送模式（voice-config.json 的 send.allVoice）────────────────────────

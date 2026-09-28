@@ -40,6 +40,13 @@ tsconfig.tsbuildinfo
 /qq-bridge/.tscheck/
 /qq-bridge/.git/
 /qq-bridge/.git-upstream/
+# ---- 本地语音引擎（Genie / GPT-SoVITS）：脚本进仓库，引擎环境/公共数据/角色模型不进 ----
+# .venv 约 600MB、GenieData ~391MB、每个角色模型 ~300MB，都可由 tools/genie-setup.mjs 现场装回来
+/qq-bridge/python/.venv/
+/qq-bridge/python/GenieData/
+/qq-bridge/python/models/
+/qq-bridge/python/.cache/
+/qq-bridge/python/**/__pycache__/
 **/state/
 **/*.sqlite
 **/*.db
