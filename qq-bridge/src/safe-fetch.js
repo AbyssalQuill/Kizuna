@@ -358,12 +358,16 @@ export const MAX_IMAGE_FETCH_BYTES = 15 * 1024 * 1024;
  *   之前 pixiv 取图只能全走第三方镜像站代理，就是因为这里不能带头；现在补上，
  *   `qq_send_pixiv` 才能直联 pximg 拿逐字节一致的原图（见 lib/pixiv.js 顶部）。
  *   `host` 由本函数自己按 URL 设置，调用方传进来也会被丢掉（防止把 host 改成别的域名）。
+ * @param {{timeoutMs?:number}|null} [opts] 可选：单次请求超时（毫秒，默认 20000，老调用行为一字不变）。
+ *   存在的理由见 pixiv 那条路：i.pximg.net 在不通的网络里不是"被拒"而是"连上后一直不出数据"，
+ *   默认 20s 会把每一张图都拖满 20s；调用方据此给直联候选单独设一个短超时（见 lib/pixiv.js）。
  */
-export async function safeFetchBuffer(urlString, maxBytes = MAX_IMAGE_FETCH_BYTES, extraHeaders = null) {
+export async function safeFetchBuffer(urlString, maxBytes = MAX_IMAGE_FETCH_BYTES, extraHeaders = null, opts = null) {
   const MAX_REDIRECTS = 5;
+  const timeoutMs = Number(opts?.timeoutMs) > 0 ? Number(opts.timeoutMs) : 20000;
   let { url, ip } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnceBuffer(url, ip, maxBytes, extraHeaders);
+    const result = await requestOnceBuffer(url, ip, maxBytes, extraHeaders, timeoutMs);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
@@ -391,7 +395,7 @@ export async function safeFetchBuffer(urlString, maxBytes = MAX_IMAGE_FETCH_BYTE
   throw new Error('重定向次数过多，已停止');
 }
 
-function requestOnceBuffer(url, ip, maxBytes, extraHeaders = null) {
+function requestOnceBuffer(url, ip, maxBytes, extraHeaders = null, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     const mod = url.protocol === 'https:' ? https : http;
     const port = url.port || (url.protocol === 'https:' ? 443 : 80);
@@ -413,7 +417,7 @@ function requestOnceBuffer(url, ip, maxBytes, extraHeaders = null) {
       },
       servername: url.protocol === 'https:' ? url.hostname : undefined,
       rejectUnauthorized: url.protocol === 'https:',
-      timeout: 20000,
+      timeout: timeoutMs,
     }, (res) => {
       const statusCode = res.statusCode || 0;
       if ([301, 302, 303, 307, 308].includes(statusCode)) {
@@ -427,6 +431,10 @@ function requestOnceBuffer(url, ip, maxBytes, extraHeaders = null) {
       const chunks = [];
       let size = 0;
       let settled = false;
+      /* 2026-09-28 修复（这是一次误删，不是有意改动）：工作区里这两个回调被删掉了，而 Promise 的
+       * resolve 只在这里 —— 少了它们 requestOnceBuffer **永远不会 settle**，safeFetchBuffer 必然
+       * 走到超时。症状：本机对任何图（直联 / 镜像 / 老 api/image.php 都一样）都报「请求超时」，
+       * 一张图也发不出去。maxBytes 那道闸门也一并回来了。 */
       res.on('data', (chunk) => {
         if (settled) return;
         size += chunk.length;
@@ -449,7 +457,14 @@ function requestOnceBuffer(url, ip, maxBytes, extraHeaders = null) {
         reject(err);
       });
     });
-    req.on('timeout', () => req.destroy(new Error(`请求超时：${url.hostname}`)));
+    /* 2026-09-28：超时要能被调用方认出来 —— 只有"这条路根本不通"（超时/连不上）才值得把整条路由
+     * 判死改走代理；HTTP 403/404 是服务端答了话，换路线没用。所以给错误打一个 timeout 标记，
+     * 不去猜错误文案（文案以后改字就失效了）。 */
+    req.on('timeout', () => {
+      const err = new Error(`请求超时：${url.hostname}`);
+      err.timeout = true;
+      req.destroy(err);
+    });
     req.on('error', reject);
     req.end();
   });
