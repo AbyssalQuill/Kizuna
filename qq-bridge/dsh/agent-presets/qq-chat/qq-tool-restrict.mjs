@@ -56,6 +56,12 @@ const SAFE_PREFIXES = [
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
+  // 【2026-09-28】宿主的 `web_search` **曾经**在这里放行过（那时 preset 的 `tool-web.search` 会被
+  //   桥按 ModSearch 的装配结果改写）。同日去掉 ModSearch 后，`lib/dsh-side.js` 的 syncPresetToolWeb
+  //   把 `tool-web` 的 `search` 钉成 false（宿主 `web_search` 根本不注册），这一条随之删掉 ——
+  //   留着一个"看得见却调不动"（或者更糟：静默落到宿主 deepseek-official 提供方）的放行口没有意义。
+  //   模型侧的搜索现在只有一条路：桥自己的 `mcp__web-search-safe__web_search`（`mcp__*` 前缀，
+  //   走的是另一套（第 2 步的全局层）放行判据，不在这份 SAFE_EXACT 名单里）。
 ])
 
 export function apply(ctx) {

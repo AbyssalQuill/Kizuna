@@ -166,9 +166,39 @@ export function priceEntryFor(table, model, ts) {
     }
     return selected;
 }
-/** 判断时刻是否落在北京高峰窗口(缺省 9:00–12:00、14:00–18:00;半开区间)。 */
-export function isPeakBeijing(ts, windows = DEFAULT_PEAK_WINDOWS) {
-    const hour = new Date(ts + 8 * 3600_000).getUTCHours();
+/** 生效分界(北京时刻):2026-08-23 00:00 起周末全谷价;2026-09-19 00:00 起节假日全谷价。 */
+const WEEKEND_VALLEY_FROM = Date.UTC(2026, 7, 22, 16, 0, 0);
+const HOLIDAY_VALLEY_FROM = Date.UTC(2026, 8, 18, 16, 0, 0);
+/** 法定节假日全天谷价(官方 2026-09-19 说明;逐字照抄小鲸鱼挂件 dsh-whale-widget)。
+ *  只需列**放假**的日期:2026 年的调休上班日全落在周末(1/4、2/14、2/28、5/9、9/20、10/10),
+ *  按「周末也算谷价」本来就是谷价,无需单列。
+ *  ⚠️ 每年 11 月国务院发布次年安排后,必须在这里补下一年的日期。 */
+export const HOLIDAY_VALLEY = {
+    '2026-01-01': 1, '2026-01-02': 1, '2026-01-03': 1,
+    '2026-02-15': 1, '2026-02-16': 1, '2026-02-17': 1, '2026-02-18': 1, '2026-02-19': 1,
+    '2026-02-20': 1, '2026-02-21': 1, '2026-02-22': 1, '2026-02-23': 1,
+    '2026-04-04': 1, '2026-04-05': 1, '2026-04-06': 1,
+    '2026-05-01': 1, '2026-05-02': 1, '2026-05-03': 1, '2026-05-04': 1, '2026-05-05': 1,
+    '2026-06-19': 1, '2026-06-20': 1, '2026-06-21': 1,
+    '2026-09-25': 1, '2026-09-26': 1, '2026-09-27': 1,
+    '2026-10-01': 1, '2026-10-02': 1, '2026-10-03': 1, '2026-10-04': 1,
+    '2026-10-05': 1, '2026-10-06': 1, '2026-10-07': 1,
+};
+/** 判断时刻是否落在北京高峰窗口(缺省 9:00–12:00、14:00–18:00;半开区间)。
+ *  2026-09-26 补齐官方规则:周末与法定节假日全天按谷价(原来只看小时,周末与中秋连假都被算成高峰)。 */
+export function isPeakBeijing(ts, windows = DEFAULT_PEAK_WINDOWS, holidays = HOLIDAY_VALLEY) {
+    const n = Number(ts);
+    if (!Number.isFinite(n))
+        return false;
+    const bj = new Date(n + 8 * 3600_000);
+    if (n >= WEEKEND_VALLEY_FROM) {
+        const dow = bj.getUTCDay();
+        if (dow === 0 || dow === 6)
+            return false;
+    }
+    if (n >= HOLIDAY_VALLEY_FROM && holidays && holidays[bj.toISOString().slice(0, 10)])
+        return false;
+    const hour = bj.getUTCHours();
     return windows.some(([start, end]) => hour >= start && hour < end);
 }
 /** 按时刻选三档单价(峰谷时段判北京高峰窗口)。 */

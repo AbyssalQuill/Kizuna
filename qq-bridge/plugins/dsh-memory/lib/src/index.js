@@ -4,7 +4,9 @@
  * 接缝(设计文档 §2):
  *   - `ctx.tools.register` 暴露 remember / recall / forget 三个模型工具。
  *   - `ctx.llm.stream` 用 `deepseek-v4-flash` 做记忆节点 team 召回。
- *   - `ctx.systemPrompt.section` 注入「已知记忆」摘要(order 10)。
+ *   - `ctx.systemPrompt.section` 注入「按需检索记忆」指令(order 10,**逐字常量**,见
+ *     {@link MEMORY_RECALL_HINT})。「已知记忆」摘要**默认不再注入**(每轮现算会把
+ *     整段系统提示词前缀作废,见 INJECT_MEMORY_SUMMARY)。
  *   - `ctx.commands.register` 提供 `/lmemory` 管理命令。
  *   - `ctx.settings` 存 maxNodeKb / recallTopK / rerankPrompt / warmupOnStart 等配置。
  *   - web 模式下经 `webServer.register` + `connection.rpc.handle` 挂记忆 Web 面板
@@ -67,6 +69,52 @@ const SCHEMA = z.object({
     extractLessonsPrompt: z.string().min(1).default(DEFAULT_CONFIG.extractLessonsPrompt),
     summaryMode: z.union([...SUMMARY_MODES]).default(DEFAULT_CONFIG.summaryMode),
 });
+/**
+ * 是否把「已知记忆」摘要注入系统提示词。
+ *
+ * false(默认,2026-09-29 起):系统提示词里**没有**记忆段,只注入下面那段逐字恒定的
+ *   {@link MEMORY_RECALL_HINT};
+ * true:恢复旧行为 —— order 10 注册 name `memory:summary`,text 是每轮现算的
+ *   `summaryText(runtime.config, cwd)`。
+ *
+ * 为什么默认关掉(实测):那段摘要在同一段系统提示词里、排在 persona 之后、**每轮重算**,
+ * 会话中从 6,360 长到 20,856 字符。它一变,后面的整段前缀 + 全部历史都按「未命中」价
+ * 重读(1 元/M,而缓存命中 0.02 元/M,50 倍差价)。生产实测:3.7% 的请求吃掉 88% 的
+ * 未命中 token。改成常量后,系统提示词在一个会话内逐字恒定 → 前缀缓存不再被打碎。
+ *
+ * 这是本次改动的**唯一回退开关**:改成 true 即一行回退。
+ */
+const INJECT_MEMORY_SUMMARY = false;
+/**
+ * 注入系统提示词的「按需检索记忆」指令(order 10)。
+ *
+ * **必须是逐字常量**:里面不许出现时间戳、条数、统计等任何每轮会变的内容 ——
+ * 只要有一个字符随轮次变化,这段之后的整段系统提示词前缀 + 全部历史就会按未命中价重读,
+ * 等于把刚修掉的成本问题原样搬回来。
+ *
+ * 工具名按各部署里**真正能用**的写:
+ *   - QQ 桥接会话:preset 的 `qq-tool-restrict.mjs` 有执行期白名单 guard,只放行
+ *     `mcp__napcat__*` / `mcp__napcat-host__*` / `mcp__web-search-safe__*` 与
+ *     ask_user_question / todo_write。本插件自己的 remember / recall / memory-find /
+ *     memory-update / memory-delete 在那个 guard 下**会被拒绝**,所以 QQ 会话里能用的
+ *     检索入口是桥的 `qq_memory_search`(读)/ `qq_memory_remember`(写)。
+ *   - 普通 DSH 会话(没有 qq_* 工具):本插件自己的 memory-find / recall / remember /
+ *     memory-update 就是入口。
+ */
+export const MEMORY_RECALL_HINT = [
+    '[MEMORY - FETCHED ON DEMAND] This prompt intentionally carries NO memory dump: a per-turn',
+    'dump invalidates the prompt cache, so long-term memory is loaded only when you ask for it.',
+    'The memory store itself is unchanged - look a thing up before you claim you do not know it,',
+    'and never invent a memory.',
+    '- QQ bridge sessions (this deployment): qq_memory_search(query=<keywords>, sender=<nickname or QQ>,',
+    '  key=<group:<gid> | private:<qq>>, token=<this wake\'s [Token]>, limit=<small>) reads the stored',
+    '  memory and transcript; qq_memory_remember records or corrects one durable fact. The plugin\'s own',
+    '  remember / recall / memory-find / memory-update are denied by this preset\'s tool guard.',
+    '- Plain DSH sessions (no qq_* tools): memory-find for an exact id or a type/domain/scope listing,',
+    '  recall for a semantic query; write with remember, amend with memory-update.',
+    '- At most two lookups a round, same step when you can. Use what you find silently: say what you',
+    '  found, never that you searched.',
+].join('\n');
 /** 召回节点 system prompt(固定,非配置项)。 */
 const NODE_RECALL_SYSTEM = '你是长期记忆召回节点。给定一组记忆条目(每条一行,格式 `[id|type|domain|scope] 条目文本`)与一个查询,仅返回与查询相关的条目的**整行**(含方括号前缀),一行一条,照抄原文,不返回任何解释。无相关条目时返回空。';
 /** 把模型输出文本按行拆成条目(轻量去前缀)。 */
@@ -1410,11 +1458,24 @@ export function apply(ctx) {
     const pricingSeed = loadPricing();
     if (!pricingSeed.ok)
         ctx.logger.warn(`dsh-memory: pricing table unavailable: ${pricingSeed.error}`);
-    // order 10:persona(0)之后、工具指导(100–199)之前,注入已知记忆摘要。
+    /* order 10:persona(0)之后、工具指导(100–199)之前。
+     *
+     * 这里原来是「注入已知记忆摘要」的注册点(text 是每轮现算的闭包,会随记忆条目增长)。
+     * 现在默认只注入一段逐字恒定的 {@link MEMORY_RECALL_HINT} —— 保留"在 persona 之后、
+     * 工具指导之前"这个稳定位置,但内容不再随轮次变化,系统提示词在一个会话内逐字恒定。
+     * 记忆的写入/抽取路径(remember / autoExtract / extractInterval)与本插件其余注册,
+     * 一行未动。 */
+    if (INJECT_MEMORY_SUMMARY) {
+        ctx.systemPrompt.section({
+            name: 'memory:summary',
+            order: 10,
+            text: (assemble) => summaryText(runtime.config, assemble.agent?.session.header.cwd),
+        });
+    }
     ctx.systemPrompt.section({
-        name: 'memory:summary',
+        name: 'memory:recall-hint',
         order: 10,
-        text: (assemble) => summaryText(runtime.config, assemble.agent?.session.header.cwd),
+        text: MEMORY_RECALL_HINT,
     });
     registerTools(ctx, runtime);
     // 自动提取(默认开):三种触发形态(信号词 / 计数器 / 事件+计数器)旁路观测主会话。

@@ -4,7 +4,8 @@
  * 接缝(设计文档 §2):
  *   - `ctx.tools.register` 暴露 remember / recall / forget 三个模型工具。
  *   - `ctx.llm.stream` 用 `deepseek-v4-flash` 做记忆节点 team 召回。
- *   - `ctx.systemPrompt.section` 注入「已知记忆」摘要(order 10)。
+ *   - `ctx.systemPrompt.section` 注入「按需检索记忆」指令(order 10,逐字常量
+ *     {@link MEMORY_RECALL_HINT});「已知记忆」摘要默认不再注入(INJECT_MEMORY_SUMMARY)。
  *   - `ctx.commands.register` 提供 `/lmemory` 管理命令。
  *   - `ctx.settings` 存 maxNodeKb / recallTopK / rerankPrompt / warmupOnStart 等配置。
  *   - web 模式下经 `webServer.register` + `connection.rpc.handle` 挂记忆 Web 面板
@@ -19,6 +20,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 /** Stable Cordis plugin name. */
 export declare const name = "dsh-memory";
+/** 注入系统提示词的「按需检索记忆」指令(order 10;逐字常量,见 index.js 的说明)。 */
+export declare const MEMORY_RECALL_HINT: string;
 /** 插件挂载所需服务。 */
 export declare const inject: string[];
 /**

@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { syncPresetOverrides } from './preset-compose.js';
@@ -140,6 +141,144 @@ function yamlQuoteForPath(p) {
   return yamlSingleQuote(p);
 }
 
+/* ── 2026-09-28：preset 的 tool-web 门控（宿主搜索工具一律关着）────────────────────────────────
+ * 2026-09-28 原为"让模型侧的搜索走 ModSearch"，同日按要求去掉 ModSearch 后改成现在这条规则：
+ * qq-chat preset 里 `- id: tool-web` 的 `search` 与 `fetch` **恒为 false**。
+ *   · `search: false`：宿主的 `web_search` 工具本身不注册，模型侧要搜索就走桥自己的
+ *     `mcp__web-search-safe__web_search`（同一个引擎：lib/web-search.js 的多平台聚合 + 相关度闸门）。
+ *     为什么还要"钉住"而不是在 preset 里写死就算：preset 每次桥启动都被 installPresets 的 cpSync
+ *     覆盖成仓库形态，而 2.0.4 之前的版本往里写过 `search: true`（那时是给 ModSearch 用的）——
+ *     升级上来的隔离 home 里可能留着 `true`，这个门控每次启动都会把它改回 false。
+ *   · `fetch: false`：抓取走桥自己的 `mcp__web-search-safe__web_fetch`（带 SSRF 加固：DNS 预解析、
+ *     逐跳校验、限量读取），宿主自带的 fetch 没有这层加固。
+ * 幂等：值已经对了就一个字节都不写（先做字符串比对，日志与返回值里带两侧 md5）；
+ * 每次真的改写都留一行日志说明原因（同一进程里同一结论只报一次，避免启动路径刷屏）。 */
+export const PRESET_TOOLWEB_REL = path.join('.agent-presets', 'qq-chat', 'agent.cordis.yml');
+const md5hex = (s) => createHash('md5').update(String(s ?? ''), 'utf8').digest('hex');
+let toolWebGateLogged = '';   // 上一次已解释过的 `<home>|<值>`，同一进程内不重复解释
+
+/** 把 yml 文本里 `- id: tool-web` 那一块的 `search:` 值改成 on。
+ *  只认这一块（块的边界 = 其下第一个顶格非空行，免得改到别的插件的 search 键）；
+ *  找不到这个块或这一行时返回 null —— 不擅自插入任何行（preset 结构变了就宁可如实报错）。 */
+export function rewriteToolWebSearch(text, on) {
+  const src = String(text ?? '');
+  const at = src.search(/^-[ \t]+id:[ \t]*tool-web[ \t]*\r?$/m);
+  if (at < 0) return null;
+  const after = src.slice(at);
+  const nl = after.indexOf('\n');
+  if (nl < 0) return null;
+  const body = after.slice(nl + 1);
+  const stop = /^(?![ \t])(?=\S)/m.exec(body);          // 第一个顶格非空行
+  const blockEnd = stop ? nl + 1 + stop.index : after.length;
+  const block = after.slice(0, blockEnd);
+  const m = /^([ \t]+)search:([ \t]*)(true|false)([ \t]*\r?)$/m.exec(block);
+  if (!m) return null;
+  const fixed = block.slice(0, m.index)
+    + `${m[1]}search:${m[2]}${on ? 'true' : 'false'}${m[4]}`
+    + block.slice(m.index + m[0].length);
+  return src.slice(0, at) + fixed + src.slice(at + blockEnd);
+}
+
+/** 把**隔离 home 里已安装的那份 preset** 里 `- id: tool-web` 的 `search:` 钉成 false（仓库里那份本体不动）。
+ *  只写 <home>/.agent-presets/qq-chat/agent.cordis.yml 这一个文件；preset 还不存在时只回报 skipped，
+ *  不建目录也不建文件（保持"没初始化就什么都不造"的既有性质）。桌面端 home 直接拒绝。
+ *  返回 { ok, changed, value, skipped, file, md5Before, md5After, reason }。 */
+export function syncPresetToolWeb(home) {
+  /* 空 home 必须在这里挡掉：`path.resolve('')` 会解析成**当前工作目录**（跑起来就是 qq-bridge 仓库根），
+   * 那样这个门控就会去动仓库里的 `.agent-presets/qq-chat/agent.cordis.yml` —— 越界且完全不是调用方的意思。 */
+  const raw = String(home ?? '').trim();
+  if (!raw) {
+    return { ok: false, changed: false, value: false, skipped: '', file: '', md5Before: '', md5After: '', reason: '没有可用的目标 home' };
+  }
+  const h = path.resolve(raw);
+  const file = path.join(h, PRESET_TOOLWEB_REL);
+  const base = { ok: false, changed: false, value: false, skipped: '', file, md5Before: '', md5After: '', reason: '' };
+  if (isDesktopDshHome(h)) return { ...base, reason: `拒绝：${h} 是桌面端 DSH home` };   // 不打日志：解析目标时已经拒绝过一次
+  if (!fs.existsSync(file)) {
+    return { ...base, ok: true, skipped: 'no-preset', reason: `隔离 home 里还没有安装 preset（${file}），跳过 tool-web.search 门控` };
+  }
+  let before = '';
+  try { before = fs.readFileSync(file, 'utf8'); } catch (e) {
+    return { ...base, reason: `读不到 ${file}：${e?.message ?? e}` };
+  }
+  base.md5Before = md5hex(before);
+  const next = rewriteToolWebSearch(before, false);
+  if (next === null) {
+    return { ...base, md5After: base.md5Before, reason: `${file} 里没找到 - id: tool-web 的 search: 行，未改动（preset 结构变了吗？）` };
+  }
+  base.md5After = md5hex(next);
+  const why = '宿主 web_search 一律关着：搜索走桥自己的 mcp__web-search-safe__web_search（lib/web-search.js），抓取走带 SSRF 加固的 mcp__web-search-safe__web_fetch';
+  if (next === before) {
+    if (toolWebGateLogged !== `${h}|false`) {
+      toolWebGateLogged = `${h}|false`;
+      log(`preset tool-web.search 已是 false（无需改写）——${why}`);
+    }
+    return { ...base, ok: true, reason: why };
+  }
+  try {
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, next, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    return { ...base, md5After: base.md5Before, reason: `写入 ${file} 失败：${e?.message ?? e}` };
+  }
+  toolWebGateLogged = `${h}|false`;
+  log(`preset tool-web.search → false（md5 ${base.md5Before.slice(0, 8)} → ${base.md5After.slice(0, 8)}）——${why}`);
+  return { ...base, ok: true, changed: true, reason: why };
+}
+
+/* ── 2026-09-28：清掉升级残留的 modsearch 覆盖行（ModSearch 已从本项目去掉）────────────────────
+ * 历史版本（ModSearch 集成那一轮）会往 profile 的 cordis.patch.yml 里插一段
+ *   `- id: modsearch` + `config: { readPage: false, xSearch: false }`
+ * 的覆盖行（为的是关掉那个插件自带的 `read_page` / `x_search`）。ModSearch 去掉之后这段必须清掉 ——
+ * 留着它会让 profile 按 id 去找一个不存在的插件条目，等于给"从旧版本升上来"的机器留一颗雷。
+ * 函数幂等：没有这段就一个字节都不写；桌面端 home 一律拒绝。 */
+export const MODSEARCH_CORDIS_BEGIN = '# === modsearch overlay (qq-bridge support) BEGIN ===';
+export const MODSEARCH_CORDIS_END = '# === modsearch overlay (qq-bridge support) END ===';
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** 幂等摘掉 profile patch 里那段历史 modsearch 覆盖行。
+ *  返回 { ok, changed, file, skipped, md5Before, md5After, reason }。 */
+export function stripLegacyModsearchOverlay(target = {}) {
+  /* 同 syncPresetToolWeb：空 home 先挡掉（`path.resolve('')` = 当前工作目录，会去动仓库里的文件）。
+   * 例外是显式给了 profileDir 的调用方（那时 home 只用于桌面端判定）。 */
+  const rawHome = String(target?.home ?? '').trim();
+  const hasProfileDir = Boolean(target?.profileDir);
+  if (!rawHome && !hasProfileDir) {
+    return { ok: false, changed: false, file: '', skipped: '', md5Before: '', md5After: '', reason: '没有可用的目标 home' };
+  }
+  const home = rawHome ? path.resolve(rawHome) : '';
+  const profile = String(target?.profile || 'web');
+  const profileDir = hasProfileDir
+    ? path.resolve(String(target.profileDir))
+    : path.join(home, 'profiles', profile);
+  const file = path.join(profileDir, 'cordis.patch.yml');
+  const base = { ok: false, changed: false, file, skipped: '', md5Before: '', md5After: '', reason: '' };
+  if (isDesktopDshHome(home)) return { ...base, reason: `拒绝：${home} 是桌面端 DSH home` };
+  if (!fs.existsSync(file)) {
+    return { ...base, ok: true, skipped: 'no-patch-file', reason: `profile patch 不存在（${file}），无需清理` };
+  }
+  let before = '';
+  try { before = fs.readFileSync(file, 'utf8'); } catch (e) {
+    return { ...base, reason: `读不到 ${file}：${e?.message ?? e}` };
+  }
+  base.md5Before = md5hex(before);
+  const region = new RegExp(`^[^\\n]*${escapeRe(MODSEARCH_CORDIS_BEGIN)}[\\s\\S]*?${escapeRe(MODSEARCH_CORDIS_END)}[^\\n]*\\n?\\n?`, 'm');
+  if (!region.test(before)) {
+    return { ...base, ok: true, md5After: base.md5Before, reason: 'profile patch 里没有历史 modsearch 覆盖行，无需清理' };
+  }
+  const next = `${before.replace(region, '').replace(/[ \t\r\n]*$/, '')}\n`;
+  base.md5After = md5hex(next);
+  try {
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, next, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    return { ...base, md5After: base.md5Before, reason: `写入 ${file} 失败：${e?.message ?? e}` };
+  }
+  log(`profile cordis.patch.yml 摘掉历史 modsearch 覆盖行（md5 ${base.md5Before.slice(0, 8)} → ${base.md5After.slice(0, 8)}）：ModSearch 已从本项目去掉，留着会指向不存在的插件`);
+  return { ...base, ok: true, changed: true, reason: '已摘掉历史 modsearch 覆盖行' };
+}
 /** 把仓库里的 agent preset 安装到 <home>/.agent-presets/ */
 export function installPresets(target) {
   if (isDesktopDshHome(target.home)) throw new Error(`refuse: desktop home ${target.home}`);
@@ -165,6 +304,18 @@ export function installPresets(target) {
       } catch (e) { log(`[dsh-side] 合成人设到 preset 异常：${e?.message ?? e}`); }
     }
   }
+  /* 门控放在最后：preset 刚被 cpSync 覆盖成仓库形态（search: false），而合成人设只重写 persona 标记段，
+   * 都不影响这一行；放最后能保证"仓库形态 → 该有的形态"一次改到位（值对了就不写盘）。 */
+  try {
+    const g = syncPresetToolWeb(target.home);
+    if (!g.ok) warn(`preset tool-web 门控未生效：${g.reason}`);
+  } catch (e) { warn(`preset tool-web 门控异常：${e?.message ?? e}`); }
+  /* 旧版本（2.0.4 之前）往 profile patch 里插过 modsearch 覆盖行，升上来的 home 里可能还留着：
+   * 一个指向已不存在的插件条目的 id，会在起 profile 时变成硬失败。这里顺手清掉（幂等）。 */
+  try {
+    const o = stripLegacyModsearchOverlay(target);
+    if (!o.ok) warn(`历史 modsearch 覆盖行未清理：${o.reason}`);
+  } catch (e) { warn(`清理历史 modsearch 覆盖行异常：${e?.message ?? e}`); }
 }
 
 /* 桥把当前配置注进来（installToIsolatedDsh 拿不到 cfg，而代理开关来自配置）。 */
@@ -347,12 +498,87 @@ export function patchProfileCordis(target) {
   log(`cordis.patch.yml written: ${patchFile}`);
 }
 
+/* ── 链接自愈（2026-09-29 修：Windows 悬空目录 junction 删不掉 → EEXIST）───────────────
+ * 现场：隔离 home 里的 junction 全指向改名前的旧路径 `D:\MoonBot\…`（目录已不存在），
+ * 桥每次启动都想修、每次都修不掉，隔离 DSH 永远起不来。
+ *   · 旧实现用 `fs.rmSync(link, { recursive: true, force: true })` 删旧链接；Windows 上对
+ *     **悬空的目录 junction** 它删不掉，紧接着 `symlinkSync` 报 EEXIST（bridge-local.log:58139）。
+ *   · 更危险的是语义：`rmSync(recursive:true)` 一旦判断失误（把真实目录看成链接），
+ *     会连**目标目录里的内容**一起递归删掉 —— 这条红线不能留。
+ * 现在改为"只摘链接、绝不递归"，三条保证：
+ *   ① 只对 `lstatSync()`（不跟随链接）判定为符号链接 / junction / 重解析点的路径动手；
+ *      `lstat` 说不是链接（真实文件/目录）就只告警跳过，**绝不删除**。
+ *   ② 删除只用"删掉这一个名字"的语义：`unlinkSync` → `rmdirSync` → `cmd /c rmdir` 三级兜底，
+ *      全程没有 recursive 参数，因此即使判定失误，最坏也只是删掉一个空目录或链接本身，
+ *      **不可能触及链接指向的目标内容**；每次动手前再复查一次"现在还是链接吗"，被换成真实
+ *      目录就立刻停手。
+ *   ③ 删不掉不静默：把原 readlink、lstat 摘要、每个尝试的 errno/退出码写进日志。
+ */
+
+/** lstat 摘要，用于诊断日志（不跟随链接，悬空 junction 也读得到）。 */
+function describeLstat(st) {
+  try {
+    return `mode=0o${(st.mode & 0o7777).toString(8)} size=${st.size} isDir=${st.isDirectory()} isFile=${st.isFile()} isSymlink=${st.isSymbolicLink()} mtime=${Math.round(st.mtimeMs)}`;
+  } catch { return '(n/a)'; }
+}
+
+/** 一个路径的链接身份：是否存在、是不是链接/重解析点、readlink 原文。
+ *  必须用 lstat（不跟随）+ readlink 双路判定：**悬空的目录 junction 只有这两条路看得见**
+ *  （`existsSync`/`statSync` 都因为跟随而报 ENOENT，这正是旧代码"以为不在了、其实还在"的成因）。 */
+function linkKindOf(p) {
+  let st = null;
+  try { st = fs.lstatSync(p); } catch (e) { if (e?.code === 'ENOENT') return { exists: false, isLink: false, st: null, target: null, readlinkErr: null }; throw e; }
+  let target = null; let readlinkErr = null;
+  try { target = fs.readlinkSync(p); } catch (e) { readlinkErr = e; }
+  return { exists: true, isLink: st.isSymbolicLink() || target !== null, st, target, readlinkErr };
+}
+
+/** 安全摘掉一个链接：只在确认是链接/重解析点时删，只用"删这一个名字"的语义，绝不递归。
+ *  返回 true = 这个名字已经不在了（本来就没有 / 已摘掉）。 */
+function removeLinkOnly(link, what) {
+  const proof = (k) => `lstat[${describeLstat(k.st)}] readlink[${k.target === null ? `(读不出: ${k.readlinkErr?.code ?? k.readlinkErr?.message ?? '?'})` : k.target}]`;
+  const before = linkKindOf(link);
+  if (!before.exists) return true;
+  if (!before.isLink) {                       /* ← 红线：真实目录/文件一律不删 */
+    warn(`${what} 是真实目录/文件（不是链接/reparse point），拒绝删除: ${link}｜${proof(before)}`);
+    return false;
+  }
+  const attempts = [
+    ['fs.unlinkSync', () => fs.unlinkSync(link)],
+    ['fs.rmdirSync', () => fs.rmdirSync(link)],
+    ['cmd /c rmdir', () => {
+      const r = spawnSync('cmd.exe', ['/c', 'rmdir', link], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+      if (r.status !== 0) throw new Error(`exit=${r.status ?? '?'} ${`${r.stdout ?? ''}${r.stderr ?? ''}`.trim()}`);
+    }],
+  ];
+  const errs = [];
+  for (const [name, run] of attempts) {
+    const now = linkKindOf(link);             /* 动手前复查：被换成真实目录就停手 */
+    if (!now.exists) { log(`${what} 旧链接已移除（摘链接，未递归）: ${link}｜原 readlink[${before.target ?? '(n/a)'}]`); return true; }
+    if (!now.isLink) { warn(`${what} 删除前复查发现已不是链接，停止删除: ${link}｜${proof(now)}`); return false; }
+    try {
+      run();
+      if (!linkKindOf(link).exists) {
+        log(`${what} 旧链接已移除（${name}，只摘链接、未递归）: ${link}｜原 readlink[${before.target ?? '(n/a)'}]`);
+        return true;
+      }
+      errs.push(`${name}: 执行后路径仍在`);
+    } catch (e) { errs.push(`${name}: ${e?.code ?? ''} ${e?.message ?? e}`.trim()); }
+  }
+  warn(`${what} 旧链接删不掉（已试 ${attempts.map((a) => a[0]).join(' / ')}）: ${link}｜${proof(before)}｜${errs.join(' ｜ ')}`);
+  return false;
+}
+
 function ensureSymlink(link, repoDir, what) {
   ensureDir(path.dirname(link));
-  let existing = null;
-  try { existing = fs.lstatSync(link); } catch (e) { if (e?.code !== 'ENOENT') throw e; }
-  if (existing) {
-    if (!existing.isSymbolicLink()) {
+  if (!fs.existsSync(repoDir)) {
+    // 源不存在时不动已有链接：否则会把可用的链接换成一个同样坏的（原实现的隐患）
+    warn(`${what} 源目录不存在，跳过（不动已有链接）: ${repoDir}`);
+    return false;
+  }
+  const existing = linkKindOf(link);
+  if (existing.exists) {
+    if (!existing.isLink) {
       log(`${what} 已存在且不是链接，跳过: ${link}`);
       return false;
     }
@@ -361,16 +587,25 @@ function ensureSymlink(link, repoDir, what) {
       const t = fs.realpathSync(link);
       const e = fs.realpathSync(repoDir);
       same = process.platform === 'win32' ? t.toLowerCase() === e.toLowerCase() : t === e;
-    } catch {}
+    } catch { /* 悬空链接：realpath 抛错 → same=false → 下面按"需要重建"处理 */ }
     if (same) return true;
-    fs.rmSync(link, { recursive: true, force: true });
+    if (!removeLinkOnly(link, what)) {
+      warn(`${what} 旧链接存在且无法安全摘除，跳过重建（DSH 可能 pending）: ${link}`);
+      return false;
+    }
   }
   try {
     fs.symlinkSync(repoDir, link, process.platform === 'win32' ? 'junction' : 'dir');
     log(`${what} link created: ${link}`);
     return true;
   } catch (e) {
-    log(`${what} link 创建失败（跳过）: ${e?.message ?? e}`);
+    const again = linkKindOf(link);
+    let extra = '';
+    if (again.exists) {
+      if (!again.isLink) extra = `｜该路径是一个真实目录/文件（不是链接），请人工确认后再处理`;
+      else { extra = `｜仍是链接 readlink[${again.target ?? '(读不出)'}]`; if (!removeLinkOnly(link, what)) extra += '（且摘不掉）'; }
+    }
+    warn(`${what} link 创建失败（跳过）: ${e?.code ?? ''} ${e?.message ?? e}${extra}`);
     return false;
   }
 }
@@ -561,7 +796,8 @@ function sourceSignature(dir) {
   } catch { return 'unknown'; }
 }
 
-/** 每次桥启动都跑一遍的内置插件装配（幂等）：qq-mode-console + 记忆插件。 */
+/** 每次桥启动都跑一遍的内置插件装配（幂等）：qq-mode-console + 记忆插件。
+ *  （2026-09-27：ModSearch 已按要求从本项目去掉，这里不再装配任何第三方搜索插件。） */
 export function ensureBuiltinPlugins(target) {
   try { ensurePluginBundles(target); } catch (e) { warn(`qq-mode-console 装配失败：${e?.message ?? e}`); }
   try { ensureMemoryPlugin(target); } catch (e) { warn(`记忆插件装配失败：${e?.message ?? e}`); }

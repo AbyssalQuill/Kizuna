@@ -40,14 +40,6 @@
     "installYaml": "- insert:\n    - id: dsh-ssh\n      name: '@linxin666/dsh-ssh'"
   },
   {
-    "id": "modsearch",
-    "package": "@liustack/modsearch",
-    "name": "ModSearch",
-    "description": "网页与 X（Twitter）检索：带结构化证据、来源链接与不确定性标注。",
-    "repoUrl": "https://www.npmjs.com/package/@liustack/modsearch",
-    "installYaml": "- insert:\n    - id: modsearch\n      name: '@liustack/modsearch'"
-  },
-  {
     "id": "dsh-agent-teams",
     "package": "@nanmicoder/dsh-agent-teams",
     "name": "Agent Teams",

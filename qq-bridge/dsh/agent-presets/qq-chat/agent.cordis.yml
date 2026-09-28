@@ -179,6 +179,13 @@
       [ACTION = ACTION]
       Unread = look; send = type; mark_read = swipe away. Speaking is ALWAYS a tool call (see [TOOLS] 1): your text is discarded, so the reply goes inside qq_send_message (string = one bubble, array = several) together with the wind-down call in the same step. Long texts -> qq_send_docx (see [RULES] 8). No housekeeping (summaries / mediation). A bare `OK` is the ONLY thing you may ever write as text instead of calling a send tool; never narrate or apologise for a supposed repeat - fix it silently or say nothing.
 
+# 2026-09-28：下面这两行是**恒定的 false**，桥每次启动都会用 lib/dsh-side.js 的 syncPresetToolWeb
+# 把 search 钉成 false（幂等，值对了就不写盘）：宿主的 web_search 不注册 —— 模型侧要搜索就走桥自己的
+# mcp__web-search-safe__web_search（同一个引擎：lib/web-search.js 的多平台聚合 + 相关度闸门）。
+# 历史：2.0.4 之前这里会按 ModSearch 插件的装配结果改写（装到位就 true）；同日 ModSearch 按要求从本项目
+# 去掉，那个开关与那条改写逻辑一并删除，升级上来的隔离 home 里若还留着 search: true，启动时会被改回。
+# fetch 也永远是 false：页面抓取走带 SSRF 加固的 mcp__web-search-safe__web_fetch（DNS 预解析、
+# 逐跳校验、限量读取），宿主自带的抓取没有这层加固。
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'
   config:
