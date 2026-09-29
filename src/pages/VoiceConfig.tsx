@@ -206,6 +206,11 @@ interface CustomVoice { id: string; name: string; kind: 'design' | 'clone'; desc
 interface Props { onBack: () => void }
 
 const SAMPLE_TEXT = '你好呀，我是月亮，这是音色试听。';
+/** 「自定义测试文本」输入框的**默认值**（2026-09-29 使用方指定，原话「欲买挂花同载酒，终不似、少年游」，
+ *  「挂」为「桂」的笔误，此处按「桂花」并用中文顿号原样照抄）。
+ *  只作初始显示：用户改动后以用户输入为准（状态见下方 ctText）。
+ *  与 SAMPLE_TEXT 分开：那一句仍是「音色库 / 文字设计 / 样本复刻」各试听按钮用的固定试听文本，未改动。 */
+const CUSTOM_TEST_TEXT = '欲买桂花同载酒，终不似、少年游';
 /** 「全局风格指令（style）的默认值」——英文书写，描述"像真人一样说话"，供语音合成以 user 消息接收。
  *  「权威源在桥侧」：真正的出厂默认值在 `qq-bridge/src/core/voice.js` 的默认语音配置里
  *  （该文件不在本次改动范围内；此处与之同口径，改一处需同步另一处）。
@@ -273,65 +278,13 @@ const autoRetryNote = (ms: number): string =>
     ? `正在自动重试：约每 ${Math.max(1, Math.round(ms / 1000))} 秒重读一次（失败后按 5／10／20／40／60 秒退避，最长 60 秒一次）。桥启动后本页会自行恢复，无需手动刷新。`
     : '';
 
-/** 整行可点（2026-10-02 修）。使用方原话：「改掉所有输入框的 bug，鼠标悬停同一水平线就可以点击了，
- *  而不是正好落在输入框里才能点击，这个不好，修复」。
- *
- *  为什么会有这个 bug：本页有相当一部分行是 `<div className="field-row">`（试听、新建音色、
- *  音频样本、样本来源…），而 `<div>` 不会像 `<label>` 那样把点击转给行内的输入控件 ——
- *  于是"只有正好点进输入框那一小块才有效"。这里按行兜一次：点标签区或同一行的空白处，
- *  就把焦点交给这一行的输入控件（自定义下拉则是展开它的面板）。
- *
- *  三条边界（都不动视觉、不动排版、不动配色）：
- *   · 点在本行控件自身（input / textarea / select / button / 链接 / 播放器）时**直接返回** ——
- *     交给控件自己处理。复选框那种行必须这样：手动再转发一次会与浏览器原生 label 的转发叠加，
- *     等于点两下（勾选状态白点一下）；
- *   · 这一行套在 `<label>` 里时**直接返回** —— 浏览器原生就把点击转给行内控件，这是它的活；
- *     再转发一次还是"点两下"（自定义下拉会开了又关）；
- *   · 只在**这一行里**找控件（row.querySelector），绝不跨行聚焦。
- *  也就是说：这里只兜"行是 div、浏览器不会转"的情况（试听、新建音色、音频样本、样本来源…）。
- *
- *  自定义下拉（Dropdown）渲染出来是一个 `<button>`，对它派发一次 click 就是"展开面板"，
- *  与用户直接点它效果一致（`.click()` 派发的是真实事件，React 照样收得到）。
- *  本函数挂在页面根容器上（见 JSX 里 `.page-body` 的 onClick），一处覆盖本页所有行。
- *
- *  「为什么还要做去重」：无头 Chrome 实测（2026-10-02）发现**一次物理点击**里这个处理函数
- *  会被调用两遍（两次调用的调用栈不同，都出自 React 事件系统；实测两遍都走到了"这一行是不是
- *  label"那一步）。多转发一遍对输入框只是多聚焦一次（无害），对自定义下拉却是"开了又关"。
- *  三重保险，任一命中即跳过：
- *   ① 在原生事件对象上盖一个一次性记号（两次派发若是同一个原生事件，第二遍直接跳过 ——
- *      实测注入探针：第 1 遍走到了"找行内控件"，第 2 遍被这一步拦住）；
- *   ② 输入框已经就是当前焦点（`focus()` 是同步生效的，第二遍一定读得到）；
- *   ③ 自定义下拉已经展开（它自己把展开状态写在 `aria-expanded` 上）。
- *  这样写而不是"几十毫秒内不响应"：后者会误吃用户真的连点两下（那是两个不同事件）。 */
-function focusRowControl(e: React.MouseEvent<HTMLElement>): void {
-  const target = e.target as HTMLElement | null;
-  if (!target || typeof target.closest !== 'function') return;
-  // 点的是行内控件自身：不转发（复选框等由浏览器原生 label 行为负责，转发会变成点两下）
-  if (target.closest('input, textarea, select, button, a, audio')) return;
-  // 这一行本来就套在 <label> 里：浏览器原生就会把点击转给行内控件（这也是为什么带 <label> 的行
-  // 本来就没这个毛病）。再转发一次会变成点两下 —— 自定义下拉会"开了又关"，等于点不动
-  // （2026-10-02 用无头 Chrome 实测到过：点「识别语言」标签后 mb-dd-panel 是关着的）。所以只兜 div 行。
-  if (target.closest('label')) return;
-  const native = e.nativeEvent as unknown as Record<string, unknown> | undefined;
-  if (native) {
-    if (native.__rowForwarded === true) return;   // ① 同一次原生事件已经转发过
-    try { native.__rowForwarded = true; } catch { /* 冻结对象之类，忽略 */ }
-  }
-  const row = target.closest('.field-row, .switch-row') as HTMLElement | null;
-  if (!row) return;
-  const el = row.querySelector(
-    'input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), textarea, select, button.mb-dd',
-  ) as HTMLElement | null;
-  if (!el) return;
-  try {
-    if (el instanceof HTMLButtonElement) {
-      // 自定义下拉：展开它的面板。已经展开就不再点（②否则第二遍会把它关回去）
-      if (el.getAttribute('aria-expanded') !== 'true') el.click();
-    } else if (document.activeElement !== el) {
-      (el as HTMLInputElement | HTMLTextAreaElement).focus();   // ③已经是焦点就不必再聚焦
-    }
-  } catch { /* 聚焦/展开失败不该在控制台外制造噪音：这本就是"点得更宽松"的增强 */ }
-}
+/* 整行可点（"鼠标悬停同一水平线就能点"）**不在本文件实现**：全站那一份在 src/lib/field-click.ts，
+   由 src/main.tsx 启动时 installFieldClickTargets() 装一次，本页的 .field-row / .switch-row 都在它的兜底范围内。
+
+   【2026-09-29 删除本页那份重复实现的原因】本页此前另有一份 focusRowControl（挂在 .page-body 的 onClick 上），
+   于是**同一次点击**会被两处各转发一次。文本框多聚焦一次无害，但自定义下拉（Dropdown）的触发器是"开 → 关"翻转，
+   两遍合起来等于没点开 —— 无头实测：点该行空白时 button.mb-dd 收到两个合成 click，第一个把 aria-expanded 变 true、
+   第二个又关回去，最终仍是关着的（用户看到的就是"点这一行点不开下拉"）。留一份实现，这种互相抵消就不会再出现。 */
 
 /* ================= 表单取值（2026-09-23 重订口径） =================
  * 本页与「实例配置」同属配置页：有缓存即以缓存里的真实值渲染（缓存见 `src/config-cache.ts`），
@@ -837,7 +790,7 @@ export default function VoiceConfig({ onBack }: Props) {
    *   · ctBusy ：忙碌键（'synth' / 'freeze' / 'local'），与页面其它忙碌态互不干扰；
    *   · ctMsg  ：结果行，成功与失败都逐字写在这里（音频播放仍走页面下方那个既有播放器）；
    *   · ctName ：给"冻结出来的参考样本"与"新建的本地音色"起的名字（留空则自动命名）。 */
-  const [ctText, setCtText] = useState(SAMPLE_TEXT);
+  const [ctText, setCtText] = useState(CUSTOM_TEST_TEXT);
   const [ctBusy, setCtBusy] = useState<string | null>(null);
   const [ctMsg, setCtMsg] = useState('');
   const [ctName, setCtName] = useState('');
@@ -1244,6 +1197,19 @@ export default function VoiceConfig({ onBack }: Props) {
       engineUrl ? `引擎地址 ${engineUrl}` : '',
     ].filter(Boolean).join('\n');
   }, [localStat]);
+
+  /* 「本地引擎为什么现在装不了 / 换了机器怎么办」那块的**结论句**（2026-09-29 使用方要求
+   *  「界面上不要有任何写死的东西，并精简，因为我们主要是面向大众」）。
+   *  这一句完全由上面那行的探测读数决定（localStat.ready / running / rssMb / localProbeErr），
+   *  所以换机器、换「查看目标」时同一段文字自动跟着变，界面里不再留任何本机或某台服务器的
+   *  实测数字、目录路径与内部命令行。 */
+  const engineVerdict = !localStat
+    ? (localProbeErr
+      ? `读数没拿到（${localProbeErr}）—— 点上面的「重新检测」再看一次。`
+      : '正在读取目标机器的实况，读到就按它判定。')
+    : localStat.ready
+      ? `满足上面的要求，引擎可用${localStat.running ? `（运行中，常驻 ${localStat.rssMb ?? '?'} MB）` : ''}。`
+      : '还不满足上面的要求 —— 具体缺什么，由上面那行读数如实列出，这里不下结论。';
 
   /* 自动检测引擎状态（2026-10-02 改）。
    * 使用方原话：「检测状态改为自动检测，去掉按钮」——原来那个「检测状态」按钮已经撤掉，
@@ -1704,10 +1670,10 @@ export default function VoiceConfig({ onBack }: Props) {
       {/* 表单任何一处控件（含复选框、下拉、文本与文件输入）被改动时登记一次：
           首次读取的回包若在此之后到达，则不再覆盖用户已输入的内容（见 applyCfg 的 overwrite 参数）。
           用捕获阶段的 change 事件统一登记，无需为每个控件各写一遍。
-          —— 另：click 那一个挂的是"整行可点"（2026-10-02 修「必须正好点进输入框里才能输入」）：
-          点标签区或同一行的空白处就聚焦到本行的输入控件，实现见文件上方的 focusRowControl；
-          挂在根容器上一处覆盖本页所有行（.field-row / .switch-row），不逐行各写一遍。 */}
-      <div className="page-body" onChangeCapture={() => { touched.current = true; }} onClick={focusRowControl}>
+          —— 另：「整行可点」（点标签区或同一行的空白处就聚焦/展开本行的控件）**不在这里挂**：
+          全站那一份在 src/lib/field-click.ts（main.tsx 启动时装一次），本页不必也不能再挂第二份，
+          否则同一次点击会被转发两遍、自定义下拉会"开了又关"（见文件上方那段说明）。 */}
+      <div className="page-body" onChangeCapture={() => { touched.current = true; }}>
         <NoticeBar msg={msg} onClose={() => setMsg(null)} />
 
         {loadErr && (
@@ -1808,7 +1774,7 @@ export default function VoiceConfig({ onBack }: Props) {
                 <div className="field-row" style={{ gridColumn: '1 / -1' }}>
                   <span className="f-label">自定义测试文本（试听 / 保存并冻结）</span>
                   <textarea className="textarea" rows={2} value={ctText} disabled={!ready}
-                    placeholder={SAMPLE_TEXT}
+                    placeholder={CUSTOM_TEST_TEXT}
                     onChange={(e) => setCtText(e.target.value)} />
                   <em>
                     用上面「默认音色」合成这一段，合成完在下方播放器里播放；长度限制与「单条语音最长字数」同一条 ——
@@ -2115,10 +2081,10 @@ export default function VoiceConfig({ onBack }: Props) {
                 {advOpen && (<>
                 <label className="field-row">
                   <span className="f-label">引擎目录</span>
-                  <input className="input" type="text" placeholder="留空 = qq-bridge/python"
+                  <input className="input" type="text" placeholder="留空 = 默认位置"
                     value={localEngine?.rootDir ?? ''}
                     onChange={(e) => patchLocal({ rootDir: e.target.value })} />
-                  <em>里面有 genie_server.py、.venv 与 GenieData</em>
+                  <em>引擎所在目录（里面是引擎脚本与它自带的运行环境）</em>
                 </label>
                 <label className="field-row">
                   <span className="f-label">角色模型目录</span>
@@ -2157,22 +2123,22 @@ export default function VoiceConfig({ onBack }: Props) {
               <div className="lrn-inline-note" style={{ display: 'flex', alignItems: 'flex-start', lineHeight: 1.7 }}>
                 <HardDrive size={13} style={{ flex: 'none', marginTop: 2 }} />
                 <span>
-                  引擎与角色在命令行里装：<code>node tools/genie-setup.mjs --install</code>
-                  {' → '}<code>--download</code>{' → '}<code>--add-character &lt;模型目录&gt; &lt;角色名&gt;</code>。
-                  角色放哪个目录随包分发都行，装好后刷新本页（或切一下「查看目标」）就会出现在上面的下拉框里；只放自己有权使用的模型。
+                  引擎与角色装好后，刷新本页（或切一下「查看目标」）就会出现在上面的下拉框里；只放自己有权使用的模型。
                 </span>
               </div>
 
               {/* 三句必须写在卡面上的事实（本次新增）：角色从哪来、音色库里哪一类本地能用、空的时候是怎么回事。
-                  容器用块级（`.lrn-inline-note` 是 inline-flex，元素子节点会被拆成 flex 子项、正文会错位换行）。 */}
+                  容器用块级（`.lrn-inline-note` 是 inline-flex，元素子节点会被拆成 flex 子项、正文会错位换行）。
+                  2026-09-29：这里原来把引擎的安装命令行与内部目录原样抄在界面上，已按使用方要求去掉
+                  （「界面上不要有任何写死的东西」）—— 只剩"角色从哪来、装好要做什么"这两句人话。 */}
               <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
-                <div>角色来自本地模型目录 <code>qq-bridge/python/models/&lt;角色名&gt;</code>：装预置角色用 <code>node tools/genie-setup.mjs --characters</code>，接入自己的模型用 <code>node tools/genie-setup.mjs --add-character &lt;目录&gt; [名字]</code>，装好后刷新本页（或切一下「查看目标」）即出现在上面的下拉框里。</div>
+                <div>角色来自引擎自己的<b>模型目录</b>：把一个角色放成一个子目录，刷新本页（或切一下「查看目标」）它就会出现在上面的下拉框里。</div>
                 {/* 2026-10-02：上面那句以前不分场合地摆着 —— 使用方连着服务器、看的是服务端那份时，
-                    很容易以为"照这条命令装一下就行"，而那条命令是在**跑引擎的那台机器**（通常就是本机）上跑的。
-                    这里补一句"在哪台机器上执行"的说明 + 指向上面那个一键按钮；原有诊断信息一句没删。 */}
+                    很容易以为"在本机装一下就行"，而角色其实要装在**跑引擎的那台机器**上。
+                    这里补一句"装在哪台机器上"的说明 + 指向上面那个一键按钮；原有诊断信息一句没删。 */}
                 {localScope !== 'local' && (
                   <div>
-                    注意：上面两条命令要在<b>跑引擎的那台机器</b>上执行（不是管理端所在页面，也不是任意一台）。
+                    注意：角色要装在<b>跑引擎的那台机器</b>上。
                     当前「查看目标」看的是 <b>{curSideLabel}</b>；如果角色其实装在本机，
                     点上面的「切到本机并重新检测」就能看到它 —— 这一档不变的话，这里永远只会显示服务端那份目录。
                   </div>
@@ -2185,8 +2151,7 @@ export default function VoiceConfig({ onBack }: Props) {
               {localStat && charList.length === 0 && (
                 <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
                   <div><b>还没有安装任何角色</b>：本地引擎默认不带角色，装好一个才会出现在上面的「默认角色」里。</div>
-                  <div>预置角色：<code>node tools/genie-setup.mjs --characters</code></div>
-                  <div>自己的模型：<code>node tools/genie-setup.mjs --add-character &lt;模型目录&gt; [名字]</code></div>
+                  <div>把角色放进引擎的模型目录（一个角色一个子目录），再刷新本页即可。</div>
                   {/* "本机有、这一侧没有"时，这里也要给出那条一键路径（与上面 charHint / 那个按钮同一件事）。 */}
                   {otherSideChars && localScope !== 'local' && (
                     <div>
@@ -2242,31 +2207,22 @@ export default function VoiceConfig({ onBack }: Props) {
                 </div>
               )}
 
-              {/* 为什么这台服务器装不了本地引擎（2026-10-02 使用方要求「另外说明服务器为何不能部署」）。
-                  数字全部是实测值，来源：本机 `node tools/genie-setup.mjs --smoke` 的读数与
-                  docs/TECHNICAL.md §18.10（常驻 4054.5 MB / 合成期峰值 4565.8 MB；.venv 556 MB、
-                  GenieData 391.5 MB、每个角色 320.8~321.3 MB），服务器那侧则是这张卡探测回包里
-                  如实带回来的（python3 3.14.4、解释器里没有 genie_tts、GenieData 与角色目录都不存在）。
-                  写法要求：一眼看出**能力还在，只是这台机器不够**。 */}
+              {/* 本地引擎对机器的要求 + 按当前「查看目标」的读数给结论（2026-09-29 使用方要求：
+                  「界面上不要有任何写死的东西，并精简，因为我们主要是面向大众」）。
+                  这一块**刻意只留三行**：
+                   ① 引擎自身的通用门槛（内存 / 磁盘 / CPU，措辞带「约」，任何机器都适用）；
+                   ② 结论 —— 由上面那行探测读数驱动（engineVerdict 读 localStat.ready / reasons / running），
+                      不写死"哪台机器装不了"，换机器或换「查看目标」时这段文字自己跟着变；
+                   ③ 一句说明为什么不用改界面。
+                  这里不出现任何一台具体机器的规格、目录路径与内部命令行 —— 那是运维细节，
+                  会在有部署需求时随文档给出，而不是摆在面向大众的界面上。 */}
               <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
-                <div><b>为什么服务端现在还装不了这台引擎（能力都在，是这台机器不够）</b></div>
-                <div>· 内存：引擎常驻 4.0~4.6 GB，合成一句长文本的峰值也在 4.4~4.6 GB，加载角色的那一瞬间更高 —— 1 核 3.9 GB 的服务器放不下，一跑就 OOM。</div>
-                <div>· 磁盘：引擎本体约 1.5 GB（自带解释器 .venv 约 0.56 GB + 公共数据 GenieData 约 0.39 GB），每个角色再加约 321 MB。</div>
-                <div>· CPU：需要支持 AVX 指令集的 x86 CPU（引擎跑的是 onnxruntime 的 CPU 版）。</div>
-                <div>· 那台服务器的实况：python3 是 3.14（解释器里没有 genie_tts）、GenieData 与角色模型目录都不存在 —— 把上面「查看目标」切到服务端，这一行读数就是它如实报回来的。</div>
                 <div>
-                  <b>能部署的能力一样都没删</b>：「查看目标」的<b>服务端</b>档、服务器侧那套路径都还在，
-                  命令行那套在服务器上同样可用：<code>node tools/genie-setup.mjs --install</code> →
-                  <code>--download</code> → <code>--characters</code>（或 <code>--add-character</code>），
-                  装完 <code>--check</code> 自检 —— 换了够大的机器，把这些跑一遍就能用。
+                  引擎与角色装在<b>跑它的那台机器</b>上；对机器的通用要求：可用内存约 5 GB、磁盘约 2 GB
+                  （每加一个角色再约 0.3 GB），x86 CPU 且支持 AVX。
                 </div>
-                <div>
-                  <b>换更大的服务器后怎么部署</b>：把本机这棵引擎目录 <code>python/</code>（连同自带的
-                  <code>runtime/</code> 与 <code>.venv</code>）和 <code>models/</code> 一起同步到服务器的
-                  <code>/root/qq-bridge/</code> 下，再跑 <code>node tools/genie-setup.mjs --check</code>
-                  （必要时加 <code>--smoke</code> 真合成一句，会打印实测常驻内存与耗时）。
-                  服务器上跑不了就别硬跑：缺兼容的 Python、缺依赖或没有 AVX，这一步都会如实报出来。
-                </div>
+                <div>当前「查看目标」＝<b>{curSideLabel}</b>：{engineVerdict}</div>
+                <div>换机器不用改这里：能力没有按机器删减，把「查看目标」切到那一侧，就按那台机器的实况重新判定。</div>
               </div>
             </div>
 

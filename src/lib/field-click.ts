@@ -111,7 +111,13 @@ function activate(el: HTMLElement): void {
   if (el.tagName === 'BUTTON' || el.getAttribute('role') === 'combobox') {
     const btn = el as HTMLButtonElement;
     btn.focus();
-    btn.click();                 // 自定义下拉：整块触发器本来就点得开，这里让"它所在的这一行"也点得开
+    /* 自定义下拉：整块触发器本来就点得开，这里让"它所在的这一行"也点得开。
+       **只在它还没展开时点**：同一次点击里若已经有人把它点开过（历史上语音配置页自己挂过一份
+       「整行可点」，见 git 记录里的 VoiceConfig.focusRowControl），这里再点一下就是"开了又关"——
+       用户看到的现象正是"点这一行的空白/标签，下拉闪一下还是没打开"（2026-09-29 无头实测：
+       同一次点击里 button.mb-dd 收到两个合成 click，第一个把 aria-expanded 变 true，第二个又关回去）。
+       展开状态是控件自己写的（Dropdown 的 aria-expanded），读它比记"谁先谁后"可靠，也不依赖挂载顺序。 */
+    if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
     return;
   }
   el.focus();
