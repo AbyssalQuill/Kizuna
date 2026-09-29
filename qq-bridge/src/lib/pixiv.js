@@ -1958,8 +1958,8 @@ export async function pixivSearchUsersByName(name) {
   // （桥自己的多平台搜索），它能在没有登录态时把画师主页直接搜出来（服务器实测：米山舞 → users/1554775）。
   // 官方两条路的优先级一字未改：有登录态就先用官方，①②③ 全失败才走 ④。
   if (!token && !pixivLoggedIn()) {
-    tried.push('登录态 → 没有 refresh_token/access_token 也没有 cookie（官方两条路都跳过；'
-      + '想要长期可用的官方接口就跑一次 node tools/pixiv-login.mjs --cookie "PHPSESSID=…"，之后桥自己续期）');
+    tried.push('登录态 → 没有可用的登录凭据（官方两条路都跳过；'
+      + '想要长期可用的官方接口，重新提供一次 Pixiv 登录凭据即可，之后桥自己续期）');
   }
 
   // ① app-api（Bearer）：没有令牌就跳过，别白等一次 400
@@ -2025,8 +2025,8 @@ export async function pixivSearchUsersByName(name) {
   }
 
   throw new Error(`按名字搜「${w}」没拿到结果。逐条试过：${tried.join('；')}。`
-    + '（官方两条路要登录态，用 tools/pixiv-login.mjs --status 看当前状态；'
-    + '搜索那条要这台机器能出网（机房 IP 下 firecrawl 与维基/新闻 RSS 可用，见 CHANGELOG）。'
+    + '（官方两条路要有登录态：在「功能配置 → Pixiv」里重新提供一次登录凭据即可；'
+    + '搜索那条要这台机器能出网。'
     + '也可以直接给画师号（如 1554775）或作品链接。）');
 }
 

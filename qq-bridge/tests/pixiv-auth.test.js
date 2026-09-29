@@ -388,7 +388,13 @@ await t('cookie 无效（两次都拿不到 code）→ 不抛、ok:false、只�
   assert.equal(fs.existsSync(TOKEN_FILE), false, '换不到令牌就不该凭空造一个文件');
   assert.equal(logs.length, 2, '只记"要换"和"换失败"两行，不刷屏、不重试');
   assert.match(logs[1], /换长期令牌失败/);
-  assert.match(logs[1], /tools\/pixiv-login\.mjs/, '失败时要把"手工引导"这条退路指出来');
+  /* 2026-10-02 面向大众：这一行是"运维侧"的，可以点出仓库脚本名，但**说给用户听的那半句**
+   * 必须是白话 —— 断言改成看这一点的"设计意图"，而不是钉死某个脚本名。
+   * 同时加一条回归断言：这行里不许出现内部路径（/root、tools/ 这类）。
+   * 真正发给用户的提示在 pixiv-watch.js 的两条 QQ 通知模板里，那两处已不含任何内部命令。 */
+  assert.match(logs[1], /手工引导|重新提供一次|再发一次/, '失败时要指出"再来一次 / 手工引导"这条退路（白话，不点内部命令）');
+  assert.ok(!/\/root|\\root|tools\/|\.mjs|systemctl|node tools|GenieData|\.venv/.test(logs[1]),
+    `排查用的日志行里不该带内部路径/命令：${logs[1]}`);
 });
 
 await t('QQBRIDGE_PIXIV_COOKIE_OFF=1 → 当作没配（可临时下线而不删配置）', async () => {

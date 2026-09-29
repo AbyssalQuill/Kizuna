@@ -679,8 +679,8 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                     常见处理：① 口令认证被拒 → 核对口令（可用系统 ssh 客户端复核）或改用密钥认证；② 服务器仅允许密钥认证 →
                     将公钥写入服务器的 <code>~/.ssh/authorized_keys</code>；③ 私钥设有口令 → 在「配置」中补填私钥口令。
                     <br />
-                    <b>切勿连续点击测试</b>：服务器上的 fail2ban 常因多次失败而一并封禁本机 IP，此后表现将由「认证失败」转为「连接超时」
-                    （解封：<code>fail2ban-client set sshd unbanip &lt;你的IP&gt;</code>）。
+                    <b>切勿连续点击测试</b>：服务器上的安全防护软件常因多次失败而一并封禁本机 IP，此后表现将由「认证失败」转为「连接超时」
+                    （需由服务器管理员解除对本机 IP 的封禁，或等待封禁自动过期后再试）。
                   </div>
                 )}
               </div>

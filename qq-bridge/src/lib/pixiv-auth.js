@@ -244,7 +244,7 @@ async function doRefreshPixivToken() {
   const stored = readPixivToken();
   const { token: refreshToken, source } = resolvePixivRefreshToken(String(stored.refresh_token ?? '').trim());
   // 没登录态不算"故障"（是没配），所以这里不落盘 last_error，也不建令牌文件。
-  if (!refreshToken) return { ok: false, error: '没有 refresh_token：先跑 tools/pixiv-login.mjs --cookie 换一次', status: 0, body: '' };
+  if (!refreshToken) return { ok: false, error: '没有登录态：需要先提供一次 Pixiv 登录凭据换取长期令牌', status: 0, body: '' };
 
   let res;
   let text = '';
@@ -584,8 +584,9 @@ export async function bootstrapPixivFromConfigCookie({ logger = () => {} } = {})
   }
   if (!r?.ok) {
     logger(`[pixiv] 用配置里的 cookie 换长期令牌失败：${r?.error ?? '未知原因'}`
-      + '（按名字搜画师仍可用这份 cookie，但它不会自动续期；换一份新 cookie，'
-      + '或跑 node tools/pixiv-login.mjs --cookie "PHPSESSID=…" 看每一步的实测响应）');
+      + '（按名字搜画师仍可用这份 cookie，但它不会自动续期；要么换一份新的登录凭据再发一次，'
+      + '要么走上"手工引导"这条退路：把浏览器里现成的登录 cookie 重新贴一次给它换。'
+      + '本行只进桥日志，不发给用户。）');
     return { ok: false, error: String(r?.error ?? '未知原因'), attempts: r?.attempts };
   }
   logger(`[pixiv] 已用配置里的 cookie 换取长期令牌（账号 ${r.userId || '?'}${r.userName ? `「${r.userName}」` : ''}，`

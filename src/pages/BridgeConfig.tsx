@@ -453,8 +453,8 @@ function mcpLabel(fullName: string) {
   homeDir: '网关侧可写目录（容器映射等）。本机 NapCat 一般不需要。',
   allowProcessControl: '是否允许 DSH 内的 agent 自动启停本机 QQ 网关。仅在对运行环境完全信任时开启。',
   'napcat.imageFileMode': '发送图片与表情时，桥交给 NapCat 的文件传递方式：path=直接给路径（本机裸机部署）；base64=读为 base64 传入（跨容器、跨机均可发送）；auto=先按「容器路径映射」换算为容器内路径（服务器 Docker 场景），无法换算时退回 base64。服务器上推荐 auto。',
-  'napcat.tmpDir': '桥写临时文件（表情、语音、文档）的目录。服务器上须指向 NapCat 容器挂载出来的目录（例如 /root/napcat/config/moonbot-tmp），否则容器读不到文件，图片与语音无法发出。',
-  'napcat.dockerPathMap': '宿主目录到容器内目录的映射表，配合 imageFileMode=auto 使用。服务器 NapCat 运行在 Docker 中时填写 [{"host":"/root/napcat/config","container":"/app/napcat/config"}] 一类取值。',
+  'napcat.tmpDir': '桥写临时文件（表情、语音、文档）的目录。服务器上须指向 NapCat 容器挂载出来的目录（例如 /path/to/napcat-config/tmp），否则容器读不到文件，图片与语音无法发出。',
+  'napcat.dockerPathMap': '宿主目录到容器内目录的映射表，配合 imageFileMode=auto 使用。服务器 NapCat 运行在容器里时填写 [{"host":"/path/to/napcat-config","container":"/app/napcat/config"}] 一类取值（两侧都按自己机器上的实际目录填）。',
   accessToken: '「HTTP 访问令牌」：桥接进程经 HTTP 接口（http://127.0.0.1:3000，NapCat 的 httpServers）收发消息时使用的令牌，须与 NapCat WebUI 中 HTTP 服务的 token 一致。'
     + '它与「WS 访问令牌」是两种传输各自的令牌，即使取值相同也是分开的字段，修改其一不影响另一；填错会导致 HTTP 工具全部返回 401。',
   wsAccessToken: '「WS 访问令牌」：桥接进程经 WebSocket 接口（ws://127.0.0.1:3001，NapCat 的 websocketServers）收发消息时使用的令牌，须与 NapCat WebUI 中 WS 服务的 token 一致。'
@@ -484,7 +484,7 @@ function mcpLabel(fullName: string) {
   'social.toolCompressor': '开源 mcp-compressor 代理：DSH 不再直连 napcat MCP，改为连接代理；代理发给模型的只有包装工具 —— 低/中/高三档 2 个（napcat_get_tool_schema / napcat_invoke_tool），极限（max）档 3 个（多一个 napcat_list_tools，用来列出后端全部工具名），工具清单被压入这些包装工具的描述。'
     + '2026-09-29 挂当前 94 个工具实测，相对完整工具表：低 45.3% / 中 14.3% / 高 6.3% / 极限 3.5%。'
     + '代价是调用本轮未使用过的工具时须「先查 schema 再调用」，步数由 1 步增至 2 步；桥侧已按真实工具名解包，不影响发送判定与幂等账本。'
-    + '注意：压缩机未安装（pip3 install mcp-compressor）时自动回退直连，工具表不会被清空；修改后必须重启隔离 DSH。',
+    + '注意：压缩代理未安装时自动回退直连，工具表不会被清空；修改后必须重启隔离 DSH。',
   'social.toolCompressor.enabled': '是否让隔离 DSH 经压缩代理。关闭即直连（默认）。'
     + '桥每次启动会做一次轻量探测：找不到 mcp-compressor 可执行文件即自动回退直连，并把原因写入日志。',
   'social.toolCompressor.level': '代理压缩档位（对应 mcp-compressor 的 --compression）：低 = 保留完整描述；中 = 每条描述只留第一句；高 = 工具清单不带描述（参数名仍列出）；极限 = 连参数也不列，只剩工具名，并另发一个 napcat_list_tools 供模型列清单。'

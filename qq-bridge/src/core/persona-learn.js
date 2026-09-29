@@ -1129,7 +1129,7 @@ export async function handlePersonaLearnCommand(text, ctx) {
       const lcfg = readLearningConfig();
       list = normalizeTargetUids(lcfg?.persona?.targetQQ ?? []);
       if (!list.length) {
-        return { handled: true, reply: ['没有配置学习目标（state/learning-config.json → persona.targetQQ 为空），指令里也没带 QQ 号。'] };
+        return { handled: true, reply: ['没有配置学习目标（功能配置里的学习对象名单为空），指令里也没带 QQ 号。'] };
       }
     }
     const res = personaLearnTargets(list);

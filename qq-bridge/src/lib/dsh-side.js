@@ -395,7 +395,9 @@ export function resolveToolCompressor({ log = () => {}, force = false } = {}) {
       }
     } catch { /* 试下一个 */ }
   }
-  compressorProbe = { ok: false, command: '', reason: '未找到 mcp-compressor 可执行文件（pip 装一个即可：pip3 install mcp-compressor）', at: now };
+  /* 2026-10-02 面向大众：reason 会随 /api/state 回到管理端（日志与界面都可能显示），
+   * 故这里只说"没装"这件事本身，不写安装命令；装法在部署文档里给。 */
+  compressorProbe = { ok: false, command: '', reason: '未找到 mcp-compressor 可执行文件（压缩代理未安装）', at: now };
   log(`[dsh-side] 未找到 MCP 压缩代理，工具代理关闭：${compressorProbe.reason}`);
   return compressorProbe;
 }

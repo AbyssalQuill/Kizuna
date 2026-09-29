@@ -546,7 +546,9 @@ function describeAuthError(server, err, serverMethods, sentMethods) {
   const head = `认证失败：${who}｜本次发送：${sent}｜服务器允许：${allow}`;
   // 服务器侧多半有 fail2ban：连错几次会把本机 IP 一起封掉，那之后表现会从"认证失败"变成"连接超时"。
   // 这句提示就是提醒"别反复点测试"——一旦被封，正确的凭据也连不上（2026-09-12 实测踩到过）。
-  const banHint = '（提示：不要反复点测试 —— 服务器的 fail2ban 可能因多次失败把本机 IP 一并封禁，届时会变成"连接超时"；解封：fail2ban-client set sshd unbanip <你的IP>）';
+  /* 2026-10-02 面向大众：这句提示直接显示在「测试结果」里，故只说结论与用户可做的动作，
+   * 内部命令（fail2ban-client set sshd unbanip …）降级到管理器日志（见 sshAuthDiagnose）。 */
+  const banHint = '（提示：不要反复点测试 —— 服务器上的安全防护软件可能因多次失败把本机 IP 一并封禁，届时会变成"连接超时"；需由服务器管理员解除对本机 IP 的封禁，或等待封禁自动过期后再试）';
   if (/Encrypted private key|no passphrase/i.test(raw)) return `${head}。→ 私钥有口令保护，请在「编辑」里补上私钥口令`;
   if (/Cannot parse|bad format|Invalid key/i.test(raw)) return `${head}。→ 私钥文件读不懂（格式或内容不对，或该文件其实是公钥）`;
   if (!sentMethods.length) return `${head}。→ 没有可用的凭据：密码为空 / 私钥路径未填，先补齐再测`;
@@ -575,6 +577,10 @@ function sshAuthDiagnose(server, err, debugLines = [], sentMethodsExtra = []) {
   const serverMethods = readServerAuthMethods(debugLines);
   const message = describeAuthError(server, err, serverMethods, sentMethods);
   mlog(`[ssh] 诊断 ${server.username}@${server.host}: ${message}`);
+  /* 技术细节只进日志，不进返回给界面的字符串：这几条是运维侧真正的解封手法，
+   * 界面文案里已降级为"请服务器管理员解除封禁"。 */
+  mlog(`[ssh] 诊断详情（仅供运维）：服务器侧自保软件多为 fail2ban，解封命令 fail2ban-client set sshd unbanip <本机IP>；`
+    + `本次发送方式=${sentMethods.join('+') || '无'}，服务器允许=${serverMethods.join(',') || '（未取到）'}`);
   return { serverMethods, sentMethods, message };
 }
 
@@ -3463,7 +3469,7 @@ const sshCooldownText = (info) => {
       ? '这几回是"连不上/超时"'
       : '这几回报错不一';
   const advice = info.kind === 'network'
-    ? '连不上也可能是 fail2ban 把本机 IP 封了：在服务器上跑 fail2ban-client set sshd unbanip <本机IP> 可解。'
+    ? '连不上也可能是服务器上的安全防护软件把本机 IP 封了：请管理员解除封禁，或等封禁自动过期后再试。'
     : '把密码/用户名改对后可以直接重试（点了"仍然重试一次"就立刻再试）。';
   return `连续失败 ${info.count} 次，先停 ${secs} 秒再试：${kindText}。上一次报错：${info.lastError || '（未记录）'} ${advice}`;
 };
@@ -3545,8 +3551,8 @@ app.post('/api/ssh/test', async (req, res) => {
   if (isTimeout) {
     // 超时/拒连≠凭据问题：可能是端口不对（同一台 IP 上常挂着多个 sshd），也可能是刚失败太多次被 fail2ban 封了本机 IP
     const after = sshCooldownInfo(server).ms > 0
-      ? '（这台机器刚刚连续失败过几次，fail2ban 很可能已封本机 IP —— 去服务器上 fail2ban-client set sshd unbanip <本机IP> 解开）'
-      : `（端口 ${first} 上没有 SSH 服务或放不放行要确认；可用 tools\\probe-ssh-banner.mjs 零认证探测哪个端口才是 sshd${server.lastGoodPort ? `，上次成功的是 ${server.lastGoodPort}` : ''}）`;
+      ? '（这台机器刚刚连续失败过几次，服务器上的安全防护软件很可能已封本机 IP —— 请管理员解除封禁，或等封禁自动过期后再试）'
+      : `（端口 ${first} 上没有 SSH 服务或未放行，需在服务器侧确认该端口是否就是 SSH 端口${server.lastGoodPort ? `，上次成功的是 ${server.lastGoodPort}` : ''}）`;
     res.json({ success: false, timeout: true, message: `连接失败：${server.username}@${server.host}:${first}${after}` });
     return;
   }
@@ -3946,11 +3952,11 @@ app.post('/api/ssh/sync', async (req, res) => {
           if (!pkg.ok) return res.json({ success: false, steps: [...steps, { step: '本地打包桥代码', ok: false, msg: pkg.error }] });
           steps.push({ step: '本地打包桥代码', ok: true, msg: pkg.path });
           await uploadFileVerified(conn, pkg.path, '/root/qq-bridge-sync.tar.gz');
-          steps.push({ step: '上传桥代码', ok: true, msg: '/root/qq-bridge-sync.tar.gz' });
+          steps.push({ step: '上传桥代码', ok: true, msg: '已上传到服务器的临时目录' });
           const bak = await sshExecCapture(conn, 'if [ -f /root/qq-bridge/config.json ]; then cp /root/qq-bridge/config.json /root/qq-bridge/config.json.bak-sync && echo backed-up; else echo no-config; fi', 20000);
           steps.push({ step: '备份远端 config.json', ok: bak.ok, msg: bak.ok ? (bak.out.includes('backed-up') ? '已备份为 config.json.bak-sync' : '远端无 config.json, 跳过') : bak.error });
           const unp = await sshExecCapture(conn, 'cd /root && tar xzf /root/qq-bridge-sync.tar.gz -C /root && echo unpacked', 300000);
-          steps.push({ step: '解包覆盖 /root/qq-bridge', ok: unp.ok, msg: unp.ok ? '已解包' : unp.error });
+          steps.push({ step: '解包覆盖服务器上的桥目录', ok: unp.ok, msg: unp.ok ? '已解包' : unp.error });
           /* 2026-09-19 兜底：上面 packLocalBridge 的排除表已经不收 config.json 了，这里再保一道：
            * 万一将来有人把 config.json 加回 tar（或本地这个 tar 是旧版打的），解包后立刻把同步前那份换回来。
            * 远端 config.json 装的是这台机器专属的东西（NapCat 令牌、DSH 端口、docker 路径映射、白名单），
@@ -6287,7 +6293,7 @@ function findMemeRelayoutScript() {
 function runMemeRelayout(packDir) {
   const script = findMemeRelayoutScript();
   if (!script) {
-    return { ok: false, output: '', message: '没找到规整脚本 qq-bridge/tools/relayout-meme-pack.mjs（找过桥目录与运行目录的 tools/）；文件已留在临时目录里没动' };
+    return { ok: false, output: '', message: '没找到表情包规整脚本（桥目录与运行目录里都没有）；文件已留在临时目录里没动' };
   }
   const spawnIt = (exe) => spawnSync(exe, [script, packDir], { encoding: 'utf8', windowsHide: true, timeout: 180000, maxBuffer: 16 * 1024 * 1024 });
   // 打包版的 process.execPath 就是随包的 qbm-node.exe（本身就是 node）；万一不是，再退回 PATH 里的 node
@@ -6728,7 +6734,7 @@ async function remoteRestartBridge(conn) {
   const out = String(r.out || '').trim();
   if (!r.ok) return { ok: false, msg: r.error || '重启命令没跑起来', out };
   if (out.includes('restart-script-missing')) {
-    return { ok: false, msg: '服务器上没有 qq-bridge/tools/restart-bridge.sh（这份代码包是旧版？先同步一次代码再来）', out };
+    return { ok: false, msg: '服务器上的桥缺少重启脚本（这份代码包是旧版？先同步一次代码再来）', out };
   }
   return { ok: out.includes('bridge-up'), msg: out || '(没有输出)', out };
 }
@@ -7132,7 +7138,7 @@ async function remoteWriteTextVerified(conn, path, content, { backup = true, tim
  */
 async function readRemoteBridgeBundle(server, conn) {
   const dir = await getRemoteBridgeDir(server, conn);
-  if (!dir) return { ok: false, dir: '', message: '服务器上没找到 qq-bridge 目录（找过 /root/qq-bridge、~/qq-bridge、/opt、/srv 等常见位置）' };
+  if (!dir) return { ok: false, dir: '', message: '服务器上没找到桥目录（已在常见安装位置逐个查找，均无 qq-bridge）' };
   const cfgRead = await remoteReadText(conn, `${dir}/config.json`);
   if (!cfgRead.ok) return { ok: false, dir, message: cfgRead.missing ? `${dir}/config.json 不存在（服务器上桥还没跑过？）` : ('读取服务器 config.json 失败：' + (cfgRead.error || '')) };
   let config = null;

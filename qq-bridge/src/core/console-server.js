@@ -6331,7 +6331,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/learning/submit-persona') {
         const { isValidLearningToken } = await import('../core/learning-token.js');
         if (!isValidLearningToken(req.headers['x-agent-token'])) {
-          sendJson({ ok: false, error: '该接口需要有效的学习令牌（见 state/learning-token，或本轮学习提醒里给的那串）' }, 403);
+          sendJson({ ok: false, error: '该接口需要有效的学习令牌（用本轮学习任务里给出的那串令牌）' }, 403);
           return;
         }
         const body = await readBody();

@@ -619,6 +619,18 @@ function downloadFile(name: string, data: BlobPart, mime: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+/** 路径显示上的"去运维细节"（2026-10-02 面向大众）：把服务端常见的 root 家目录缩成 `~`。
+ *  只改显示、不改任何落盘数据，也不影响判断（纯前缀替换）。
+ *  本机路径（`D:\…`、`C:\Users\…`）原样返回 —— 那是用户自己在「高级」里填的，回显才有用。 */
+function tidyPath(p: string): string {
+  const s = String(p || '');
+  if (!s) return s;
+  if (s === '/root' || s.startsWith('/root/')) return '~' + s.slice('/root'.length);
+  const m = /^\/home\/[^/]+/.exec(s);
+  if (m) return '~' + s.slice(m[0].length);
+  return s;
+}
+
 export default function VoiceConfig({ onBack }: Props) {
   /* 首帧初值只在挂载时取一次（用 ref，不放在渲染里每次调用 `initialFromCache` —— 那会反复构造
      新对象，也会让据此做的判断漂移）。三份读取各留一份"上一次成功读到的内容"：进页面先把它们
@@ -1180,14 +1192,20 @@ export default function VoiceConfig({ onBack }: Props) {
    * 此前只读顶层同名键 → 悬停里「引擎目录 / 角色模型目录 / 引擎地址」三行一直是空的。
    * 现在 `paths` 优先、顶层兜底：本机档显示 `D:\Kizuna\resources\runtime\qq-bridge\python`，
    * 自动/服务端档显示服务器那份 `/root/qq-bridge/python`。 */
+  /* 【2026-10-02 面向大众】悬停里只说"是什么"，不再把解释器可执行文件与目录的绝对路径摆出来
+   * （那属于运维细节，排障时看日志）：可执行文件路径、脚本文件名一律不出现在这里。
+   * 「引擎目录 / 角色模型目录 / 引擎地址」三行保留 —— 那是**运行时读数**，用户在高级里
+   * 自己填过这两个目录，回显他填的值才能自查；缺值就不显示该行。
+   * 服务端那份读数里的 `/root/...` 会被缩成 `~/qq-bridge/...`（见 tidyPath）：路径本身照实回显，
+   * 只是不再把"这台服务器用 root 跑"这种运维事实摆到面向大众的界面上。 */
   const localDetail = useMemo(() => {
     if (!localStat) return '';
     const p = localStat.paths ?? {};
-    const rootDir = p.rootDir || localStat.rootDir || '';
-    const modelsDir = p.modelsDir || localStat.modelsDir || '';
+    const rootDir = tidyPath(p.rootDir || localStat.rootDir || '');
+    const modelsDir = tidyPath(p.modelsDir || localStat.modelsDir || '');
     const engineUrl = p.url || localStat.url || '';
     return [
-      `解释器 ${localStat.python || '?'}${localStat.pythonVersion ? `（Python ${localStat.pythonVersion}）` : ''}`,
+      localStat.pythonVersion ? `运行环境 Python ${localStat.pythonVersion}` : '',
       localStat.jiebaShim ? `分词后端：${localStat.jiebaShim.reason ?? '未知'}` : '',
       rootDir ? `引擎目录 ${rootDir}` : '',
       modelsDir ? `角色模型目录 ${modelsDir}` : '',
@@ -2090,7 +2108,7 @@ export default function VoiceConfig({ onBack }: Props) {
                   <input className="input" type="text" placeholder="留空 = <引擎目录>/models"
                     value={localEngine?.modelsDir ?? ''}
                     onChange={(e) => patchLocal({ modelsDir: e.target.value })} />
-                  <em>一个角色一个子目录，目录里要有 .onnx</em>
+                  <em>一个角色一个子目录，目录里放该角色的模型文件</em>
                 </label>
                 <label className="field-row">
                   <span className="f-label">本地端口</span>

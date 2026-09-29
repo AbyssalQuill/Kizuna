@@ -24,8 +24,9 @@ const STATE_PATH = path.resolve(__dirname, '..', '..', 'state', 'pixiv-cookie-st
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;   // 每 6 小时自检一次
 const FIRST_DELAY_MS = 90 * 1000;               // 启动后 90 秒首检（不和启动流程抢资源）
 const NOTIFY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 仍失效时，最多每 24 小时提醒一次
-/** 一次性命令：用户自己上手时照抄；提醒里也带上（只含占位符，绝不含真凭证）。 */
-const LOGIN_CMD = 'node tools/pixiv-login.mjs --cookie "PHPSESSID=..."';
+/* 2026-10-02 面向大众：提醒直接发给用户在 QQ 里看到，正文不再出现内部脚本名（node tools/…）、
+ * 内部相对路径与"在服务器上跑一次"这类运维动作 —— 只留用户自己能做的那一步（重新提供登录凭据）。
+ * 技术细节（脚本名、路径、逐条实测响应）一律留在桥日志里（见 lib/pixiv-auth.js 的 logger）。 */
 
 function readState() {
   try { return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')) ?? {}; } catch { return {}; }
@@ -84,8 +85,7 @@ export function startPixivCookieWatch({ logger = () => {}, ownerKey = () => '', 
       const cached = artistCacheSize();
       const sent = await push(
         `Pixiv 的长期令牌轮换失败了（${reason}）。影响：按名字搜画师可能用不了；按画师号/作品号发图不受影响，已经查过的 ${cached} 个画师名字也有本地缓存。`
-        + `要恢复的话，把浏览器登录态里的 PHPSESSID 发我**一次**就够了 —— 我拿它换一个新的长期令牌，之后桥自己续期，不用再给。`
-        + `（也可以直接在服务器上跑一次：${LOGIN_CMD}）`,
+        + `要恢复的话，把浏览器登录态里的 PHPSESSID 发我**一次**就够了 —— 我拿它换一个新的长期令牌，之后桥自己续期，不用再给。`,
         `令牌轮换失败（${reason}）`,
       );
       if (sent) writeState({ ...stNow, refreshInvalid: true, refreshNotifyAt: Date.now(), lastEvidence: reason });
@@ -108,8 +108,7 @@ export function startPixivCookieWatch({ logger = () => {}, ownerKey = () => '', 
     const cached = artistCacheSize();
     const sent = await push(
       `Pixiv 的一次性登录态过期了，按名字搜画师暂时不能用（已经查过的 ${cached} 个画师名字有本地缓存，照旧能用；按画师号发作品也不受影响）。`
-      + `要恢复：在浏览器登录 pixiv 后把新的 PHPSESSID 发我**一次**就行 —— 我拿它换长期令牌，之后桥自己续期，不用再给。`
-      + `（也可以直接在服务器上跑一次：${LOGIN_CMD}）`,
+      + `要恢复：在浏览器登录 pixiv 后把新的 PHPSESSID 发我**一次**就行 —— 我拿它换长期令牌，之后桥自己续期，不用再给。`,
       `登录态失效（${state.evidence}）`,
     );
     if (sent) writeState({ ...st, invalid: true, lastNotifyAt: Date.now(), lastEvidence: state.evidence });
