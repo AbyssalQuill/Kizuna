@@ -481,13 +481,13 @@ function mcpLabel(fullName: string) {
     + '填错或过期会导致「按名字搜画师」失败，但按作品 id 发图不受影响（该路径走公开接口）。',
   prompt: '提示词可调项分组，目前仅一项：唤醒正文每轮携带的语感提醒。',
   tokenCost: 'QQ 中发送 /token 时算钱所用的单价分组（¥ / 百万 token）。默认值与管理端「学习」页的实测计量同源；修改本组只影响 /token 报出的金额，不影响提供方的实际计费。',
-  'social.toolCompressor': '开源 mcp-compressor 代理：DSH 不再直连 napcat MCP，改为连接代理；代理只向模型发送 2 个包装工具（napcat_get_tool_schema / napcat_invoke_tool），工具清单被压入其描述。'
-    + '实测相对完整工具表：低 38.8% / 中 14.0% / 高 6.2% / 极限 3.6%。'
+  'social.toolCompressor': '开源 mcp-compressor 代理：DSH 不再直连 napcat MCP，改为连接代理；代理发给模型的只有包装工具 —— 低/中/高三档 2 个（napcat_get_tool_schema / napcat_invoke_tool），极限（max）档 3 个（多一个 napcat_list_tools，用来列出后端全部工具名），工具清单被压入这些包装工具的描述。'
+    + '2026-09-29 挂当前 94 个工具实测，相对完整工具表：低 45.3% / 中 14.3% / 高 6.3% / 极限 3.5%。'
     + '代价是调用本轮未使用过的工具时须「先查 schema 再调用」，步数由 1 步增至 2 步；桥侧已按真实工具名解包，不影响发送判定与幂等账本。'
     + '注意：压缩机未安装（pip3 install mcp-compressor）时自动回退直连，工具表不会被清空；修改后必须重启隔离 DSH。',
   'social.toolCompressor.enabled': '是否让隔离 DSH 经压缩代理。关闭即直连（默认）。'
     + '桥每次启动会做一次轻量探测：找不到 mcp-compressor 可执行文件即自动回退直连，并把原因写入日志。',
-  'social.toolCompressor.level': '代理压缩档位（对应 mcp-compressor 的 --compression）：低 = 保留完整描述；中 = 每条描述只留第一句；高 = 工具清单不带描述；极限 = 连参数也不带。'
+  'social.toolCompressor.level': '代理压缩档位（对应 mcp-compressor 的 --compression）：低 = 保留完整描述；中 = 每条描述只留第一句；高 = 工具清单不带描述（参数名仍列出）；极限 = 连参数也不列，只剩工具名，并另发一个 napcat_list_tools 供模型列清单。'
     + '档位越低，模型越依赖「先查 schema」，调用步数越多。建议先用中档实测若干轮，并以 /token 对账后再定。',
   'social.toolCompressor.excludeTools': '交给代理之前先从后端排除的工具（后端原名，如 qq_send_pixiv），以逗号或换行分隔。'
     + '与「工具 schema 精简」卡中的名单为叠加关系：两处都会把工具挡在模型视线之外。',
@@ -495,7 +495,7 @@ function mcpLabel(fullName: string) {
     + '默认关闭：格式变化可能改变模型对该工具结果的读法，建议先在低价值工具上试用。',
   'social.slimTools.schemaLevel': '描述文字压缩档，与「工具名单（自定义方案）」是两个正交的旋钮：后者决定注册哪些工具，本项决定已注册工具的 schema 写多长。'
     + '压缩的是描述文字，工具数量与参数数量不变（名称、类型、枚举、必填照旧）。档位语义沿用开源 mcp-compressor（atlassian-labs）：medium = 每条描述只留第一句；high = 完全不发描述。'
-    + '在真实 JSON Schema 格式下实测（90 个工具）：不压 100% / 中度 71.4% / 高度 31.1%。'
+    + '在真实 JSON Schema 格式下实测（当时 90 个工具，现为 94 个）：不压 100% / 中度 71.4% / 高度 31.1%。'
     + '注意：high 为激进档，描述是模型判断「何时使用该工具」的主要依据，去掉后只能依据工具名推测；其差额约为每步 1.9 万 token（本机口径）。修改后必须重启隔离 DSH 才会重新注册工具表。',
   'social.slimTools.level': '工具名单档位。本项只在管理端「工具 schema 精简」卡中按「自定义预设方案」使用：名单由卡内勾选（或载入命名方案）产生，'
     + '卡在挂载、改动名单与载入方案时都会把本项写为 custom，因为桥仅在 custom 档下读取手写名单（`social.slimTools.deny` 与白名单），其余档位一律忽略手写名单。'
@@ -793,7 +793,9 @@ function mcpLabel(fullName: string) {
   'social.tools.getMessageDetail': '查单条消息详情（qq_get_message_detail）：拆解引用、转发、图片等结构，用于排障。',
   'social.tools.getActiveMembers': '查活跃成员（qq_get_active_members）：查看群内谁最近在发言，以便决定 @ 谁。',
   'social.tools.setWakeConfig': '设置唤醒条件（qq_set_wake_config）：潜多久、何种条件唤醒（@、名字、关键词、提问、拍一拍），每轮收尾都需调用一次。',
-  'social.tools.markRead': '标记已读（qq_mark_read）：推进已读水位，避免同一条消息被反复处理。',
+  'social.tools.markRead': '标记已读（qq_mark_read）：推进已读水位，避免同一条消息被反复处理。'
+    + '2026-09-29 起「读/发」共 9 个工具自带 markRead 参数（默认 true：读完/发完顺手推进水位，被取回的那批未读不会再投递），'
+    + '日常不必再单独调用本工具；把 markRead 显式传成 false 才是「只看不标」（未读会再次投递）。',
   'social.tools.memory': '记忆（qq_memory_append/search 等）：把长期事实写入记忆库，需要时检索出来。',
   'social.tools.slangQuery': '查黑话（qq_slang_query）：查询某词在群内的含义。',
   'social.tools.slangSubmit': '提交黑话（qq_slang_submit）：学到新词时上报给黑话库。',
@@ -1799,8 +1801,9 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                   <li><code>/wake</code>：恢复（<code>/sleep</code> 的反命令），并清除定时休息留下的定时器。</li>
                   <li><code>/deepsleep</code>：<b>所有群</b>的总开关；群内消息只入库，不读、不唤醒、不回复、不收集（省 token）。<b>私聊不受影响</b>。</li>
                   <li><code>/start</code>：解除 <code>/deepsleep</code>，群聊恢复正常。该指令<b>由桥直接执行、不经过模型，静默期间始终可用</b>。</li>
-                  <li><code>/silent</code> 或 <code>/quiet</code>：<b>当前会话</b>静默；群友消息只记录、不投递给模型（被 @ 亦不回复）。</li>
-                  <li><code>/active</code> 或 <code>/speak</code>：恢复当前会话的正常回应。</li>
+                  <li><code>/silent</code> 或 <code>/quiet</code>：<b>当前会话</b>静默（只影响发出指令的这一个群/私聊，别的群与私聊完全不受影响）；群友消息只记录、不投递给模型（被 @ 亦不回复）。</li>
+                  <li><code>/active</code> 或 <code>/speak</code>：恢复<b>当前会话</b>的正常回应；若历史上还留着全局静默（旧版 <code>/silent</code> 或管理端的角色模式开关留下的），这一条也会一并清掉。<code>/silent off</code> 只撤销当前会话的静默，不动全局静默。</li>
+                  <li>要<b>全局</b>静默（所有会话）用管理端/控制台的 <code>POST /api/role-mode</code>（= <code>state/current-role.json</code> 的 <code>mode:"silent"</code>）；只静默群聊用上面的 <code>/deepsleep</code>。<code>/silent</code> 不做全局静默。</li>
                 </ul>
               </DocSection>
 
@@ -3050,7 +3053,7 @@ const SLIM_CORE_TOOLS = new Set([
   'mcp__napcat__qq_get_unread_messages',
 ]);
 
-/** 出厂推荐精简名单（= 出厂默认就关掉的那批，共 21 个）。
+/** 出厂推荐精简名单（= 出厂默认就关掉的那批；2026-09-22 撤掉三条后是 18 条，按下方数组长度渲染，别再写死数字）。
  *  2026-09-23：界面按钮改称「常用精简名单」原先那句"用过的次数为 0"的统计依据已从界面撤下，
  *  此处只作为一份常用的精简名单备用，是否采用由用户自行判断。 */
 const SLIM_RECOMMENDED = [
@@ -3106,9 +3109,10 @@ function readSlimSchemes(raw: any): Record<string, string[]> {
 /** 「工具压缩代理」：卡（2026-09-21 按要求新增）：接开源的 mcp-compressor 当代理。
  *
  * 它与下面那张「工具 schema 精简」是两层不同的压缩：
- *   · 这里（代理层）：DSH 不再直连 napcat MCP，改连代理；代理只把 2 个包装工具发给模型，
- *     把压缩过的工具清单塞进包装工具的描述里。实测（挂我们真实的 90 个工具跑）：
- *       low 38.8% · medium 14.0% · high 6.2% · max 3.6%。
+ *   · 这里（代理层）：DSH 不再直连 napcat MCP，改连代理；代理只把包装工具发给模型
+ *     （低/中/高 2 个；极限 max 档 3 个，多一个用来列出工具清单的 napcat_list_tools），
+ *     把压缩过的工具清单塞进包装工具的描述里。实测（2026-09-29 挂当前 94 个工具跑）：
+ *       low 45.3% · medium 14.3% · high 6.3% · max 3.5%。
  *   · 下面那张（注册层）：桥自己按自定义名单决定注册哪些工具、按描述压缩档压描述文字。
  * 两层可以叠加：代理开着时，桥侧那份 schema 也会被代理再压一次。
  *
@@ -3125,7 +3129,9 @@ function ToolCompressorCard({ cfg, ch, onSave, target, remoteServerId }: { cfg: 
   const [draft, setDraft] = useState(exclude.join('\n'));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const ratio: Record<string, string> = { low: '38.8%', medium: '14.0%', high: '6.2%', max: '3.6%' };
+  /* 2026-09-29 重新实测（挂当前 94 个工具）：低档从 38.8% 涨到 45.3%（新增的 markRead 说明与 pixiv 参数都在「完整描述」这一档里），
+     中/高/极限三档基本未变。数字口径 = 代理发给模型的包装工具 JSON 字节数 ÷ 完整工具表字节数。 */
+  const ratio: Record<string, string> = { low: '45.3%', medium: '14.3%', high: '6.3%', max: '3.5%' };
   const saveAndRestart = async () => {
     setBusy(true); setMsg(null);
     try {
@@ -3161,18 +3167,19 @@ function ToolCompressorCard({ cfg, ch, onSave, target, remoteServerId }: { cfg: 
           这类片段原来被全站的等宽规则压成 JetBrains Mono，要求"字体都用可爱字体"。 */}
       <div className="cute-note" style={{ fontSize: 13, color: 'var(--nc-foreground-400)', marginBottom: 12, lineHeight: 1.7 }}>
         本卡决定工具表以何种形态发给模型：隔离 DSH 不直连 napcat MCP，改为连接压缩代理；
-        代理仅向模型发送 <b>2 个</b> 包装工具（<code>napcat_get_tool_schema</code> / <code>napcat_invoke_tool</code>），
+        代理只向模型发送包装工具 —— 低/中/高三档 <b>2 个</b>（<code>napcat_get_tool_schema</code> / <code>napcat_invoke_tool</code>），
+        极限（max）档 <b>3 个</b>（多一个用来列出后端全部工具名的包装工具）；
         压缩后的工具清单写入包装工具的描述。
         <br />
         本步恒开，无总开关：直连等于每一步都重发整张工具表，费用更高。
-        「代理档位」在下方选择，实测保留比例（相对完整工具表）：
-        <b>低档 38.8% · 中档 14.0% · 高档 6.2% · 极限档 3.6%</b>。
+        「代理档位」在下方选择，2026-09-29 挂当前 94 个工具实测的保留比例（相对完整工具表）：
+        <b>低档 45.3% · 中档 14.3% · 高档 6.3% · 极限档 3.5%</b>。
         <br />
         注意：模型调用<b>本轮未用过</b>的工具时须先查 schema 再调用，步数由 1 步增至 2 步；
         桥已按真实工具名解包，发送判定、幂等账本、回合收尾均不受影响。
         压缩机未安装时自动回退直连，工具表不会被清空；修改后须重启隔离 DSH。
         <br />
-        两处旋钮的分工：本卡「代理档位」决定工具表以何种形态发给模型（模型始终只见那 2 个包装工具，差别在压缩程度）；
+        两处旋钮的分工：本卡「代理档位」决定工具表以何种形态发给模型（模型始终只见那 2 个或 3 个包装工具，差别在压缩程度）；
         下方「工具名单（自定义方案）」决定<b>后端注册哪些工具</b>，即代理那份清单的条目数。
       </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
@@ -3572,7 +3579,7 @@ function SlimToolsCard({ cfg, diskCfg, ch, onSave, saving }: { cfg: any; diskCfg
           勾选 = 精简掉：该工具写进 social.slimTools.deny，桥在注册期即不注册它。
           该清单始终展开，因为它就是本卡唯一决定名单的地方。 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
-        <button className="btn btn-soft btn-sm" onClick={() => setDeny(SLIM_RECOMMENDED)}>常用精简名单（21 个）</button>
+        <button className="btn btn-soft btn-sm" onClick={() => setDeny(SLIM_RECOMMENDED)}>常用精简名单（{SLIM_RECOMMENDED.length} 个）</button>
         <button className="btn btn-soft btn-sm" onClick={() => setDeny([])}>全部恢复</button>
         <input className="input" style={{ maxWidth: 220 }} placeholder="筛选工具名…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="switch-row" style={{ marginBottom: 0, fontWeight: 400, fontSize: 12.5 }}>
