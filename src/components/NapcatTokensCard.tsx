@@ -376,7 +376,7 @@ export default function NapcatTokensCard() {
                 <span>{isLocal ? '写完重启 NapCat（推荐）' : '写完重启 NapCat 容器（推荐）'}</span>
                 <em>
                   NapCat 仅在启动时读取配置；不重启则新令牌须待下次启动生效。
-                  {isLocal ? '重启会预留足够的宽限时间，避免被强制终止。' : '重启用 docker restart -t 60（预留 30 秒宽限，避免被强制终止）。'}
+                  {isLocal ? '重启会预留足够的宽限时间，避免被强制终止。' : '重启会预留 60 秒宽限，避免被强制终止。'}
                 </em>
               </label>
             </div>

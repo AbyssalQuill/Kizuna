@@ -540,7 +540,7 @@ function customExportVoice(v: CustomVoice, isDefault: boolean): ExportVoice {
     isDefault,
     hasSample: clone && v.hasSample === true,
     noSampleReason: clone
-      ? '这个复刻音色的样本文件已丢失（桥的 state/voice-samples 里找不到它），只能导出配置信息'
+      ? '这个复刻音色的样本文件已丢失（音色样本目录里找不到它），只能导出配置信息'
       : '文字设计音色没有样本文件，只能导出配置信息',
     sampleBytes: Number(v.sampleBytes) || 0,
   };
@@ -719,9 +719,10 @@ export default function VoiceConfig({ onBack }: Props) {
    * 之后能在列表里试听 / 删除，也能把它设成机器人的默认音色（桥侧按 clone 走这段样本）。
    * 清单的权威源是桥（`GET /api/voice/local` 的 `localVoices`，随探测一起回）—— 界面只缓存这一份。 */
   const [localVoices, setLocalVoices] = useState<LocalVoice[]>([]);
-  /** 新建表单：名字 / 基础角色（默认用引擎里第一个可用角色）/ 可选参考文本 / 样本（上传的文件 或 已有音色） */
+  /** 新建表单：名字 / 可选参考文本 / 样本（上传的文件 或 已有音色）。
+   *  2026-10-02 二次改造：**基础角色不再进表单**（原来那个 lvChar 下拉去掉了）——
+   *  用户只管传音频，角色由桥按实时读数自己挑（桥侧 autoBaseCharacter）。 */
   const [lvName, setLvName] = useState('');
-  const [lvChar, setLvChar] = useState('');
   const [lvPrompt, setLvPrompt] = useState('');
   const [lvSample, setLvSample] = useState<{ name: string; base64: string; bytes: number } | null>(null);
   const [lvFromVoice, setLvFromVoice] = useState('');
@@ -1061,8 +1062,8 @@ export default function VoiceConfig({ onBack }: Props) {
       const body: any = {
         action: 'voice-create',
         name: nm,
-        // 基础角色默认用引擎里第一个可用角色（下拉已经预填，这里再兜一次底）
-        baseCharacter: (lvChar || charList[0]?.name || '').trim(),
+        // 基础角色**不再由用户挑、也不由界面传**：桥按本机实时读数自己挑一个已装角色
+        // （优先与样本语言对得上的），一个都没装时桥会回一句人话（下面原样显示）。
         promptText: lvPrompt.trim(),
       };
       if (lvSample?.base64) body.sampleBase64 = lvSample.base64;
@@ -1070,7 +1071,7 @@ export default function VoiceConfig({ onBack }: Props) {
       const r = await api<any>(`/voice/local${scopeQuery(localScope)}`, { method: 'POST', body: JSON.stringify(body) });
       if (r?.ok !== true) { setLocalMsg(`新建本地音色失败：${pickErr(r)}`); return; }
       if (Array.isArray(r.voices)) setLocalVoices(r.voices);
-      setLocalMsg(`本地音色「${r.voice?.name ?? nm}」已创建（基础角色 ${r.voice?.baseCharacter || '引擎默认'}，样本 ${(Number(r.voice?.sampleBytes) || 0) / 1024 < 1 ? `${Number(r.voice?.sampleBytes) || 0} 字节` : `${((Number(r.voice?.sampleBytes) || 0) / 1024).toFixed(0)}KB`}）：点它那一行的「试听」听听看`);
+      setLocalMsg(`本地音色「${r.voice?.name ?? nm}」已创建（样本 ${(Number(r.voice?.sampleBytes) || 0) / 1024 < 1 ? `${Number(r.voice?.sampleBytes) || 0} 字节` : `${((Number(r.voice?.sampleBytes) || 0) / 1024).toFixed(0)}KB`}）：点它那一行的「试听」听听看`);
       setLvName(''); setLvSample(null); setLvFromVoice(''); setLvPrompt('');
       if (lvFileRef.current) lvFileRef.current.value = '';
     } catch (e: any) { setLocalMsg(`新建本地音色失败：${pickErr(e)}`); }
@@ -1123,7 +1124,7 @@ export default function VoiceConfig({ onBack }: Props) {
     }
     setLvSample({ name: `${previewAudio.label}.mp3`, base64: previewAudio.base64, bytes: previewAudio.bytes });
     setLvFromVoice('');
-    setLocalMsg(`已把刚试听的「${previewAudio.label}」（${(previewAudio.bytes / 1024).toFixed(0)}KB）当作样本：填个名字、确认基础角色后点「创建」`);
+    setLocalMsg(`已把刚试听的「${previewAudio.label}」（${(previewAudio.bytes / 1024).toFixed(0)}KB）当作样本：填个名字就能点「创建」`);
   };
 
 /* ── 本地引擎卡的派生值 ──────────────────────────────────────────────── */
@@ -1147,14 +1148,10 @@ export default function VoiceConfig({ onBack }: Props) {
     ];
   }, [charList, localEngine?.character]);
 
-  /* 「新建本地音色」里的基础角色下拉（2026-10-02）：与上面的「默认角色」同一份清单，
-   * 但不含"自动（按请求的音色名匹配）"那一项 —— 音色档案里要记的是一个**真实角色名**
-   * （它决定这段样本用哪个角色的发音模型来合成）。清单为空时只剩"引擎默认"一项：
-   * 桥侧允许留空（那时用引擎当前的默认角色），所以这里不能把下拉做成空的。 */
-  const lvCharOptions = useMemo(() => [
-    { value: '', label: '引擎默认角色' },
-    ...charList.map((c) => ({ value: c.name, label: charDisplay(c) })),
-  ], [charList]);
+  /* 「新建本地音色」里原来那个基础角色下拉（2026-10-02）已在同一天去掉：使用方要的是"上传的音频
+   * 就是音色"，不该让人先理解"引擎角色决定发音"这件事。角色改由桥自动挑（桥侧 autoBaseCharacter：
+   * 优先语言与样本对得上的已装角色，其次引擎默认/任意一个），界面一个字段都不传。
+   * 上面那个「默认角色」下拉仍在（它管的是**没指定音色时**用哪个角色合成），与本表单无关。 */
 
   /* 角色下拉框下面那行小字：有多少个能选 / 一个都没有时怎么说。
    * 空的时候这里只说"没有"，两条安装命令摊在卡片下方那条说明里（命令很长，塞进这行小字会挤成一团）。
@@ -1432,7 +1429,9 @@ export default function VoiceConfig({ onBack }: Props) {
   /** 用刚合成的这段音频新建一个**本地**音色（本地引擎卡那张表单的同一条接口 voice-create）。
    *  「为什么要这个入口」：使用方原话是"我先用云端 tts 合成样本，然后用本地的克隆"——
    *  这一步就是把刚合成的那段直接交成本地引擎的参考音频，不必先下载再上传。
-   *  样本走 base64（与本地卡上传样本同一条路，上限 LOCAL_SAMPLE_MAX_BYTES），参考文本就用刚念的那段。 */
+   *  样本走 base64（与本地卡上传样本同一条路，上限 LOCAL_SAMPLE_MAX_BYTES），参考文本就用刚念的那段；
+   *  **基础角色同样不传**（2026-10-02 二次改造）：由桥自动挑（它优先用引擎的默认角色，所以
+   *  用户配的「默认角色」照样生效），与「新建音色」那一行完全同一条口径。 */
   const ctCreateLocalVoice = async () => {
     if (ctBusy) return;
     const text = ctText.trim();
@@ -1451,14 +1450,14 @@ export default function VoiceConfig({ onBack }: Props) {
         body: JSON.stringify({
           action: 'voice-create',
           name,
-          baseCharacter: String(localEngine?.character || charList[0]?.name || '').trim(),
+          // 基础角色由桥自动挑（不传）；一个都没装时桥回人话，这里原样显示
           sampleBase64: r.audioBase64,
           promptText: text,
         }),
       });
       if (res?.ok !== true) { setCtMsg(`新建本地音色失败：${pickErr(res)}`); return; }
       if (Array.isArray(res.voices)) setLocalVoices(res.voices);
-      setCtMsg(`本地音色「${res.voice?.name ?? name}」已新建（基础角色 ${res.voice?.baseCharacter || '引擎默认'}，样本 ${bytes} 字节）：在下面「本地语音引擎」卡的「我的音色」里点它那一行的「试听」听听看`);
+      setCtMsg(`本地音色「${res.voice?.name ?? name}」已新建（样本 ${bytes} 字节）：在下面「本地语音引擎」卡的「我的音色」里点它那一行的「试听」听听看`);
     } catch (e: any) { setCtMsg(`新建本地音色失败：${pickErr(e)}`); }
     finally { setCtBusy(null); }
   };
@@ -1803,8 +1802,8 @@ export default function VoiceConfig({ onBack }: Props) {
                   <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
                     <div>
                       <b>保存并冻结</b>：把这次合出来的音频固化成该音色的<b>固定参考样本</b>，此后用这个音色合成固定走这一段，
-                      音色不再漂。与既成的「文字设计 → 冻结 → 复刻」共用同一套存储 —— 样本落在
-                      <code>state/voice-samples/</code>、记录写进 <code>state/voice-library.json</code>，类型是复刻型
+                      音色不再漂。与既成的「文字设计 → 冻结 → 复刻」共用同一套存储 —— 样本与记录都落进音色样本库
+                      （合成时可以按类型分别取），类型是复刻型
                       （合成时读的就是这段样本字节，与 design 型音色读冻结锚点是同一条复刻路径）；
                       冻结完在「音色库」里点它的「设为默认音色」，再点本卡的「应用配置」即生效。
                     </div>
@@ -1966,19 +1965,19 @@ export default function VoiceConfig({ onBack }: Props) {
                 {/* ───────── 本地音色（2026-10-02 新增）─────────
                     使用方要的："像云端那样能上传样本音频并新建角色" —— 云端的音色（设计/复刻）由
                     小米的接口生成，本地这侧没有那个接口，所以本地的"音色"就是**一段自己的参考音频**：
-                      · 基础角色 = 引擎里真实存在的角色（决定发音与语言）
                       · 样本     = 要复刻的那把声音（上传文件，或直接取一个已有音色的声音）
                       · 参考文本 = 样本里念的是哪句话（可选，给了更准）
                     本质上就是引擎的「复刻」模式，只是把这段样本**存成一条档案**，于是可以反复选用、
-                    试听、删除 —— 与云端音色在界面上的用法一致（界面这两块共用同一个 scope 口径与试听口径）。 */}
+                    试听、删除 —— 与云端音色在界面上的用法一致（界面这两块共用同一个 scope 口径与试听口径）。
+                    2026-10-02 二次改造（使用方原话："应当是直接把上传的音频当做音色来复刻就行，
+                    而不依靠原有角色"）：这一行**不再有基础角色下拉**。引擎必须有已装的角色权重才发得出声，
+                    但那是桥的事 —— 用户只管传音频，角色由桥按实时读数自己挑（见桥的 autoBaseCharacter）。 */}
                 <div className="field-row" style={{ gridColumn: '1 / -1' }}>
                   <span className="f-label">新建音色</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <input className="input is-mid" type="text" value={lvName}
                       onChange={(e) => setLvName(e.target.value)}
                       placeholder="音色名字（如：小明·解说）" />
-                    <Dropdown className="input is-mid" value={lvChar || (charList[0]?.name ?? '')}
-                      onChange={(v) => setLvChar(v)} options={lvCharOptions} />
                     <input ref={lvFileRef} type="file" accept="audio/mpeg,audio/wav,.mp3,.wav"
                       style={{ display: 'none' }}
                       onChange={(e) => onPickLocalSample(e.target.files?.[0] ?? null)} />
@@ -2000,8 +1999,8 @@ export default function VoiceConfig({ onBack }: Props) {
                     </button>
                   </div>
                   <em>
-                    样本 {lvSample ? `已选「${lvSample.name}」（${(lvSample.bytes / 1024).toFixed(0)}KB）` : `未选（mp3/wav，上限 ${LOCAL_SAMPLE_MAX_BYTES / 1024}KB）`}
-                    {' · '}基础角色决定发音，样本决定音色
+                    上传的音频决定音色（复刻用的就是它）
+                    {' · '}样本 {lvSample ? `已选「${lvSample.name}」（${(lvSample.bytes / 1024).toFixed(0)}KB）` : `未选（mp3/wav，上限 ${LOCAL_SAMPLE_MAX_BYTES / 1024}KB）`}
                     {previewAudio ? `；也可以直接用刚试听的「${previewAudio.label}」` : '；上面云端音色试听过的音频也能一键拿来当样本'}
                   </em>
                 </div>
@@ -2030,7 +2029,7 @@ export default function VoiceConfig({ onBack }: Props) {
                   <span className="f-label">我的音色</span>
                   <div style={{ width: '100%' }}>
                     {localVoices.length === 0 ? (
-                      <em>还没有本地音色：选一段音频样本（或取一个已有音色的声音）+ 一个基础角色，点「创建」就有一条。创建出来的音色也能在「默认音色」里选。</em>
+                      <em>还没有本地音色：选一段音频样本（或取一个已有音色的声音），点「创建」就有一条。创建出来的音色也能在「默认音色」里选。</em>
                     ) : (
                       <div className="lrn-status-list">
                         {localVoices.map((v) => (
@@ -2045,7 +2044,7 @@ export default function VoiceConfig({ onBack }: Props) {
                               <div className="lrn-status-preview">
                                 {v.hasSample
                                   ? `样本 ${(Number(v.sampleBytes) / 1024).toFixed(0)}KB ${String(v.sampleExt || '').toUpperCase()}${v.promptText ? ` · 参考文本「${v.promptText}」` : ' · 无参考文本'}`
-                                  : '样本文件不在了：这条音色合成时会失败，删掉它重建，或把文件放回 state/local-voices/'}
+                                  : '样本文件不在了：这条音色合成时会失败，删掉它重建，或把样本文件放回音色样本目录'}
                               </div>
                               <div className="lrn-actions">
                                 <button className="btn btn-primary btn-sm" disabled={localPvBusy !== null || !v.hasSample}
@@ -2068,7 +2067,7 @@ export default function VoiceConfig({ onBack }: Props) {
                       </div>
                     )}
                   </div>
-                  <em>存在桥侧 <code>state/local-voices/</code>（与引擎的 models 目录分开）；删掉音色会一并删掉它自己的样本文件</em>
+                  <em>样本存在应用自己的数据目录里（与角色模型目录分开）；删掉音色会一并删掉它自己的样本文件</em>
                 </div>
 
                 {/* 路径与进程参数默认收起（使用方要求「去掉废话」）：只有换机器、换目录、调端口时才要动。
@@ -2434,7 +2433,7 @@ export default function VoiceConfig({ onBack }: Props) {
                     元素子节点会被拆成 flex 子项、正文会错位换行）。 */}
                 <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
                   <div>文字描述音色：每次合成都依据描述生成，音色稳定但不依赖样本；样本复刻：以上传的那段声音复刻，更接近本人。仅支持 mp3 / wav，样本须控制在 7MB 以内。</div>
-                  <div>③ 用已有音色当样本：文字设计音色取它正在用的那段锚点（没有则现场冻一个），内置音色现场录一段固定文本；取到后按 <b>复刻音色</b> 存下来，样本落在桥的 <code>state/voice-samples/</code> 里，今后不再被重新设计。</div>
+                  <div>③ 用已有音色当样本：文字设计音色取它正在用的那段锚点（没有则现场冻一个），内置音色现场录一段固定文本；取到后按 <b>复刻音色</b> 存下来，样本存进音色样本库，今后不再被重新设计。</div>
                   {/* 与本地引擎的关系（本次新增）：只说清两类音色各自走哪条路，不给音色加"绑本地角色"这类新字段。 */}
                   <div>与本地引擎的关系：<b>复刻音色</b>（clone）本地引擎能直接用 —— 本地角色 + 这段样本当参考音频；<b>文字设计音色</b>（design）只走云端。想在本地引擎上试听，先在上面那张「本地语音引擎」卡里选好默认角色。</div>
                 </div>

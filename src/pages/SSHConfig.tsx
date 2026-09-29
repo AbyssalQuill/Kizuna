@@ -298,8 +298,8 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
   const removeStack = async (s: SSHServer) => {
     askConfirm({
       title: `清空服务器「${s.name}」上的整套`,
-      body: <>将停止服务，并把 <code>/root/qq-bridge</code>、<code>/root/.dsh</code>、<code>/root/napcat</code> 整体移动至
-        <code> /root/qq-bridge-removed-&lt;时间戳&gt;/</code> 作为备份（可自行取回）。<br />
+      body: <>将停止服务，并把服务器上的整套目录（核心层、DSH 家目录、NapCat）整体移动到
+        一个带时间戳的备份目录里留作备份（可自行取回）。<br />
         <b>QQ 登录卷不会被删除</b>，但此操作不可撤回。</>,
       okText: '确认清空',
       danger: true,

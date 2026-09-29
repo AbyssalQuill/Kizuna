@@ -5722,7 +5722,10 @@ export function startConsoleServer() {
          *   GET  /api/voice/local                      → 环境探测 + 进程/内存读数 + 本地音色档案（localVoices）
          *   POST /api/voice/local {action:'self-test'}  → 真拉起引擎合成一句，回耗时与内存（"到底装没装成"的最终判据）
          *   POST /api/voice/local {action:'preview', text?, character?, voiceId?} → 用指定角色（或指定本地音色档案）合成一句并把音频回给界面（试听）
-         *   POST /api/voice/local {action:'voice-create', name, baseCharacter?, sampleBase64?|fromVoiceId?, promptText?} → 新建一个本地音色（2026-10-02）
+         *   POST /api/voice/local {action:'voice-create', name, sampleBase64?|fromVoiceId?, promptText?, baseCharacter?, language?} → 新建一个本地音色（2026-10-02）
+         *     · baseCharacter 可省略（界面上已经没有这个选项了）：省略 = 桥按实时读数自动挑一个已装角色
+         *       （优先语言与样本对得上的，其次引擎默认/任意一个已装角色），一个都没装时回一句人话；
+         *       language 是可选的样本语言提示（zh/jp/en/kr），不给则按 promptText 的字形判。
          *   POST /api/voice/local {action:'voice-delete', id} → 删掉一个本地音色（连同它自己的样本文件，2026-10-02）
          *   POST /api/voice/local {action:'stop'}       → 关掉引擎进程（把那几百 MB 常驻内存还回去）
          * 为什么不在这里装引擎：装 = 建 venv + pip 下载 ~200MB + 再下 391MB 数据，塞进一个 HTTP 处理器里
@@ -5765,7 +5768,8 @@ export function startConsoleServer() {
                     kindNote = `样本取自音色「${got.name}」（${got.from}，${got.bytes} 字节）`;
                   }
                   const saved = voiceMod.saveLocalVoice({
-                    name: body.name, baseCharacter: body.baseCharacter, sampleBase64, promptText: body.promptText
+                    name: body.name, baseCharacter: body.baseCharacter, sampleBase64,
+                    promptText: body.promptText, language: body.language
                   });
                   if (saved?.ok) log(`控制台：本地音色已新建「${saved.voice?.name}」（基础角色=${saved.voice?.baseCharacter || '引擎默认'}，${kindNote}，${saved.voice?.sampleBytes ?? 0} 字节）`);
                   sendJson(saved);

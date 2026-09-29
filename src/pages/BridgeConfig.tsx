@@ -534,7 +534,7 @@ function mcpLabel(fullName: string) {
     + '\n推荐公式：`阈值比例 = clamp((固定开销 + 逐字保留 + 余量) / 模型窗口, 0.10, 0.30)`。'
     + '其中「固定开销」为 system 提示词与工具 schema 的实测 token（该项每一步都要重发，故阈值必须明显大于它，否则会被顶穿成每一步压缩一次）；「余量」取 24k token（保证压缩后距阈值仍有距离，不会压完立刻又压）。固定开销的当前实测值见本卡上方读数。'
     + '\n实测扫描（模型窗口 1M）：0.08 → ¥3.34/天（重建 15~29 次/天）· 0.12 → ¥2.67 · 0.16 → ¥2.53 · 0.18 → ¥2.53 · 0.25 → ¥2.66。'
-    + '最省区间为 0.16~0.18，稳健区间为 0.14~0.20。复算脚本：`qq-bridge/tools/compaction-threshold.mjs`（参数均从线上 `state/token-usage.jsonl` 现场量取，改价后重跑）。'
+    + '最省区间为 0.16~0.18，稳健区间为 0.14~0.20（按线上真实用量现场量取，改价后需重算）。'
     + '\n\n不要低于 0.08（8%，桥的下限，低于该值会被自动夹回并记录日志）：阈值一旦被固定开销顶穿，就会变成每一步都压缩一次——每次压缩额外发起一次「读完整段上下文写摘要」的模型请求，并改写会话历史（提示词前缀缓存随之作废，下一步只能全量重读）。'
     + '2026-09-20 线上实测：0.06 时 114 个模型步中触发 46 次摘要，每步之间多耗 15~20 秒，一个搜索回合拖延至 6 分钟。'
     + 'DSH 的硬性要求：本值必须大于「逐字保留比例」，否则插件拒绝加载（桥会自动夹到合法范围并记录日志）。',
@@ -776,7 +776,7 @@ function mcpLabel(fullName: string) {
 
   // ── Pixiv ──
   'pixiv.base': 'Pixiv 的**接口兜底站**地址：只有「官方 app-api 与 www.pixiv.net/ajax 两条线都失败」时才会用到它（走 {这个地址}/api/search.php 与 /api/detail.php）。**取图完全不经过这个字段**：取图是内置的「直联 i.pximg.net（带 referer）→ i.muxmus.com → pximg.cocomi.eu.org → i.pixiv.re」，首推 i.muxmus.com（2026-09-28 本机实测 0.28~1.29 秒、还带 Content-Length）。所以别把纯图床反代（i.muxmus.com / cocomi / i.pixiv.re 这类）填到这里 —— 它们对 /api/* 一律 404，填了这条兜底线就废了。留空即用内置默认 https://pixigraph.online（2026-09-28 起）。优先级：config.json 的 pixiv.base > 环境变量 QQBRIDGE_PIXIV_BASE > 内置默认，改完不用重启。',
-  'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID）：仅用于按画师名字搜人（官网用户搜索接口对匿名请求一律返回 400）。免费账号即可；**贴进这一项就是全部动作**（2026-09-28 起）：桥下次启动时若发现有 cookie 却没有长期令牌，会自己拿它换一次，成功即落盘 state/pixiv-token.json 并每 50 分钟自动轮换（此后这一项可以清空；失败只记一行日志、不重试）。填一次即可长期使用：每解出一个画师号都会落盘缓存（state/pixiv-artists.json），cookie 此后过期，已查询过的名字仍可用；真正过期时桥会自检并主动在 QQ 中提醒。不填也可使用 authorId（画师号，如 1554775）或作品链接。安全说明：只发送给 pixiv 自身域名，绝不发送给镜像站。**写入方式（2026-09-28 起）**：直接在「常用设置 → Pixiv（镜像站与登录 cookie）」卡的「登录 cookie」一项里填（保存即写回配置；服务端目标保存时管理端会顺手换一次长期令牌，结果见保存回执的步骤列表）；不想经过界面时，也可在桥的机器上跑 tools/set-pixiv-cookie.mjs --file <文件>（从文件读取、写完删除文件、仅回显掩码）。',
+  'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID）：仅用于按画师名字搜人（官网用户搜索接口对匿名请求一律返回 400）。免费账号即可；**贴进这一项就是全部动作**（2026-09-28 起）：桥下次启动时若发现有 cookie 却没有长期令牌，会自己拿它换一次，成功即落盘 state/pixiv-token.json 并每 50 分钟自动轮换（此后这一项可以清空；失败只记一行日志、不重试）。填一次即可长期使用：每解出一个画师号都会落盘缓存（state/pixiv-artists.json），cookie 此后过期，已查询过的名字仍可用；真正过期时桥会自检并主动在 QQ 中提醒。不填也可使用 authorId（画师号，如 1554775）或作品链接。安全说明：只发送给 pixiv 自身域名，绝不发送给镜像站。**写入方式（2026-09-28 起）**：直接在「常用设置 → Pixiv（镜像站与登录 cookie）」卡的「登录 cookie」一项里填（保存即写回配置；服务端目标保存时管理端会顺手换一次长期令牌，结果见保存回执的步骤列表）。',
 
   // ── 工具开关（逐个写明开启后模型可做什么）──
   'social.tools.getPrompt': '读提示词（qq_get_prompt）：模型主动重新读取当前生效的人设、发言规则与工具说明。一般无需调用，但可让模型自查「我现在的人设是什么」。',
@@ -1564,7 +1564,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
               <div style={{ flex: 1 }}>
                 读取配置失败：{loadErr}
                 <div className="lrn-error-detail">
-                  本卡读取的是 {remote ? '服务端 /root/qq-bridge/config.json' : '本机 qq-bridge/config.json'} 文件本身，
+                  本卡读取的是 {remote ? '服务端' : '本机'}的配置文件本身，
                   <b>不需要桥在运行</b>；读不到通常是文件损坏、目录不符{remote ? '，或 SSH 未连通' : ''}。
                   {autoRetryMs > 0
                     ? ` 本页会自动重读：约每 ${Math.max(1, Math.round(autoRetryMs / 1000))} 秒一次（失败后按 5／10／20／40／60 秒退避，最长 60 秒一次），无需手动刷新。`
@@ -2256,7 +2256,6 @@ function PixivCard({ cfg, ch, onHelp }: {
           </button>
           <span style={{ fontSize: 12, opacity: 0.85 }}>
             cookie 三种写法都认：整条 cookie 串、<code>PHPSESSID=xxxx</code>、或只贴会话值本身。
-            不想经过界面：<code>node tools/set-pixiv-cookie.mjs --file /root/.pixiv-cookie.txt</code>（从文件读、写完删文件、只回显掩码）。
           </span>
         </div>
       </div>

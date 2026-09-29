@@ -33,6 +33,17 @@ const LOG_FILE_NAME = 'genie.log';
 const REF_SUBDIR = 'genie-refs';
 const PROBE_TTL_MS = 20000;
 
+/** 探测未满足项的**稳定标识**（2026-10-02）：「查看目标」那一行直接显示 `reasons` 的文案，
+ *  所以文案必须说人话、且随时可能再改；调用方（测试、tools/genie-setup.mjs）一律按这里的
+ *  code 判定缺什么，改文案就不会把判定改坏。 */
+export const PROBE_ISSUES = Object.freeze({
+  ENGINE_FILES: 'engine-files',        // 引擎自身的运行文件不在
+  RUNTIME: 'runtime',                  // 没有可用的解释器/运行环境
+  ENGINE_PACKAGE: 'engine-package',    // 运行环境在，但语音引擎没装
+  PUBLIC_DATA: 'public-data',          // 公共数据不在或不完整
+  CHARACTERS: 'characters'             // 一个角色模型都没有
+});
+
 /** 出厂默认值。真正的默认值在 core/voice.js 的 defaults().local，这里只是"字段缺失时的兜底"。 */
 export const LOCAL_DEFAULTS = {
   enabled: false,
@@ -117,6 +128,8 @@ function engineLog(line) {
 // ── 环境探测 ────────────────────────────────────────────────────────────────
 
 let _probeCache = { at: 0, key: '', value: null };
+/** 上一次写进日志的未满足项指纹：避免每次探测都重复写同一条（见 probeLocal 末尾）。 */
+let _lastIssueLogKey = '';
 
 function listCharacterDirs(modelsDir) {
   const out = [];
@@ -178,13 +191,21 @@ export function probeLocal(cfg = {}, { force = false } = {}) {
   if (!force && _probeCache.value && _probeCache.key === key && Date.now() - _probeCache.at < PROBE_TTL_MS) {
     return _probeCache.value;
   }
-  const reasons = [];
+  /* 未满足项：**只说人话**（界面「查看目标」那一行直接显示 reasons，面向大众的页面上不该出现
+   * 解释器路径、目录、安装命令这类运维细节）；技术细节一律降级进引擎日志（state/genie.log）。
+   * 判定逻辑一个字没改：缺什么，仍然逐条报什么。 */
+  const issues = [];
+  const issueDetails = [];
+  const addIssue = (code, message, detail = '') => {
+    issues.push({ code, message });
+    if (detail) issueDetails.push(detail);
+  };
   let pythonVersion = '';
   let hasGenie = false;
   let genieVersion = '';
 
   const serverOk = fs.existsSync(p.serverFile);
-  if (!serverOk) reasons.push(`缺少引擎脚本 ${p.serverFile}`);
+  if (!serverOk) addIssue(PROBE_ISSUES.ENGINE_FILES, '缺少语音引擎的运行文件', `引擎运行文件不存在：${p.serverFile}`);
 
   /* 探测脚本：**故意不 import genie_tts** —— 上游 `Core/Resources.py` 在 GenieData 目录不存在时
    * 会 `input()` 问"要不要自动下载"，非交互环境下就是 EOFError，会把"没下数据"误报成"没装引擎"。
@@ -217,9 +238,9 @@ export function probeLocal(cfg = {}, { force = false } = {}) {
     hasGenie = parsed?.has === true;
     jiebaShim = parsed?.shim ?? null;
     if (hasGenie) genieVersion = parsed?.version || '';
-    else reasons.push(`解释器 ${p.python} 里没有 genie_tts（用 node tools/genie-setup.mjs --install 装）`);
+    else addIssue(PROBE_ISSUES.ENGINE_PACKAGE, '语音引擎尚未安装', `解释器 ${p.python} 里没有 genie_tts（装：node tools/genie-setup.mjs --install）`);
   } else {
-    reasons.push(`解释器 ${p.python} 用不了（${String(pyProbe.stderr || pyProbe.error?.message || '').trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || '未安装'}），因此没法判断 genie_tts 装没装`);
+    addIssue(PROBE_ISSUES.RUNTIME, '缺少运行环境', `解释器 ${p.python} 用不了：${String(pyProbe.stderr || pyProbe.error?.message || '').trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || '未安装'}`);
   }
 
   // GenieData：至少要有 hubert / speaker_encoder / G2P 三个之一才算"数据在"
@@ -227,13 +248,21 @@ export function probeLocal(cfg = {}, { force = false } = {}) {
   try {
     const entries = fs.readdirSync(p.dataDir).map((s) => s.toLowerCase());
     dataOk = entries.length > 0 && entries.some((e) => e.includes('hubert') || e.includes('speaker_encoder') || e === 'g2p');
-    if (!dataOk) reasons.push(`GenieData 目录没有可用资产：${p.dataDir}（用 node tools/genie-setup.mjs --download 下载）`);
+    if (!dataOk) addIssue(PROBE_ISSUES.PUBLIC_DATA, '公共数据不完整', `数据目录里没有可用资产：${p.dataDir}（下载：node tools/genie-setup.mjs --download）`);
   } catch {
-    reasons.push(`GenieData 目录不存在：${p.dataDir}`);
+    addIssue(PROBE_ISSUES.PUBLIC_DATA, '缺少公共数据', `数据目录不存在：${p.dataDir}`);
   }
 
   const characters = listCharacterDirs(p.modelsDir);
-  if (!characters.length) reasons.push(`没有任何角色模型：${p.modelsDir}（放一个 GPT-SoVITS 角色的 ONNX 目录，或 setup 工具 --convert）`);
+  if (!characters.length) addIssue(PROBE_ISSUES.CHARACTERS, '缺少角色模型', `角色目录里没有任何可用角色：${p.modelsDir}（装：node tools/genie-setup.mjs --convert）`);
+
+  /* 技术细节只写日志，而且同一种"缺什么"只写一次 —— 这个探测每次打开语音页都会跑，
+   * 不去重就会把 genie.log 刷满。 */
+  const detailKey = issues.length ? issues.map((i) => i.code).join(',') + '｜' + issueDetails.join(' | ') : '';
+  if (!detailKey) _lastIssueLogKey = '';
+  else if (detailKey !== _lastIssueLogKey) { _lastIssueLogKey = detailKey; engineLog(`环境探测未满足项（${issues.map((i) => i.code).join('/')}）：${issueDetails.join(' | ')}`); }
+
+  const reasons = issues.map((i) => i.message);
 
   const value = {
     enabled: p.cfg.enabled === true,
@@ -245,6 +274,9 @@ export function probeLocal(cfg = {}, { force = false } = {}) {
     dataOk,
     characters,
     reasons,
+    /* issues 是 reasons 的结构化版本（同序、一一对应）：`{ code, message }`。
+     * reasons（字符串数组）形状不变，界面照旧直接用；调用方要判"缺哪一类"时读 issues 的 code。 */
+    issues,
     jiebaShim,
     paths: {
       rootDir: p.rootDir, serverFile: p.serverFile, dataDir: p.dataDir,

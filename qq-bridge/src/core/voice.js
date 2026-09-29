@@ -483,7 +483,7 @@ async function trySynthesizeLocal({ cfg, mode, text, voice, voiceRefPath, dir, f
     let probe = null;
     if (!st?.running) {
       probe = genieEngine.probeLocal(local);
-      if (!probe.ready) return bail(probe.reasons[0] || '引擎环境不完整（用 node tools/genie-setup.mjs 装）');
+      if (!probe.ready) return bail(probe.reasons[0] || '语音引擎的环境还不完整');
     }
     const rawChars = st?.health?.characters ?? probe?.characters ?? [];
     const chars = rawChars.map((x) => (typeof x === 'string' ? x : x?.name)).filter(Boolean);
@@ -1259,6 +1259,75 @@ export function listLocalVoices() {
   return loadLocalVoiceLib().voices.map(localVoicePublic);
 }
 
+/* ── 「基础角色」由桥自动挑（2026-10-02 二次改造）────────────────────────────────
+ * 起因（使用方原话）：「新建音色这一行就不该了，应当是直接把上传的音频当做音色来复刻就行，
+ * 而不依靠原有角色」—— 所以「新建音色」那一行不再有基础角色下拉。
+ *
+ * 但引擎事实要正视（不能为了好看而骗人）：Genie 是"**已装的角色权重决定发音** + 参考音频决定音色"，
+ * 一个角色模型都没装时它根本合不出声。"完全不依赖任何已装模型"在引擎层面做不到，能改的是
+ * **不让用户理解/挑选它**：界面只让人传一段音频，角色由桥按实时读数自己挑一个。
+ * profile 里的 baseCharacter 字段照旧写（老数据、老调用方都能继续读），只是值不再来自用户。
+ *
+ * 挑的顺序（① 语言对得上 → ② 引擎配置里的默认角色 → ③ 第一个已装角色）：
+ *   语言的判断顺序 = 调用方给的 language → 参考文本的字形 → 引擎配置里的 language。
+ *   为什么用"参考文本的字形"：档案里那段 promptText 就是样本里念的那句话，它是桥手上关于
+ *   "这段样本是什么语言"唯一的真实依据（音频本身不做语种识别，不猜）。
+ */
+const VOICE_LANGS = ['zh', 'en', 'jp', 'kr'];
+const KANA_RE = /[\u3040-\u30ff]/;
+const HANGUL_RE = /[\uac00-\ud7af]/;
+const CJK_RE = /[\u4e00-\u9fff]/;
+
+/** 从参考文本的字形猜语言（判不出来返回空串 = 不做语言配对）。 */
+export function scriptLanguage(text = '') {
+  const s = String(text ?? '');
+  if (!s) return '';
+  if (KANA_RE.test(s)) return 'jp';
+  if (HANGUL_RE.test(s)) return 'kr';
+  if (CJK_RE.test(s)) return 'zh';
+  return /[A-Za-z]/.test(s) ? 'en' : '';
+}
+
+/** 已装角色各自的语言：读角色目录里的 character.json（装角色时写进去的 {label,language}）。
+ *  genie-tts.js 里同名的读取函数没导出（那份只喂管理端的 characterList），这里只取语言一项；
+ *  读不到（没有这个文件 / 内容坏 / 语言值不是约定里的四种）一律当"未知"，不猜。 */
+function characterLanguages(modelsDir) {
+  const out = {};
+  let entries = [];
+  try { entries = fs.readdirSync(modelsDir); } catch { return out; }
+  for (const name of entries) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(modelsDir, name, 'character.json'), 'utf8'));
+      const lang = String(meta?.language ?? '').trim();
+      if (VOICE_LANGS.includes(lang)) out[name] = lang;
+    } catch { /* 没有 character.json 或内容坏 → 这个角色的语言未知 */ }
+  }
+  return out;
+}
+
+/**
+ * 自动挑一个已装角色当基础角色（**同步**，读的是本机引擎的实时读数）。
+ * @returns {{ character:string, reason:string, hint:string }}
+ * 一个角色都没装时抛人话（不抛内部错误、不带路径/命令）—— 这是"还没装"这件事本身要显示在界面上。
+ */
+export function autoBaseCharacter({ local = null, language = '', promptText = '' } = {}) {
+  const cfg = genieEngine.normalizeLocal(local ?? voiceConfig().local ?? {});
+  const probe = genieEngine.probeLocal(cfg);
+  const chars = Array.isArray(probe.characters) ? probe.characters : [];
+  if (!chars.length) {
+    throw new Error('本机还没有可用的语音模型：先装一个角色，再回来创建音色');
+  }
+  const given = VOICE_LANGS.includes(String(language ?? '').trim()) ? String(language).trim() : '';
+  const hint = given || scriptLanguage(promptText) || cfg.language;
+  const langs = characterLanguages(genieEngine.localPaths(cfg).modelsDir);
+  const preferred = String(cfg.character ?? '').trim();
+  const sameLang = chars.filter((n) => langs[n] === hint);
+  if (preferred && sameLang.includes(preferred)) return { character: preferred, reason: '引擎默认角色（语言也对得上）', hint };
+  if (sameLang.length) return { character: sameLang[0], reason: `语言对得上的已装角色（${hint}）`, hint };
+  if (preferred && chars.includes(preferred)) return { character: preferred, reason: '引擎默认角色', hint };
+  return { character: chars[0], reason: '第一个已装角色', hint };
+}
+
 /** 按 id 或名字找一个档案（找不到返回 null）。读的是**磁盘上的库**，所以刚建完就能用。 */
 function findLocalVoice(idOrName) {
   const want = String(idOrName ?? '').trim();
@@ -1271,9 +1340,14 @@ function findLocalVoice(idOrName) {
  *   · sampleBase64 —— 界面上传的文件（或界面刚从云端取来的那段音频）；
  *   · 都没有则报错；**fromVoiceId 那条不在这里**，由 console-server 先取成 base64 再传进来
  *     （与 `POST /api/voice/voices` 那段一字不差的同一段逻辑，这样本函数保持同步、可单测）。
+ *
+ * 基础角色（2026-10-02 二次改造）：**省略 = 桥自己挑一个**（见 autoBaseCharacter），界面就是走这条；
+ * 显式传仍照旧校验后写入（老调用方/API 不破）。一个角色都没装时抛人话，不静默存下一个合不出声的档案。
+ * @param {{name?:string, baseCharacter?:string, sampleBase64?:string, promptText?:string, language?:string}} p
+ *        language = 可选的样本语言（zh/jp/en/kr）；不给则按 promptText 的字形、再按引擎配置里的语言判。
  * @returns {{ ok:true, voice:object, voices:object[] }}
  */
-export function saveLocalVoice({ name = '', baseCharacter = '', sampleBase64 = '', promptText = '' } = {}) {
+export function saveLocalVoice({ name = '', baseCharacter = '', sampleBase64 = '', promptText = '', language = '' } = {}) {
   const nm = String(name ?? '').trim();
   if (!nm) throw new Error('本地音色名字不能为空');
   if (nm.length > MAX_LOCAL_VOICE_NAME) throw new Error(`本地音色名字太长（${nm.length} 字，上限 ${MAX_LOCAL_VOICE_NAME} 字）`);
@@ -1285,12 +1359,14 @@ export function saveLocalVoice({ name = '', baseCharacter = '', sampleBase64 = '
     err.statusCode = 409;
     throw err;
   }
-  // 基础角色：给了就必须是引擎里真实存在的角色（引擎没装、列不出角色时不拦，先存下来）
-  const base = String(baseCharacter ?? '').trim();
+  // 基础角色：显式给了就必须是引擎里真实存在的角色（引擎没装、列不出角色时不拦，先存下来）；
+  // 没给（界面上已经没有这个下拉了）→ 下面样本校验通过后由 autoBaseCharacter 按实时读数挑一个。
+  let base = String(baseCharacter ?? '').trim();
+  let baseFrom = base ? '调用方指定' : '';
   if (base) {
     const chars = genieEngine.probeLocal(genieEngine.normalizeLocal(voiceConfig().local ?? {})).characters ?? [];
     if (chars.length && !chars.includes(base)) {
-      throw new Error(`引擎里没有「${base}」这个角色（现有：${chars.join('、')}）：改选一个，或先用 node tools/genie-setup.mjs --add-character 装上它`);
+      throw new Error(`引擎里没有「${base}」这个角色（现有：${chars.join('、')}）：改选一个，或先把这个角色装进引擎`);
     }
   }
   const raw = String(sampleBase64 ?? '').replace(/^data:[^,]+,/, '').trim();
@@ -1302,6 +1378,13 @@ export function saveLocalVoice({ name = '', baseCharacter = '', sampleBase64 = '
   }
   const sniff = sniffAudio(buf);
   if (!sniff) throw new Error('样本格式不支持（只支持 mp3 / wav）');
+  /* 自动挑角色放在**样本校验之后、写文件之前**：样本本身不合格时先报样本的事（不该白跑一次引擎探测），
+   * 而挑角色失败时还没落任何文件（不留孤儿样本）。 */
+  if (!base) {
+    const auto = autoBaseCharacter({ language, promptText });
+    base = auto.character;
+    baseFrom = `自动挑（${auto.reason}）`;
+  }
   const id = `lv-${crypto.randomBytes(4).toString('hex')}`;
   const sampleFile = `${id}.${sniff.format}`;
   ensureDir(localVoiceDir());
@@ -1318,7 +1401,7 @@ export function saveLocalVoice({ name = '', baseCharacter = '', sampleBase64 = '
   };
   lib.voices.push(rec);
   atomicWriteJson(LOCAL_VOICE_LIB_FILE, lib);
-  log(`[voice] 本地音色已新建：${nm}（id=${id}，样本 ${buf.length} 字节 ${sniff.format}，基础角色=${base || '（引擎默认）'}）`);
+  log(`[voice] 本地音色已新建：${nm}（id=${id}，样本 ${buf.length} 字节 ${sniff.format}，基础角色=${base}（${baseFrom}））`);
   return { ok: true, voice: localVoicePublic(rec), voices: listLocalVoices() };
 }
 

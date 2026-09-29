@@ -130,10 +130,19 @@ t('probeLocal：引擎与数据都不在时 ready=false，且逐条写明缺什�
     assert.equal(p.hasGenie, false);
     assert.equal(p.dataOk, false);
     assert.deepEqual(p.characters, []);
-    assert.ok(p.reasons.some((r) => r.includes('genie_server.py')), `应当指出缺引擎脚本：${p.reasons}`);
-    assert.ok(p.reasons.some((r) => r.includes('genie_tts')), `应当指出没装引擎包：${p.reasons}`);
-    assert.ok(p.reasons.some((r) => r.includes('GenieData')), `应当指出缺公共数据：${p.reasons}`);
+    /* 2026-10-02 主人要求「界面上不要有任何写死的东西」：reasons 是**直接显示在管理端**的文案
+     * （语音页「查看目标」那行的未满足项），所以这里连"能不能看懂"一起管：按 code 判缺哪一类，
+     * 文案里则不许出现路径、内部命令、解释器名 —— 那些只该进引擎日志。 */
+    const codes = p.issues.map((i) => i.code);
+    assert.deepEqual(codes, ['engine-files', 'runtime', 'public-data', 'characters'], `四类缺项要各报一条：${JSON.stringify(p.issues)}`);
+    assert.ok(p.reasons.some((r) => r.includes('缺少运行环境')), `应当指出缺运行环境：${p.reasons}`);
+    assert.ok(p.reasons.some((r) => r.includes('缺少公共数据')), `应当指出缺公共数据：${p.reasons}`);
     assert.ok(p.reasons.some((r) => r.includes('角色')), `应当指出缺角色模型：${p.reasons}`);
+    assert.equal(p.reasons.length, p.issues.length, 'reasons 与 issues 一一对应');
+    for (const r of p.reasons) {
+      assert.ok(!/[\\/]/.test(r), `未满足项里不该出现路径：${r}`);
+      assert.ok(!/\bnode\b|\bpython3?\b|genie|GenieData|\.mjs|systemctl/.test(r), `未满足项里不该出现内部命令/包名：${r}`);
+    }
     assert.equal(p.paths.url, 'http://127.0.0.1:4611');
   } finally {
     fs.rmSync(empty, { recursive: true, force: true });
@@ -365,6 +374,90 @@ t('stopServer：端口上是别的服务时拒绝动手（没有 service 标识�
     assert.equal(r.stopped, false, '不该把别人家的服务当引擎关掉');
     assert.ok(!hits.includes('POST /shutdown'), `不该发 /shutdown：${hits}`);
   } finally { try { srv.close(); } catch { /* 已关 */ } }
+});
+
+// ── 「基础角色」由桥自动挑（2026-10-02 二次改造）─────────────────────────────
+// 起因（使用方原话）：「新建音色这一行就不该了，应当是直接把上传的音频当做音色来复刻就行，
+// 而不依靠原有角色」—— 于是那一行不再有基础角色下拉，角色由桥按实时读数自己挑。
+// 引擎层面的事实（不能为了好看而骗人）：Genie 是"已装的角色权重决定发音 + 参考音频决定音色"，
+// 一个角色都没装就合不出声 —— 所以要锁住的是"自动挑得对"与"一个都没装时说的是人话"。
+t('scriptLanguage：按参考文本的字形判语言（判不出来就不做语言配对）', () => {
+  assert.equal(voice.scriptLanguage('你好呀，我是小明'), 'zh');
+  assert.equal(voice.scriptLanguage('こんにちは、ミカです'), 'jp', '假名优先于汉字（日语文本里也有汉字）');
+  assert.equal(voice.scriptLanguage('안녕하세요'), 'kr');
+  assert.equal(voice.scriptLanguage('hello there'), 'en');
+  assert.equal(voice.scriptLanguage('12345 !!!'), '', '认不出就不猜');
+  assert.equal(voice.scriptLanguage(''), '');
+});
+
+/** 造一份"已装角色"的模型目录：每个角色一个含 .onnx 的目录（引擎认角色的判据），
+ *  可选写 character.json 声明语言 —— 与 tools/genie-setup.mjs 装出来的形状一致。 */
+function modelsWith(chars) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-autobase-'));
+  for (const c of chars) {
+    const dir = path.join(root, 'models', c.name, 'tts_models');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'vits.onnx'), 'x');
+    if (c.language) fs.writeFileSync(path.join(root, 'models', c.name, 'character.json'), JSON.stringify({ label: c.name, language: c.language }));
+  }
+  return root;
+}
+
+t('autoBaseCharacter：优先挑语言与样本对得上的已装角色（其次默认/任意一个）', () => {
+  const root = modelsWith([{ name: 'feibi', language: 'zh' }, { name: 'mika', language: 'jp' }, { name: 'thirtyseven', language: 'en' }]);
+  try {
+    const local = { modelsDir: path.join(root, 'models'), pythonPath: path.join(root, 'no-such-python') };
+    assert.equal(voice.autoBaseCharacter({ local, promptText: '你好，我是小明' }).character, 'feibi', '中文样本该挑中文角色');
+    assert.equal(voice.autoBaseCharacter({ local, promptText: 'はじめまして' }).character, 'mika', '日语样本该挑日语角色');
+    assert.equal(voice.autoBaseCharacter({ local, language: 'en', promptText: '你好' }).character, 'thirtyseven',
+      '调用方显式给的语言优先于参考文本的字形');
+    assert.equal(voice.autoBaseCharacter({ local }).character, 'feibi',
+      '没有参考文本时按引擎配置的语言（默认 zh）挑');
+    const r = voice.autoBaseCharacter({ local, promptText: '你好' });
+    assert.ok(r.reason && r.hint === 'zh', `要如实说明挑的理由与判定的语言：${JSON.stringify(r)}`);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+t('autoBaseCharacter：语言对不上时用引擎默认角色，再不然用第一个已装角色', () => {
+  // 只有英语角色 + 默认中文提示 → 没有语言对得上的，退回"引擎配置里那个默认角色"
+  const root = modelsWith([{ name: 'aaa', language: 'en' }, { name: 'zzz', language: 'en' }]);
+  try {
+    const modelsDir = path.join(root, 'models');
+    const base = { modelsDir, pythonPath: path.join(root, 'no-such-python') };
+    const withDefault = voice.autoBaseCharacter({ local: { ...base, character: 'zzz' }, promptText: '你好' });
+    assert.equal(withDefault.character, 'zzz', '语言对不上时应退回引擎默认角色');
+    assert.equal(voice.autoBaseCharacter({ local: { ...base, character: '没装的角色' }, promptText: '你好' }).character, 'aaa',
+      '默认角色没装时用第一个已装角色');
+    // 没有 character.json 的角色：语言未知 → 不做语言配对，同样退回默认/第一个
+    const noMeta = modelsWith([{ name: 'nolabel' }]);
+    try {
+      assert.equal(voice.autoBaseCharacter({ local: { modelsDir: path.join(noMeta, 'models'), pythonPath: base.pythonPath }, promptText: '你好' }).character,
+        'nolabel', '语言未知的角色照样能当基础角色（不因为读不到 character.json 就用不了）');
+    } finally { fs.rmSync(noMeta, { recursive: true, force: true }); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+t('一个角色都没装：说人话（不带路径/内部命令），且不写任何档案', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-nomodels-'));
+  fs.mkdirSync(path.join(root, 'models'), { recursive: true });
+  const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE'), Buffer.alloc(64)]);
+  try {
+    const local = { modelsDir: path.join(root, 'models'), pythonPath: path.join(root, 'no-such-python') };
+    assert.throws(() => voice.autoBaseCharacter({ local }), (e) => {
+      assert.match(e.message, /还没有可用的语音模型/, `要说清是"没装模型"：${e.message}`);
+      assert.match(e.message, /先装一个角色/, `要告诉用户下一步做什么：${e.message}`);
+      assert.ok(!/[\\/]/.test(e.message), `不该出现路径：${e.message}`);
+      assert.ok(!/\bnode\b|\bpython3?\b|genie|GenieData|\.mjs|tools/i.test(e.message), `不该出现内部命令/包名：${e.message}`);
+      return true;
+    });
+    // 同一条路走 saveLocalVoice（界面传的就是它）：一样是人话，而且**样本文件都还没落盘**
+    voice.initVoiceCore({ voice: { local } });
+    try {
+      assert.throws(() => voice.saveLocalVoice({ name: '没模型时建的', sampleBase64: wav.toString('base64') }),
+        (e) => { assert.match(e.message, /还没有可用的语音模型/); return true; });
+      assert.ok(!voice.listLocalVoices().some((v) => v.name === '没模型时建的'), '失败不该留下半条档案');
+    } finally { voice.initVoiceCore(null); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 // ── 跑 ──────────────────────────────────────────────────────────────────────

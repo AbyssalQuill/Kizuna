@@ -206,7 +206,9 @@ async function doCheck() {
       if (imp.status === 0 && /IMPORT_OK/.test(imp.stdout)) ok('完整导入通过（genie_tts 已能加载，含数据与文本前端）');
       else bad(`完整导入失败：${(imp.stderr || imp.stdout || '').trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || '原因未知'}`);
     } else info('数据还没齐，本次跳过完整导入校验（先 --download）');
-  } else bad(`未安装 —— node tools/genie-setup.mjs --install（${probe.reasons.find((r) => r.includes('genie_tts')) ?? ''}）`);
+    /* 按 code 找"引擎没装"那一条（reasons 的文案面向大众、随时可能改；老副本没有 issues，
+     * 退回按现在的文案找一次）。 */
+  } else bad(`未安装 —— node tools/genie-setup.mjs --install（${probe.issues?.find((i) => i.code === 'engine-package')?.message ?? probe.reasons.find((r) => r.includes('语音引擎尚未安装')) ?? ''}）`);
 
   log('\n③ 引擎公共数据（GenieData）');
   if (probe.dataOk) ok(`${GENIE_DATA_DIR}（${dirSizeMb(GENIE_DATA_DIR)} MB）`);
