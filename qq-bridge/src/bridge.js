@@ -697,28 +697,10 @@ async function main() {
       }
     }
   };
-  const napcatConnected = await connectNapcat(Math.max(0, Number(cfg.social?.napcatStartupBudgetMs) || 120000));
-  if (!napcatConnected) {
-    log('[napcat] 启动预算内仍未连上：桥继续运行（控制台可用），后台每 15s 再试一次，NapCat 就绪后自动接上');
-    // 后台常驻重连：连上即停。绝不能因为"暂时连不上 NapCat"把整条桥弄死。
-    void (async () => {
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 15000));
-        try {
-          if (await connectNapcat(1)) {
-            log('[napcat] 已接上 NapCat（后台重连成功）');
-            void fetchNickname();
-            return;
-          }
-        } catch (error) {
-          log('[napcat] 后台重连异常：', error?.message ?? error);
-        }
-      }
-    })();
-  }
   // 读取机器人昵称（用于社交模式"被提到"识别）
   // 未连上时不要在这里等：getLoginInfo 会一直等回包（实测把后续 startConsoleServer 拖了 30 秒，
   // 用户看到的正是"桥起来半天、点开是白屏"）。没连上就交给后台重连成功后那次 fetchNickname。
+  // （声明提前到连接之前：下面改成了后台连接，连上后要回调它。）
   const fetchNickname = async () => {
     try {
       const login = await Promise.race([
@@ -731,7 +713,48 @@ async function main() {
       }
     } catch { /* 拿不到昵称不影响主流程 */ }
   };
-  if (napcatConnected) await fetchNickname();
+  /* 2026-09-29 修「本机没开 NapCat 时 WebUI 迟迟不监听、管理器判 failed」。
+   * 现场（实测时间线）：本机 NapCat 没在跑，走管理器重启 bridge-local →
+   *   0s  返回 success/starting
+   *  47s  /api/state: phase=failed, reachable=false, error="等待就绪超时（45s）…"
+   * 133s  3100 才 LISTENING + GET /api/status 200，phase 转 running、reachable=true
+   * 中间 88 秒界面点开就是白屏。日志里全程只有 `NapCat 错误: TypeError（wsUrl=ws://127.0.0.1:3001）`
+   * 和 `[napcat] 第 N 次连接未成功…重试`，"本地控制台已启动"那一行到最后才出现。
+   * 根因就是下面这行原来写着 `await connectNapcat(预算)`：它把 startConsoleServer()（文件更下面）
+   * 堵在 NapCat 握手之后。预算默认 120000ms 且每次 connect() 自己还带 20s 硬超时，
+   * NapCat 完全不可达时要 2 分多钟才轮到监听 —— 于是必然跨过管理器的 45s 就绪门限。
+   * 语义不变（NapCat 断开时依赖 QQ 的接口照旧如实报"未连接"，端口/进度/状态接口先可用），
+   * 只把顺序反过来：监听先起，连接交给它自己那套"预算内快速重试 → 之后每 15s 无限重试"。
+   * 绝不能因为"暂时连不上 NapCat"把 WebUI 一起堵死。 */
+  const napcatBootBudgetMs = Math.max(0, Number(cfg.social?.napcatStartupBudgetMs) || 120000);
+  const napcatFirstAttempt = connectNapcat(napcatBootBudgetMs);
+  log('[napcat] 首次连接已转入后台（不阻塞 WebUI 监听启动），NapCat 就绪后自动接住');
+  void (async () => {
+    let napcatConnected = false;
+    try {
+      napcatConnected = await napcatFirstAttempt;
+    } catch (error) {
+      log(`[napcat] 首次连接异常（已忽略，交给后台重连）：${error?.message ?? error}`);
+    }
+    if (napcatConnected) {
+      void fetchNickname();
+      return;
+    }
+    log('[napcat] 启动预算内仍未连上：桥继续运行（控制台可用），后台每 15s 再试一次，NapCat 就绪后自动接上');
+    // 后台常驻重连：连上即停。绝不能因为"暂时连不上 NapCat"把整条桥弄死。
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 15000));
+      try {
+        if (await connectNapcat(1)) {
+          log('[napcat] 已接上 NapCat（后台重连成功）');
+          void fetchNickname();
+          return;
+        }
+      } catch (error) {
+        log('[napcat] 后台重连异常：', error?.message ?? error);
+      }
+    }
+  })();
   log('桥接已启动。按 Ctrl+C 退出。');
   // 恢复定时发消息任务（需在所有 const 定义之后调用）
   try { loadScheduledTasks(); } catch (error) { log(`[scheduled] 恢复定时任务失败: ${error?.message ?? error}`); }
