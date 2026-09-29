@@ -1760,13 +1760,50 @@ export function startConsoleServer() {
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
         if (req.headers['x-agent-token'] && !ToolEnabled('getUnread')) { sendJson({ ok: false, error: '工具未启用：qq_get_unread_messages' }, 403); return; }
+        /* 2026-09-29【已读融进工具】`markRead=1`：读到的就是已读的 —— 读完这批就把它标记掉，
+         * 模型不必再单独调一次 qq_mark_read。不带这个参数时行为与改动之前完全一致（纯只读）。
+         * 不做成"无脑全清"的三条硬边界（这是本改动唯一有风险的地方，所以写在这里）：
+         *   ① 只标记**这一次真正返回给模型的那批 seq**：内存里逐条摘除（按 seq 集合），
+         *      不是"把 seq <= X 一刀切" —— 截断时被切掉的是旧消息，而旧消息模型没见过；
+         *   ② 列表被 limit 截断（还有更旧的未读没返回给模型）时**不推进 SQLite read_at 水位**：
+         *      水位只能表达"≤ X 全已读"，推进它等于替模型把没看过的旧消息签收掉；
+         *   ③ 落库沿用既有的 markMessagesRead(key, maxSeq)（core/chat-db.js），不另造一套水位。 */
+        const wantMarkRead = /^(1|true|yes)$/i.test(String(url.searchParams.get('markRead') ?? ''));
         const st = getSocialState(key);
-        let unreadMsgs = Array.isArray(st.unread) ? st.unread.slice(-limit) : [];
-        if (!unreadMsgs.length) {
+        const inMemUnread = Array.isArray(st.unread) ? st.unread : [];
+        let unreadMsgs = inMemUnread.slice(-limit);
+        const fromDbFallback = !unreadMsgs.length;
+        if (fromDbFallback) {
           // 内存未读为空（重启/会话重建）：回退 SQLite read_at=0 的未读记录（仅晚于最近已读水位）
           unreadMsgs = fetchUnreadChatMessages(key, limit, Number(st.lastAiSeenAt) || 0);
         }
-        sendJson({ ok: true, key, unreadCount: unreadMsgs.length, messages: unreadMsgs.map(withTimeText) });
+        let markNote = null;
+        if (wantMarkRead && unreadMsgs.length) {
+          const seqs = unreadMsgs.map((m) => Number(m?.seq)).filter((n) => Number.isFinite(n) && n > 0);
+          const cap = seqs.length ? Math.max(...seqs) : 0;
+          const truncated = !fromDbFallback && inMemUnread.length > unreadMsgs.length;
+          if (!fromDbFallback) {
+            const shown = new Set(seqs);
+            st.unread = truncated ? inMemUnread.filter((m) => !shown.has(Number(m?.seq))) : [];
+          }
+          st.lastAiSeenAt = Date.now();
+          let dbUpdated = 0;
+          if (!truncated && cap > 0) {
+            try {
+              const rDb = markMessagesRead(key, cap);
+              dbUpdated = rDb.ok ? rDb.updated : 0;
+            } catch (eDb) { log(`[chat-history] unread markRead 落库失败 ${key}: ${eDb?.message ?? eDb}`); }
+          }
+          saveSocialState();
+          markNote = {
+            marked: seqs.length,
+            ...(truncated
+              ? { watermark: null, note: `只读回了最新 ${unreadMsgs.length} 条（还有更旧的未读没展示给模型），已按展示到的这批标记；未推进已读水位，免得把没看过的旧消息一并签收` }
+              : { watermark: cap, dbUpdated }),
+          };
+          log(`[default] qq_get_unread_messages 读后即已读 ${key}：${seqs.length} 条${truncated ? '（列表被 limit 截断，未推水位）' : ''}`);
+        }
+        sendJson({ ok: true, key, unreadCount: unreadMsgs.length, messages: unreadMsgs.map(withTimeText), ...(markNote ? { markRead: markNote } : {}) });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/recent') {
@@ -1827,6 +1864,40 @@ export function startConsoleServer() {
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+        /* ── 2026-09-29【已读融进工具】onlySeen=true：只推进"本轮已展示给模型"的已读水位 ─────────
+         * 给发送类工具用：把消息发出去这件事本身不该顺带改写唤醒条件（下面那段完整 mark_read 会
+         * cancelReplyCheck / 置 wakeConfig.infinite / confirmedAt='mark_read'，那是"收尾"的语义，
+         * 发一条消息不等于收尾）。所以这里只做水位推进，不碰 wakeConfig、不取消回复检查。
+         * 机制与调用条件**照抄** core/mux.js:1276-1295 的无正文收尾那一段，同一套判据：
+         *   maxSeen = max(turnSeenUnread)   ← 本回合唤醒正文真的展示过的 seq 快照（wake-send.js:1531）
+         *   → st.unread 里 seq <= maxSeen 的摘掉 → markMessagesRead(key, maxSeen) → saveSocialState()
+         * 唯一的差别、也是本分支的安全底线：**没有展示快照就什么都不做**（maxSeen<=0 直接返回）。
+         * mux 那一段之所以敢在 maxSeen=0 时 st.unread=[]（全清），前提是它的触发条件本身是
+         * "唤醒正文已把未读带过、模型看过并决定不回"；发送类工具可能在任何回合里被调用
+         * （主动搭话、定时任务、跨会话转达），在那里全清就等于把模型**从没见过**的消息
+         * 静默标记已读 —— 那正是本改动最危险的失败模式，所以宁可不动。 */
+        if (body.onlySeen === true) {
+          const stSeen = getSocialState(key);
+          const snapSeqs = (Array.isArray(stSeen.turnSeenUnread) ? stSeen.turnSeenUnread : []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+          const maxSeen = snapSeqs.length ? Math.max(...snapSeqs) : 0;
+          if (maxSeen <= 0) {
+            sendJson({ ok: true, key, markedCount: 0, advanced: false, note: '本轮没有"已展示给模型"的未读快照，已读水位未动（避免把没见过的消息误标已读）；真要收尾请用 qq_mark_read' });
+            return;
+          }
+          const beforeSeen = Array.isArray(stSeen.unread) ? stSeen.unread.length : 0;
+          stSeen.unread = (Array.isArray(stSeen.unread) ? stSeen.unread : []).filter((m) => m && Number(m.seq) > maxSeen);
+          const markedCount = beforeSeen - stSeen.unread.length;
+          stSeen.lastAiSeenAt = Date.now();
+          let dbUpdatedSeen = 0;
+          try {
+            const rDbS = markMessagesRead(key, maxSeen);
+            dbUpdatedSeen = rDbS.ok ? rDbS.updated : 0;
+          } catch (eDbS) { log(`[chat-history] onlySeen 落库失败 ${key}: ${eDbS?.message ?? eDbS}`); }
+          saveSocialState();
+          log(`[default] onlySeen 推进已读水位 ${key}：${markedCount} 条（maxSeen=${maxSeen}）`);
+          sendJson({ ok: true, key, markedCount, advanced: true, watermark: maxSeen, dbUpdated: dbUpdatedSeen });
+          return;
+        }
         if (req.headers['x-agent-token'] && !ToolEnabled('markRead')) { sendJson({ ok: false, error: '工具未启用：qq_mark_read' }, 403); return; }
         const st = getSocialState(key);
         // mark_read 是“本轮已看过、收尾”的常规动作，不设置任何潜水配置（只清已读 + 保留可唤醒条件），

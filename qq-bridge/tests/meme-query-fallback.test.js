@@ -24,7 +24,7 @@ ok('多了 fileName 别名', /fileName: z\.string\(\)\.optional\(\)\.describe\('
 ok('多了 query（没 file 时用）', /query: z\.string\(\)\.optional\(\)\.describe\('Used when file is omitted/.test(send));
 ok('多了 tag（收窄分类）', /tag: z\.string\(\)\.optional\(\)\.describe\('Optional category filter for query/.test(send));
 ok('工具说明写清了没文件名时改传 query', /If you do not have a file name yet, pass query/.test(send));
-ok('handler 解构里收下了 fileName / query / tag', /async \(\{ key, token, file, fileName, query, tag, pack, replyToMessageId, crossSession \}\)/.test(send));
+ok('handler 解构里收下了 fileName / query / tag', /async \(\{ key, token, file, fileName, query, tag, pack, replyToMessageId, crossSession, markRead \}\)/.test(send));
 ok('fileName 与 file 等价（file ?? fileName）', /let wantFile = String\(file \?\? fileName \?\? ''\)\.trim\(\);/.test(send));
 
 console.log('== ② 兜底挑图 ==');

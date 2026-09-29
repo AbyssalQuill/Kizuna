@@ -384,6 +384,26 @@ plan    = planPixivSend(sources, { size: sizeEff })
 `lossless` 的旧实现为 `lossless: sizeEff === 'original'`，因此在降级投递 720 / 1200 档乃至缩略图时结果仍为
 `lossless: true`。现行实现要求三项条件同时成立（`mcp-napcat-safe.js:3461-3506`）。
 
+#### 2.6.3 搜图与发图融合为一次调用（2026-09-29，口径：工具名不变、能力不新增）
+
+动机原话：「把 pixiv 搜图发图融合到一起，模型**一步之内**完成收发，包括把**已读融进各个工具内**」。
+
+三条入口里 `query` 这条**本来就是"搜 + 发"**（`pixivSearch` 之后再投递），缺的只是**说明书**：旧文案
+（`agent.cordis.yml` 的 `[TOOLS]`/`[RULES]` 段与两个工具的 `.describe()`）把 `qq_pixiv_search` 写成"发之前先查一次"
+的必经步骤，模型于是稳定地多花一步。本次只改措辞，让"一次调用完成搜+发"成为默认路径：
+
+| 位置 | 改动 |
+| --- | --- |
+| `qq_pixiv_search` 描述 | 追加 `[OPTIONAL - SEARCH AND SEND ARE ONE CALL]`：它降级为"想先看看有什么"的可选步骤，**不是**投递前的必经调用 |
+| `qq_send_pixiv` 描述 | 追加 `[SEARCH AND SEND ARE THE SAME CALL]`：`query` 自成一条完整路径，`index` 在**本地筛选之后**的列表上选取（如 `query=原神 荧` + `orientation=portrait` 一次调用即可） |
+| 预设 `agent.cordis.yml` | `4 FAN_ART_ILLUSTRATION` 段写明 `SEARCH_AND_SEND_ARE_ONE_CALL` |
+| 未改动 | 工具名不变（不新增工具）、`qq_pixiv_search` 保留、能力集合不变；`qq_send_pixiv` 的参数表除新增 `markRead` 外原样 |
+
+「已读融进工具」与 pixiv 的关系：`qq_send_pixiv` 与其它发送类工具一样带 `markRead`（默认 true），发送成功后
+由桥按 `turnSeenUnread` 快照推进本会话已读水位（机制见 `docs/TECHNICAL.md` 的 `qq_mark_read` 条目），
+所以"搜+发"这一步同时也是"读"这一步，模型不再需要额外调 `qq_mark_read`。返回体里多一个 `markRead` 字段
+（`{ok, markedCount, advanced, watermark, dbUpdated}`，或 `{skipped}` / `{ok:false,error}`）。
+
 ### 2.7 其它不变量
 
 #### 2.7.1 R-18 的不对称策略
@@ -667,6 +687,7 @@ imageCount   配几张：默认 1，上限 3（QZONE_IMAGE_MAX）
 | `qq-bridge/tools/test-pixiv-tier-truncation.mjs` | 档位识别与截断（纯函数自测） |
 | `qq-bridge/tools/test-pixiv-byid.mjs`、`test-pixiv-cache.mjs`、`test-pixiv-filters.mjs` | 按号取图、缓存、本地筛选 |
 | `qq-bridge/tools/e2e-pixiv-send.mjs` | 端到端发图 |
+| `qq-bridge/tests/mark-read-fused.test.js` | 搜+发一步化的**已读副作用**：`markRead` 默认推进水位、`markRead:false` 不推进、无展示快照时不推进（真起 console-server，真实 HTTP） |
 | `qq-bridge/tools/probe-jpeg-structure.mjs`、`probe-pixiv-native.mjs`、`probe-pixiv-params.mjs`、`dump-pixiv-shape.mjs` | 在线环境结构探针 |
 
 ---
@@ -678,6 +699,7 @@ imageCount   配几张：默认 1，上限 3（QZONE_IMAGE_MAX）
 | 项 | 声明 | 等级 |
 | --- | --- | --- |
 | NapCat 内部行号 | `napcat.mjs` 的 80276~80283、9237、11560、11578、11585 等行号来自 `lib/qzone-image.js` 顶部注释记录的读包结果（本机 NapCat 9.9.26-44498）；本轮未重新解包核对，NapCat 升级后行号会平移。函数名（`SendQzoneMsg._handle`、`uploadImageToQzone`、`publishQzoneMsg`）是更稳定的锚点 | 【未核验】 |
+| 搜+发一步化的**模型实际行为** | 2026-09-29 的改动只改了工具描述与预设施文，能验证的是"描述里已经没有'先查再发'的硬性要求、`query` 路径一次调用即可投递"；**模型是否真的不再多花一步、是否真的不再补调 `qq_mark_read`，要等真实 QQ 回合才看得到**，本轮未验证 | 【未核验】 |
 | 投递侧实现 | `qq_send_pixiv` 的“写临时文件 → POST `/api/social/send-message`”之后的投递侧（`core/console-server.js:1973` 起的 `send-message` 端点、`core/qq-send.js` 的 `onebotSend`）只核到端点与调用，未逐行读发送实现 | 【未核验】 |
 | 投递前卡口 | `lib/image-compress.js` 的 `IMAGE_HARD_MAX_BYTES` 已核对：`image-compress.js:47` 为 `15 * 1024 * 1024`，与 `MAX_IMAGE_FETCH_BYTES` 同值；判定处为 `image-compress.js:250`、`295-296` | 【已核验】 |
 | 空跑脚本 | 空跑脚本 `_qzone_dryrun.mjs` 是 `lib/qzone-image.js:2693` 注释提到的临时脚本，本仓库 `qq-bridge/tools/` 下不存在（已检索），因此 §3.3 的空跑结论为转述代码注释，本轮未复现 | 【未核验】 |

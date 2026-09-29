@@ -492,6 +492,38 @@ async function authorizeRead(key, token) {
   await agentApi('/api/authorize/read', { method: 'POST', body: JSON.stringify({ key, token: token || undefined }) });
 }
 
+/* ── 已读融进工具（2026-09-29）────────────────────────────────────────────────
+ * 发送类工具的 `markRead` 参数（**默认 true**）落到这里：发出去之后顺手把"本轮唤醒正文真的
+ * 给过模型看"的那批未读标记成已读，于是模型不再需要每轮手动补一次 qq_mark_read。
+ *
+ * 机制复用桥自己的那套（**没有另造水位**）：POST /api/social/mark-read {onlySeen:true}
+ *   → console-server 按 turnSeenUnread 快照算 maxSeen，摘掉 seq<=maxSeen 的未读，
+ *     再调既有的 markMessagesRead(key, maxSeen) 落库（同一函数，mux.js 无正文收尾也在用）。
+ * 两条必须守住的边界：
+ *   ① 失败/超时绝不影响已经真的发出去的消息：调用方把这里的结果作为 markRead 字段附在
+ *      成功回执里，绝不因为标记失败把发送改写成失败（否则模型会重发 → 对方收到两条）。
+ *   ② **没有展示快照时桥会原样不动**（它不会退化成"全清"）：那种情况下本函数如实带回
+ *      桥给的说明，让模型知道该用 qq_mark_read 显式收尾，而不是假装已经标记过了。
+ * markRead=false 或没有 agent token（非 default 模式）时什么都不做。 */
+async function autoMarkReadAfterSend(key, token, markRead) {
+  if (markRead === false) return { skipped: 'markRead=false' };
+  if (!String(token ?? '').trim()) return { skipped: 'no agent token (非 default 模式不参与已读水位)' };
+  try {
+    const r = await agentApi('/api/social/mark-read', {
+      method: 'POST',
+      body: JSON.stringify({ key, onlySeen: true }),
+      headers: { 'x-agent-token': token },
+      timeoutMs: 15000,
+    });
+    return { ok: true, ...(r && typeof r === 'object' ? r : {}) };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+/** 发送类工具 `markRead` 参数的统一说明（默认 true = 发完自动推进已读水位，见上面的 autoMarkReadAfterSend）。 */
+const MARK_READ_PARAM_DESC = 'Default true: after this send succeeds the bridge also advances this session\'s read watermark for the messages this round already showed you (so the same unread will not come back on the next wake, and you do NOT need a separate mark-read call). Pass false only when you deliberately want them to stay unread (e.g. you are not done with them).';
+
 const server = new McpServer({ name: 'napcat-safe', version: '0.1.0' });
 
 /* 2026-09-15 省额度：重复失败短路：同一个工具 + 完全相同的参数，如果刚刚（90s 内）已经失败过，
@@ -972,16 +1004,17 @@ registerTool(
 
 registerTool(
   'qq_reply',
-  'Reply quoting an earlier message (group or private). replyToMessageId = the quoted id (non-zero int, may be negative; query it first). Quote only when answering one specific earlier message or when several lines answer different people - not when the context is clear, never the same message twice, and use the latest relevant one. Default mode needs the token; the session must be whitelisted. Prefer key (group:<gid> / private:<qq>); legacy groupId still works for groups.',
+  'Reply quoting an earlier message (group or private). replyToMessageId = the quoted id (non-zero int, may be negative; query it first). Quote only when answering one specific earlier message or when several lines answer different people - not when the context is clear, never the same message twice, and use the latest relevant one. Default mode needs the token; the session must be whitelisted. Prefer key (group:<gid> / private:<qq>); legacy groupId still works for groups. Replying also counts as reading: on success the read watermark advances for the messages this round already showed you (markRead, default true) - no separate mark-read call needed.',
   {
     key: z.string().optional().describe('Session key: group:ID or private:QQ (recommended; works for group and private)'),
     groupId: z.union([z.number(), z.string()]).optional().describe('Legacy param: group id (still accepted; prefer key)'),
     replyToMessageId: z.union([z.number(), z.string()]).describe('Message id being quoted/replied to (non-zero int, may be negative)'),
     message: z.string().describe('Text to send; plain text, no Markdown or CQ codes'),
     token: z.string().optional().describe('Session token (required in default mode)'),
+    markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
     crossSession: z.boolean().optional().describe('ONLY when deliberately replying into a different session than the one you are answering; a mismatched key is refused instead of silently sent elsewhere')
   },
-  async ({ key, groupId, replyToMessageId, message, token, crossSession }) => {
+  async ({ key, groupId, replyToMessageId, message, token, crossSession, markRead }) => {
     try {
       const cleanMessage = unquoteJsonString(message);
       // key 优先；模型偶尔用 groupId 老参数 → 转成 group:群号。
@@ -995,7 +1028,8 @@ registerTool(
         headers: { 'x-agent-token': token || undefined },
         timeoutMs: 300000
       });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      const mrReply = await autoMarkReadAfterSend(targetKey, token, markRead);
+      return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrReply }, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `发送失败：${error?.message ?? error}` }], isError: true };
     }
@@ -1042,11 +1076,12 @@ registerTool(
 
 registerTool(
   'qq_get_unread_messages',
-  'View unread messages of a session (read-only; does not auto-mark them read).',
-  { key: z.string().describe('Session key: group:ID or private:QQ'), token: z.string().describe('Session token (from wake prompt)'), limit: z.number().optional().describe('Max results, default 30, max 100') },
-  async ({ key, token, limit }) => {
+  'View unread messages of a session. Reading counts as reading: by default the messages returned here are marked read in the same call (markRead, default true), so the same unread will NOT come back on the next wake and you do NOT need a separate qq_mark_read afterwards. Only what this call actually returned to you is marked - nothing else. Pass markRead:false for a pure look (then the unread stays and comes back); the bridge never marks messages it did not show you (if the list was cut off by `limit`, it says so in markRead.note and does not advance the watermark).',
+  { key: z.string().describe('Session key: group:ID or private:QQ'), token: z.string().describe('Session token (from wake prompt)'), limit: z.number().optional().describe('Max results, default 30, max 100'), markRead: z.boolean().optional().describe('Default true: mark exactly the messages this call returns as read (the session\'s read watermark advances, so they will not be delivered again). false = pure look, nothing is marked. The bridge never marks messages it did not return to you; when `limit` cut the list short it says so in markRead.note and leaves the watermark alone.') },
+  async ({ key, token, limit, markRead }) => {
     try {
-      const data = await agentApi(`/api/social/unread?key=${encodeURIComponent(key)}&limit=${limit ?? 30}`, { headers: { 'x-agent-token': token } });
+      const wantMark = markRead !== false;
+      const data = await agentApi(`/api/social/unread?key=${encodeURIComponent(key)}&limit=${limit ?? 30}${wantMark ? '&markRead=1' : ''}`, { headers: { 'x-agent-token': token } });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `获取未读消息失败：${error?.message ?? error}` }], isError: true };
@@ -1317,7 +1352,7 @@ registerTool(
 
 registerTool(
   'qq_send_message',
-  'Send messages: string = one; array = several (each complete, never split a sentence). replyToMessageId only to quote one specific earlier message - use the latest relevant one, never twice, skip it when unambiguous. images = local image paths for text+image, image-only (messages = []) or image-first (first messages item empty, first images item = the image). Needs the token; target must be whitelisted.',
+  'Send messages: string = one; array = several (each complete, never split a sentence). replyToMessageId only to quote one specific earlier message - use the latest relevant one, never twice, skip it when unambiguous. images = local image paths for text+image, image-only (messages = []) or image-first (first messages item empty, first images item = the image). Needs the token; target must be whitelisted. Sending also counts as reading: on success the session read watermark is advanced for the messages this round already showed you (markRead, default true), so after speaking you do NOT need a separate mark-read call; pass markRead:false only to leave them unread on purpose.',
   {
     key: z.string().describe('Session key: group:ID or private:QQ'),
     token: z.string().describe('Session token (from the wake prompt)'),
@@ -1329,9 +1364,10 @@ registerTool(
     gapMode: z.enum(['auto', 'fixed', 'byLength']).optional().describe('auto = random (bridge default), fixed = interval, byLength = by text length'),
     gapMs: z.number().optional().describe('Interval for fixed mode (ms)'),
     gaps: z.array(z.number()).optional().describe('Per-message intervals for fixed mode (length = count - 1)'),
+    markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
     crossSession: z.boolean().optional().describe('ONLY for deliberately sending into a DIFFERENT session than the one you are answering (e.g. the owner asks you in private to say something in a group): set true to confirm. key MUST be the [Session] value from the wake prompt you are answering - a wrong key is refused instead of silently sent elsewhere, so only set this when the target really is another chat. Never set it to "fix" a mismatch you did not intend.')
   },
-  async ({ key, token, messages, message, images, replyToMessageId, atUserId, gapMode, gapMs, gaps, crossSession }) => {
+  async ({ key, token, messages, message, images, replyToMessageId, atUserId, gapMode, gapMs, gaps, crossSession, markRead }) => {
     try {
       // 兼容模型误用 message 单数字段（schema 也有同名兼容别名）；messages 为空时回退到 message。
       if (messages === undefined || messages === null || (Array.isArray(messages) && messages.length === 0)) {
@@ -1363,7 +1399,9 @@ registerTool(
         headers: { 'x-agent-token': token },
         timeoutMs: 300000
       });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      // 已读融进发送（2026-09-29）：发出去之后顺手推进已读水位，模型不必再单独调 qq_mark_read。
+      const mrSend = await autoMarkReadAfterSend(key, token, markRead);
+      return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrSend }, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `发送失败：${error?.message ?? error}` }], isError: true };
     }
@@ -1806,15 +1844,16 @@ if (cfg.social?.sticker?.enabled !== false && cfg.social?.tools?.getStickerImage
 if (cfg.social?.sticker?.enabled !== false && cfg.social?.tools?.sendSticker !== false) {
   registerTool(
     'qq_send_sticker',
-    'Send one collected QQ custom sticker in this session; stickerId = the id/md5/url from qq_list_stickers. One message is one sticker and cannot carry text in the same bubble - send your words first via qq_send_message/qq_reply, then the sticker. replyToMessageId/atUserId (group) allow quoting/mentioning. Occasional stickers feel natural; do not spam.',
+    'Send one collected QQ custom sticker in this session; stickerId = the id/md5/url from qq_list_stickers. One message is one sticker and cannot carry text in the same bubble - send your words first via qq_send_message/qq_reply, then the sticker. replyToMessageId/atUserId (group) allow quoting/mentioning. Occasional stickers feel natural; do not spam. Sending also advances the session read watermark by default (markRead) - no separate mark-read call needed.',
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token (from the wake prompt)'),
       stickerId: z.string().describe('Sticker id: emoji_id / md5 / image URL (from qq_list_stickers)'),
       replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, may be negative, optional)'),
-      atUserId: z.union([z.number(), z.string()]).optional().describe('Group member QQ to at-mention (optional in group chats; N/A in private chats)')
+      atUserId: z.union([z.number(), z.string()]).optional().describe('Group member QQ to at-mention (optional in group chats; N/A in private chats)'),
+      markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC)
     },
-    async ({ key, token, stickerId, replyToMessageId, atUserId }) => {
+    async ({ key, token, stickerId, replyToMessageId, atUserId, markRead }) => {
       try {
         const data = await agentApi('/api/social/send-sticker', {
           method: 'POST',
@@ -1822,7 +1861,8 @@ if (cfg.social?.sticker?.enabled !== false && cfg.social?.tools?.sendSticker !==
           headers: { 'x-agent-token': token },
           timeoutMs: 300000
         });
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        const mrSticker = await autoMarkReadAfterSend(key, token, markRead);
+        return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrSticker }, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `发送表情失败：${error?.message ?? error}` }], isError: true };
       }
@@ -2119,7 +2159,7 @@ if (cfg.social?.meme?.enabled !== false) {
 if (cfg.social?.meme?.enabled !== false) {
   registerTool(
     'qq_send_meme',
-    'Send one meme from the bundled meme packs to a QQ session. Pass file = the file_name returned by qq_meme_search (a meme file name is its description note); pass pack as well when two packs contain the same file_name. If you do not have a file name yet, pass query (an emotion/content description, e.g., 生气、睡觉) instead and the best-matching meme is picked for you (tag optionally narrows the category). Send the image directly with no preceding text; replyToMessageId optionally makes it a quoted reply.',
+    'Send one meme from the bundled meme packs to a QQ session. Pass file = the file_name returned by qq_meme_search (a meme file name is its description note); pass pack as well when two packs contain the same file_name. If you do not have a file name yet, pass query (an emotion/content description, e.g., 生气、睡觉) instead and the best-matching meme is picked for you (tag optionally narrows the category). Send the image directly with no preceding text; replyToMessageId optionally makes it a quoted reply. Sending also advances the session read watermark by default (markRead) - no separate mark-read call needed.',
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token'),
@@ -2129,9 +2169,10 @@ if (cfg.social?.meme?.enabled !== false) {
       tag: z.string().optional().describe('Optional category filter for query: happy/angry/sad/shy/confused/surprised/sigh/sleep/daily/love/work'),
       pack: z.string().optional().describe('Pack id shown in qq_meme_search results; only needed when several packs contain the same file_name'),
       replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Optional: message id to quote/reply to'),
+      markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
       crossSession: z.boolean().optional().describe('ONLY when deliberately posting into a different session than the one you are answering; a key that is not this session\'s is refused otherwise')
     },
-    async ({ key, token, file, fileName, query, tag, pack, replyToMessageId, crossSession }) => {
+    async ({ key, token, file, fileName, query, tag, pack, replyToMessageId, crossSession, markRead }) => {
       try {
         const packs = orderedMemePacks(getConfig());
         if (!packs.length) return { content: [{ type: 'text', text: memeMissingHint }] };
@@ -2199,7 +2240,7 @@ if (cfg.social?.meme?.enabled !== false) {
             headers: { 'x-agent-token': token },
             timeoutMs: 120000
           });
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, file: wantFile, pack: hit.pack.id, ...(pickedByQuery ? { pickedByQuery: true, matched: pickedByQuery.caption || pickedByQuery.tag } : {}), ...(otherPacks.length ? { sameNameAlsoIn: otherPacks } : {}), quoted: data?.quoted ?? null, sent: data?.sent ?? null, via: 'bridge' }, null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, file: wantFile, pack: hit.pack.id, ...(pickedByQuery ? { pickedByQuery: true, matched: pickedByQuery.caption || pickedByQuery.tag } : {}), ...(otherPacks.length ? { sameNameAlsoIn: otherPacks } : {}), quoted: data?.quoted ?? null, sent: data?.sent ?? null, via: 'bridge', markRead: await autoMarkReadAfterSend(key, token, markRead) }, null, 2) }] };
         }
         const msg = [];
         msg.push({ type: 'image', data: { file: napcatPath } });
@@ -2240,7 +2281,7 @@ if (cfg.social?.meme?.enabled !== false) {
         } catch (regError) {
           // 登记失败不影响发送本身
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, file: wantFile, pack: hit.pack.id, ...(pickedByQuery ? { pickedByQuery: true, matched: pickedByQuery.caption || pickedByQuery.tag } : {}), ...(otherPacks.length ? { sameNameAlsoIn: otherPacks } : {}), messageId }) }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, file: wantFile, pack: hit.pack.id, ...(pickedByQuery ? { pickedByQuery: true, matched: pickedByQuery.caption || pickedByQuery.tag } : {}), ...(otherPacks.length ? { sameNameAlsoIn: otherPacks } : {}), messageId, markRead: await autoMarkReadAfterSend(key, token, markRead) }) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `发送失败：${error.message}` }], isError: true };
       }
@@ -2250,7 +2291,7 @@ if (cfg.social?.meme?.enabled !== false) {
 
 registerTool(
   'qq_send_voice',
-  'Send a spoken (voice) message to a QQ session: the text is synthesized into real speech with the configured voice and sent as a QQ voice bubble. Use it ONLY when a voice is actually wanted (the owner or the conversation asks you to speak / sing / say it out loud, or the session is in a voice mood) - normal replies stay text, and voice is not a substitute for answering. text = what to say (short, one breath; over the configured limit it is rejected). voice = LEAVE IT OUT unless someone explicitly asks for a specific voice: omitting it uses the owner\'s configured default voice (the wake body\'s [Voice] line shows it as default voice=<name>). Never substitute a built-in voice on your own initiative - 冰糖/茉莉/苏打/白桦/Mia/Chloe/Milo/Dean are only for when that exact voice is asked for. If you do pass one: a built-in id or a saved custom voice id/name. style = optional one-sentence delivery direction (e.g. 轻轻的，带一点笑意). mode = tts (default, built-in voice) | design (with description = a voice description, synthesizes that voice) | clone (voice = a saved clone voice). replyToMessageId optionally quotes a message - but the bridge DROPS it for voice (QQ renders a reply+voice message as an empty bubble with just the quote box), so when you actually need to quote someone, say it with qq_reply/qq_send_message as text instead.',
+  'Send a spoken (voice) message to a QQ session: the text is synthesized into real speech with the configured voice and sent as a QQ voice bubble. Use it ONLY when a voice is actually wanted (the owner or the conversation asks you to speak / sing / say it out loud, or the session is in a voice mood) - normal replies stay text, and voice is not a substitute for answering. text = what to say (short, one breath; over the configured limit it is rejected). voice = LEAVE IT OUT unless someone explicitly asks for a specific voice: omitting it uses the owner\'s configured default voice (the wake body\'s [Voice] line shows it as default voice=<name>). Never substitute a built-in voice on your own initiative - 冰糖/茉莉/苏打/白桦/Mia/Chloe/Milo/Dean are only for when that exact voice is asked for. If you do pass one: a built-in id or a saved custom voice id/name. style = optional one-sentence delivery direction (e.g. 轻轻的，带一点笑意). mode = tts (default, built-in voice) | design (with description = a voice description, synthesizes that voice) | clone (voice = a saved clone voice). replyToMessageId optionally quotes a message - but the bridge DROPS it for voice (QQ renders a reply+voice message as an empty bubble with just the quote box), so when you actually need to quote someone, say it with qq_reply/qq_send_message as text instead. Sending also advances the session read watermark by default (markRead) - no separate mark-read call needed.',
   {
     key: z.string().describe('Session key: group:ID or private:QQ'),
     token: z.string().describe('Session token (from the wake prompt)'),
@@ -2259,9 +2300,10 @@ registerTool(
     style: z.string().optional().describe('Optional delivery direction, one sentence, e.g. 轻轻的，带一点笑意'),
     mode: z.enum(['tts', 'design', 'clone']).optional().describe('tts = built-in voice (default); design = voice described by text; clone = saved cloned voice'),
     description: z.string().optional().describe('Only for mode=design: the voice description'),
-    replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Optional: message id to quote/reply to')
+    replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Optional: message id to quote/reply to'),
+    markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC)
   },
-  async ({ key, token, text, voice, style, mode, description, replyToMessageId }) => {
+  async ({ key, token, text, voice, style, mode, description, replyToMessageId, markRead }) => {
     try {
       const data = await agentApi('/api/voice/send', {
         method: 'POST',
@@ -2269,7 +2311,8 @@ registerTool(
         headers: { 'x-agent-token': token },
         timeoutMs: 180000
       });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      const mrVoice = await autoMarkReadAfterSend(key, token, markRead);
+      return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrVoice }, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `发送语音失败：${error?.message ?? error}（语音发不出去时改用文字回复，不要反复重试）` }], isError: true };
     }
@@ -2911,16 +2954,17 @@ if (cfg.social?.tools?.faceList !== false) {
 if (cfg.social?.tools?.sendQqFace !== false) {
   registerTool(
     'qq_send_qq_face',
-    'Send one QQ built-in face, animated big faces included. Prefer this over keyboard emoji typed in text. Give faceId or name (e.g. 可爱, 捂脸; full table via qq_face_list). One message is one face, no text in the same bubble.',
+    'Send one QQ built-in face, animated big faces included. Prefer this over keyboard emoji typed in text. Give faceId or name (e.g. 可爱, 捂脸; full table via qq_face_list). One message is one face, no text in the same bubble. Sending also advances the session read watermark by default (markRead) - no separate mark-read call needed.',
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token'),
       faceId: z.union([z.number(), z.string()]).optional().describe('QQ face id (e.g. 21=可爱, 178=捂脸); use either id or name'),
       name: z.string().optional().describe('QQ face name (e.g. 可爱, 捂脸); use either name or faceId'),
       replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote (nonzero int, may be negative); must be the message you are responding to'),
-      atUserId: z.union([z.number(), z.string()]).optional().describe('QQ number of group member to @ (optional; group chats)')
+      atUserId: z.union([z.number(), z.string()]).optional().describe('QQ number of group member to @ (optional; group chats)'),
+      markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC)
     },
-    async ({ key, token, faceId, name, replyToMessageId, atUserId }) => {
+    async ({ key, token, faceId, name, replyToMessageId, atUserId, markRead }) => {
       try {
         const body = { key, faceId: faceId != null ? String(faceId) : undefined, name: name || undefined };
         if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') body.replyToMessageId = replyToMessageId;
@@ -2931,7 +2975,8 @@ if (cfg.social?.tools?.sendQqFace !== false) {
           headers: { 'x-agent-token': token },
           timeoutMs: 30000
         });
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        const mrFace = await autoMarkReadAfterSend(key, token, markRead);
+        return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrFace }, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `发送 QQ 表情失败：${error?.message ?? error}` }], isError: true };
       }
@@ -3307,7 +3352,7 @@ function stageImageBytes(buf, cfg, tag) {
 
   registerTool(
     'qq_send_image',
-    'Find an image online and SEND it to a QQ session as a real picture. Four sources, in precedence order: file (absolute path ON THE BRIDGE HOST of a picture that already exists - use this to FORWARD a picture you were given, e.g. the DSH attachment path of an image the other person just sent you, or a downloaded file), messageId (FORWARD the picture out of a message you can see in the chat log - the right choice when the picture arrived through QQ and you only have its message id: the bridge fetches that image back and re-sends it), imageUrl (a URL you already got from qq_image_search), query (the bridge searches the web and sends the best hit - the normal case: someone asks 来张XX的图). index picks which search hit to send (0 = first, default); imageIndex picks which picture of a message. The bytes are read/verified as a real picture before sending; nothing is written outside the NapCat temp dir. Cross-session: set crossSession true when you deliberately post into another session than the one you are answering (private chat -> group). Prefer ONE image per request - do not spam several pictures in a row unless asked.',
+    'Find an image online and SEND it to a QQ session as a real picture. Four sources, in precedence order: file (absolute path ON THE BRIDGE HOST of a picture that already exists - use this to FORWARD a picture you were given, e.g. the DSH attachment path of an image the other person just sent you, or a downloaded file), messageId (FORWARD the picture out of a message you can see in the chat log - the right choice when the picture arrived through QQ and you only have its message id: the bridge fetches that image back and re-sends it), imageUrl (a URL you already got from qq_image_search), query (the bridge searches the web and sends the best hit - the normal case: someone asks 来张XX的图). index picks which search hit to send (0 = first, default); imageIndex picks which picture of a message. The bytes are read/verified as a real picture before sending; nothing is written outside the NapCat temp dir. Cross-session: set crossSession true when you deliberately post into another session than the one you are answering (private chat -> group). Prefer ONE image per request - do not spam several pictures in a row unless asked. Sending also advances the session read watermark by default (markRead) - no separate mark-read call needed.',
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token'),
@@ -3318,9 +3363,10 @@ function stageImageBytes(buf, cfg, tag) {
       imageUrl: z.string().optional().describe('Direct image URL (from qq_image_search). Takes precedence over query.'),
       index: z.number().optional().describe('Which search hit to send when using query, 0-based, default 0'),
       replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Optional: message id to quote/reply to'),
+      markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
       crossSession: z.boolean().optional().describe('ONLY when deliberately sending a picture into a DIFFERENT session than the one you are answering (e.g. the owner asks you in private to post it in a group): set true to confirm. key MUST be that other session\'s own key - a mismatched key is refused instead of silently sent elsewhere.'),
     },
-    async ({ key, token, file, messageId, imageIndex, query, imageUrl, index, replyToMessageId, crossSession }) => {
+    async ({ key, token, file, messageId, imageIndex, query, imageUrl, index, replyToMessageId, crossSession, markRead }) => {
       try {
         /* 2026-09-22 修「不能转发图片」：qimage 这条工具原来只有 query / imageUrl 两条路 ——
          * 模型手上有"别人发来的那张图"（DSH 把它存成附件对象 /root/.dsh/attachments/v1/objects/…）时
@@ -3377,6 +3423,7 @@ function stageImageBytes(buf, cfg, tag) {
                 format: extF,
                 sent: dataF?.sent ?? null,
                 quoted: dataF?.quoted ?? null,
+                markRead: await autoMarkReadAfterSend(key, token, markRead),
                 note: '本地图片已按字节转发（先完整性校验，再落到 NapCat 挂载目录，容器里读得到）',
               }, null, 2),
             }],
@@ -3454,6 +3501,7 @@ function stageImageBytes(buf, cfg, tag) {
                 format: extM,
                 sent: sentM?.sent ?? null,
                 quoted: sentM?.quoted ?? null,
+                markRead: await autoMarkReadAfterSend(key, token, markRead),
                 note: viaQuote
                   ? `这张图在被引用的那条消息（${quoteMessageId}）里，已按引用取回并重发（先完整性校验，再落到 NapCat 挂载目录）`
                   : '按消息 id 把那张图取回来重发了（先完整性校验，再落到 NapCat 挂载目录）',
@@ -3504,6 +3552,7 @@ function stageImageBytes(buf, cfg, tag) {
               format: ext,
               sent: data?.sent ?? null,
               quoted: data?.quoted ?? null,
+              markRead: await autoMarkReadAfterSend(key, token, markRead),
             }, null, 2),
           }],
         };
@@ -3530,7 +3579,8 @@ function stageImageBytes(buf, cfg, tag) {
 if (cfg.social?.tools?.pixiv !== false) {
   registerTool(
     'qq_pixiv_search',
-    'Search Pixiv illustrations by keyword (read-only, sends nothing). Returns {id, title, author, tags, pageUrl, thumbUrl, pages, size} per work - Pixiv is where most anime/game fan art lives, so use it when someone asks for an illustration / original picture / fan art of a character (e.g. 初音ミク, 原神 荧, 蔚蓝档案 白子) or when web image search gave you low-quality or unrelated results. THEN call qq_send_pixiv with the SAME query (index picks which hit, 0 = first) - never invent Pixiv URLs.'
+    'Search Pixiv illustrations by keyword (read-only, sends nothing). Returns {id, title, author, tags, pageUrl, thumbUrl, pages, size} per work - Pixiv is where most anime/game fan art lives, so use it when someone asks for an illustration / original picture / fan art of a character (e.g. 初音ミク, 原神 荧, 蔚蓝档案 白子) or when web image search gave you low-quality or unrelated results.'
+      + '\n\n[OPTIONAL - SEARCH AND SEND ARE ONE CALL] This tool is the "let me see what is there first" path, NOT a mandatory step: qq_send_pixiv takes the same `query` and does the search AND the send in ONE call, so the normal way to get a picture into the chat is a single qq_send_pixiv(query=..., [tags/author/filters], index=...). Use qq_pixiv_search on its own only when you actually want to look at the candidates before choosing, or when the send came back empty and you need the filtering report (how many were dropped, how many pages were scanned). Either way: never invent Pixiv URLs.'
       + '\n\n[SOURCES] The bridge queries the **official Pixiv API first** (app-api, then pixiv.net ajax) and only falls back to a third-party mirror when both fail; every result says which source served it (result.source / scan.source, plus sourcesTried when a source failed).'
       + '\n\n[LOCAL FILTERING AND PAGING] tags / author / orientation / minWidth / minHeight / multiPage / excludeAi / illustType / sort / r18 / scanPages are all filtered **locally** on the fetched rows (no source accepts tag/sort parameters). One page is 60 works (30 via app-api), at most scanPages pages are scanned (default 3, cap 10); the scan object and scanNotice in the result state honestly which pages were scanned, the site-wide total (0/unknown when the source does not report one) and the last page - **never present that as "I filtered the whole site"**. Sorting only supports upload time (date_desc newest first / date_asc / random), **not popularity or bookmark count** (no source returns bookmark counts; passing it falls back to date_desc and says so in scan.warnings). R-18/R-18G is excluded by default; only an explicit r18=only/include lets it through.',
     {
@@ -3566,6 +3616,7 @@ if (cfg.social?.tools?.pixiv !== false) {
   registerTool(
     'qq_send_pixiv',
     'Find a Pixiv illustration and SEND it to a QQ session as a real picture. Give illustId (a Pixiv work id / pixiv.net link you already know), authorId (an artist user id or an artist name - the bridge looks the id up itself), or query (the bridge searches Pixiv and sends the best hit). index picks which hit / which work of that artist (0 = first). size defaults to **original** on all three paths (the untouched original file); pass size=master for the 1200px jpg. Prefer ONE image per request. The bridge skips R-18/R-18G works.'
+      + '\n\n[SEARCH AND SEND ARE THE SAME CALL] `query` is a complete path on its own - this one call searches Pixiv and sends the result, so there is nothing to look up first and qq_pixiv_search is NOT a required step before it (use it only when you want to eyeball the candidates). All the local filters below work on this path too, and `index` picks from the **filtered** list, so "find a portrait 原神 荧 wallpaper and send it" is a single call: query=原神 荧, orientation=portrait.'
       + '\n\n[WORKS BY ONE SPECIFIC ARTIST] A keyword search matches titles/tags that contain the word (searching an artist name usually returns works other people tagged with that name). ① You have a work id -> illustId; ② you have an artist id (pixiv.net/users/<digits>) -> authorId, newest first, index picks which work; ③ you only have an artist **name** -> pass it as authorId anyway: the bridge resolves ids by name itself (official user search; ambiguous names come back as candidates for you to choose from) - **never ask the user for an artist id**; ④ neither -> send any one of their works first, the returned authorId is the artist id. Never pass an artist id as illustId.'
       + '\n\n[LOSSLESS ORIGINAL] size=original sends the Pixiv original file itself (per-page urls from the official API when available, downloaded from pximg, stored byte-for-byte, no scaling, no re-encode, no second compression; the returned sha256/bytes are exactly the bytes that were sent). master is the 1200px jpg. An original over 15MB is refused (the result says so) - use size=master. Every candidate is checked twice before sending: its tier (a 720px/master/thumbnail URL is never sent as if it were the original) and its bytes (a truncated or non-decodable file is discarded and another source is tried). If the original really cannot be obtained, the result says so honestly via tierServed + tierFallback instead of claiming lossless.'
       + '\n\n[SOURCES] The bridge queries the **official Pixiv API first** (app-api, then pixiv.net ajax) and only falls back to a third-party mirror when both fail; the result reports pixivSource (which API gave the metadata) and fetchedVia (pximg-direct or mirror-proxy).'
@@ -3590,9 +3641,10 @@ if (cfg.social?.tools?.pixiv !== false) {
       illustType: z.enum(['illust', 'manga']).optional().describe('Only illustrations (illust, illustType=0) or manga (manga, illustType=1); illustType=2 animations (ugoira) are excluded by both values'),
       sort: z.enum(['date_desc', 'date_asc', 'random']).optional().describe('Order: date_desc = newest first (default) / date_asc = oldest first / random. **Popularity / bookmark sorting is not supported** (no source returns a bookmark count); it falls back to date_desc and writes the reason into a warning'),
       scanPages: z.number().optional().describe('How many pages to walk forward looking for matches: default 3, cap 10. Filtering is local, so too few hits means walking further'),
+      markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
       crossSession: z.boolean().optional().describe('ONLY when deliberately sending into a different session than the one you are answering; the key must be that session\'s own (a key that is not this session\'s is refused)'),
     },
-    async ({ key, token, query, illustId, authorId, index, size, page, replyToMessageId, tags, author, orientation, minWidth, minHeight, multiPage, excludeAi, illustType, sort, scanPages, crossSession }) => {
+    async ({ key, token, query, illustId, authorId, index, size, page, replyToMessageId, tags, author, orientation, minWidth, minHeight, multiPage, excludeAi, illustType, sort, scanPages, crossSession, markRead }) => {
       try {
         const wantId = parsePixivId(illustId);
         const wantAuthor = String(authorId ?? '').trim();
@@ -3867,6 +3919,7 @@ if (cfg.social?.tools?.pixiv !== false) {
               originalsNote: originalsNote || undefined,
               sent: data?.sent ?? null,
               quoted: data?.quoted ?? null,
+              markRead: await autoMarkReadAfterSend(key, token, markRead),
             }, null, 2),
           }],
         };

@@ -741,11 +741,11 @@ $$\text{cost} = \frac{\text{命中} \times p_{\text{Hit}} + \text{未命中} \ti
 | 工具 | 注册行 | 数据源与约束 |
 | --- | --- | --- |
 | `qq_get_prompt` | `:1025` | `state/social-state.json` 与角色库；返回值受 `dshCompaction.toolResultMaxChars` 约束，现值 `8192`（`qq-bridge/src/core/config.js:65`） |
-| `qq_get_unread_messages` | `:1039` | `st.unread`；唤醒正文未携带未读时的补充读取 |
+| `qq_get_unread_messages` | `:1039` | `st.unread`；唤醒正文未携带未读时的补充读取。2026-09-29 起带 `markRead`（默认 true）：同一调用里 `GET /api/social/unread?markRead=1`，只把**本次真正返回的那批 seq** 从 `st.unread` 摘除，并在未被 `limit` 截断时用既有的 `markMessagesRead(key, maxSeq)` 推进 SQLite 水位；截断时不动水位（水位只能表达"≤X 全已读"，推进它等于替模型签收没看过的旧消息） |
 | `qq_get_recent_messages` | `:1053` | `st.recentMessages`；`limit` 默认 20、上限 100（`qq-bridge/src/core/console-server.js:1693`），`offset` 仅在窗口内移动（`:1703-1705`） |
 | `qq_social_state` | `:1073` | `wakeConfig` 与 `state/social-state.json` |
 | `qq_global_overview` | `:1087` | 汇总全部会话活动与唤醒模式 |
-| `qq_mark_read` | `:1249` | `POST /api/social/mark-read`；保留 `seq > snapMax` 的未读，无展示水位时按 `_steerDeferredSeqs` 保留推迟交付项（`qq-bridge/src/core/console-server.js:1759-1779`），收尾置 `wakeConfig.infinite`（`:1785-1790`） |
+| `qq_mark_read` | `:1249` | `POST /api/social/mark-read`；保留 `seq > snapMax` 的未读，无展示水位时按 `_steerDeferredSeqs` 保留推迟交付项（`qq-bridge/src/core/console-server.js:1759-1779`），收尾置 `wakeConfig.infinite`（`:1785-1790`）。同一端点另有 `{onlySeen:true}` 分支（2026-09-29，给发送类工具用）：只按 `turnSeenUnread` 快照推进水位（`maxSeen = max(turnSeenUnread)`，`st.unread` 摘掉 `seq <= maxSeen`，再 `markMessagesRead(key, maxSeen)`），**没有快照就什么都不做**，且不改 `wakeConfig`、不取消回复检查（发一条消息 ≠ 收尾）。机制与 mux 无正文收尾那一段同源 |
 | `qq_get_my_recent_messages` | `:1489` | `direction='out'`；撤回操作的消息 id 来源之一 |
 | `qq_get_message_detail` | `:1507` | 窗口与 `state/chat.db`；撤回、拍一拍、收藏表情均需先取得该 id |
 | `qq_get_file_content` | `:1525` | 本地与 NapCat 文件；读取字节数由 `clampReadBytes` 限制【据仓库记载】 |
@@ -2209,8 +2209,8 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
-| `qq_send_message` | — | `key`，`token`，`messages`，`message`，`images`，`replyToMessageId`，`atUserId`，`gapMode`，`gapMs`，`gaps`，`crossSession` | `extreme` | 向目标会话发送单条或多条文本消息，可附带图片与引用。 |
-| `qq_reply` | `replyToMessageId`，`message` | `key`，`groupId`，`token`，`crossSession` | `extreme` | 引用指定历史消息进行回复，用于针对具体消息作答。 |
+| `qq_send_message` | — | `key`，`token`，`messages`，`message`，`images`，`replyToMessageId`，`atUserId`，`gapMode`，`gapMs`，`gaps`，`markRead`，`crossSession` | `extreme` | 向目标会话发送单条或多条文本消息，可附带图片与引用；`markRead` 默认 true，发送成功后推进本会话已读水位。 |
+| `qq_reply` | `replyToMessageId`，`message` | `key`，`groupId`，`token`，`markRead`，`crossSession` | `extreme` | 引用指定历史消息进行回复，用于针对具体消息作答；`markRead` 默认 true，同上。 |
 | `qq_send_group_message` | `groupId`，`message` | `replyToMessageId`，`token` | `low` | 向指定群发送一条纯文本消息，可按消息编号附加引用。 |
 | `qq_send_private_message` | `userId`，`message` | `replyToMessageId`，`token` | `low` | 向指定好友发送私聊文本消息，可按消息编号附加引用。 |
 | `qq_proactive_send` | `targetKey`，`message` | `key`，`token` | `medium` | 在无人发言时主动向目标会话发送消息，或跨会话转达内容。 |
@@ -2221,7 +2221,7 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
-| `qq_get_unread_messages` | — | `key`，`token`，`limit` | `extreme` | 读取指定会话的未读消息，不改变其未读标记。 |
+| `qq_get_unread_messages` | — | `key`，`token`，`limit`，`markRead` | `extreme` | 读取指定会话的未读消息；`markRead` 默认 true，**读到的这批在同一次调用里就标记为已读**（只标记真正返回给模型的那批；被 `limit` 截断时不推进水位并在 `markRead.note` 里说明）。传 `false` 回到纯只读。 |
 | `qq_get_recent_messages` | — | `key`，`token`，`limit`，`offset` | `high` | 读取指定会话的内存近期消息窗口，含撤回与媒体标记。 |
 | `qq_get_my_recent_messages` | — | `key`，`token`，`limit` | `low` | 读取机器人自身近期发言，用于避免重复与维持表达一致。 |
 | `qq_get_message_detail` | `messageId` | `key`，`token` | `high` | 按消息标识读取单条消息的完整内容、发送者与引用关系。 |
@@ -2235,7 +2235,7 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
 | `qq_set_wake_config` | `config` | `key`，`token` | `high` | 配置当前会话的唤醒模式与触发条件，含提及、关键词与指定发言人。 |
-| `qq_mark_read` | — | `key`，`token` | `extreme` | 将会话内未读消息标记为已读，用于结束本轮而不回复。 |
+| `qq_mark_read` | — | `key`，`token` | `extreme` | 将会话内未读消息标记为已读，并完成收尾（置 `wakeConfig.infinite` 等）。2026-09-29 起「已读」已融进未读读取与各发送工具（`markRead` 默认 true），本工具保留作**显式收尾**用，不再是每轮必调的动作。 |
 | `qq_wait_for_messages` | — | `key`，`token`，`timeoutMs`，`minNewMessages`，`quietMs` | `high` | 在当前回合内等待新消息到达，可设置超时与静默窗口。 |
 
 ### A.G6 记忆与群内用语（8 条）
@@ -2281,24 +2281,24 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
 | `qq_get_message_images` | `messageId` | `key`，`token` | `high` | 读取指定消息内的图片与表情，作为视觉模型可用的图像内容。 |
-| `qq_send_image` | — | `key`，`token`，`file`，`messageId`，`imageIndex`，`query`，`imageUrl`，`index`，`replyToMessageId`，`crossSession` | `low` | 向会话发送真实图片，来源可为本地文件、历史消息或网络检索。 |
+| `qq_send_image` | — | `key`，`token`，`file`，`messageId`，`imageIndex`，`query`，`imageUrl`，`index`，`replyToMessageId`，`markRead`，`crossSession` | `low` | 向会话发送真实图片，来源可为本地文件、历史消息或网络检索；`markRead` 默认 true。 |
 | `qq_get_self_image` | — | `key`，`token` | `off` | 读取机器人账号自身的默认头像图像，供视觉上下文使用。 |
 | `qq_list_stickers` | — | `key`，`token`，`query`，`count`，`refresh` | `high` | 列出账号已收藏的自定义表情，含标识、官方描述、备注与使用次数。 |
 | `qq_get_sticker_image` | `stickerId` | `key`，`token` | `off` | 读取已收藏表情的图像内容，供视觉模型查看。 |
-| `qq_send_sticker` | `stickerId` | `key`，`token`，`replyToMessageId`，`atUserId` | `high` | 在会话中发送一枚已收藏的自定义表情。 |
+| `qq_send_sticker` | `stickerId` | `key`，`token`，`replyToMessageId`，`atUserId`，`markRead` | `high` | 在会话中发送一枚已收藏的自定义表情；`markRead` 默认 true。 |
 | `qq_collect_sticker` | `messageId` | `key`，`token`，`remark` | `high` | 将他人发送的表情收纳进账号收藏，可附加简短备注。 |
 | `qq_sticker_note` | `stickerId` | `key`，`token`，`note`，`tags`，`usage` | `off` | 记录收藏表情的本地备注、标签与用途，不改变官方描述。 |
 | `qq_set_sticker_remark` | `stickerId`，`remark` | `key`，`token` | `off` | 设置收藏表情的官方备注，需管理员开启对应开关。 |
 | `qq_meme_search` | `query` | `tag`，`pack`，`limit` | `high` | 在随附表情包图库中按情绪或内容描述检索可用素材。 |
-| `qq_send_meme` | — | `key`，`token`，`file`，`fileName`，`query`，`tag`，`pack`，`replyToMessageId`，`crossSession` | `high` | 从表情包图库中发送一枚表情包，可按文件名或描述选取。 |
+| `qq_send_meme` | — | `key`，`token`，`file`，`fileName`，`query`，`tag`，`pack`，`replyToMessageId`，`markRead`，`crossSession` | `high` | 从表情包图库中发送一枚表情包，可按文件名或描述选取；`markRead` 默认 true。 |
 | `qq_face_list` | — | `key`，`token` | `high` | 查询 QQ 内置表情的名称与编号对照表，含动态大表情。 |
-| `qq_send_qq_face` | — | `key`，`token`，`faceId`，`name`，`replyToMessageId`，`atUserId` | `medium` | 发送一枚 QQ 内置表情，可指定编号或名称。 |
+| `qq_send_qq_face` | — | `key`，`token`，`faceId`，`name`，`replyToMessageId`，`atUserId`，`markRead` | `medium` | 发送一枚 QQ 内置表情，可指定编号或名称；`markRead` 默认 true。 |
 
 ### A.G10 语音、文件与文档（4 条）
 
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
 | --- | --- | --- | --- | --- |
-| `qq_send_voice` | `text` | `key`，`token`，`voice`，`style`，`mode`，`description`，`replyToMessageId` | `high` | 将文本合成为语音并以语音消息形式发送到会话。 |
+| `qq_send_voice` | `text` | `key`，`token`，`voice`，`style`，`mode`，`description`，`replyToMessageId`，`markRead` | `high` | 将文本合成为语音并以语音消息形式发送到会话；`markRead` 默认 true。 |
 | `qq_transcribe_voice` | `messageId` | `key`，`token` | `medium` | 将他人发送的语音消息转写为文本。 |
 | `qq_get_file_content` | `messageId` | `key`，`token`，`fileIndex` | `high` | 读取指定消息所附文件的内容，支持文本类与 Word 文档格式。 |
 | `qq_send_docx` | `title`，`content` | `key`，`token`，`replyToMessageId` | `low` | 将长文本生成为 Word 文档并作为文件发送，避免正文过长。 |
@@ -2318,7 +2318,7 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | --- | --- | --- | --- | --- |
 | `qq_image_search` | `query` | `key`，`token`，`limit`，`source` | `low` | 按关键词在网络上检索图片，返回候选条目与来源。 |
 | `qq_pixiv_search` | `query` | `key`，`token`，`page`，`limit`，`r18`，`tags`，`author`，`orientation`，`minWidth`，`minHeight`，`multiPage`，`excludeAi`，`illustType`，`sort`，`scanPages` | `low` | 按关键词检索插画作品，返回作品编号、作者、标签与尺寸。 |
-| `qq_send_pixiv` | — | `key`，`token`，`query`，`illustId`，`authorId`，`index`，`size`，`page`，`replyToMessageId`，`tags`，`author`，`orientation`，`minWidth`，`minHeight`，`multiPage`，`excludeAi`，`illustType`，`sort`，`scanPages`，`crossSession` | `low` | 获取并发送一张插画作品，可按作品编号、作者或关键词定位。 |
+| `qq_send_pixiv` | — | `key`，`token`，`query`，`illustId`，`authorId`，`index`，`size`，`page`，`replyToMessageId`，`tags`，`author`，`orientation`，`minWidth`，`minHeight`，`multiPage`，`excludeAi`，`illustType`，`sort`，`scanPages`，`markRead`，`crossSession` | `low` | 获取并发送一张插画作品，可按作品编号、作者或关键词定位。2026-09-29 起 `query` 路径是**搜+发一次调用**的默认用法（`index` 在**筛选后**的列表上选，本地筛选参数同样生效），`qq_pixiv_search` 降级为"想先看看有什么"的可选步骤；`markRead` 默认 true。 |
 | `qq_music_search` | `query` | `key`，`token`，`platform`，`limit` | `low` | 检索歌曲，返回平台、曲名、歌手、专辑与封面链接。 |
 
 ### A.G13 QQ 空间（5 条）
