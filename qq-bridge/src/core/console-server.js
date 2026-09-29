@@ -59,6 +59,7 @@ import { isSafeLocalMediaPath, isProbablySafeImageFileRef } from '../lib/media-g
 import { KNOWN_AGENT_TOKENS, redactSensitiveText, SENSITIVE_ARG_KEYS, redactSensitive, sanitizeToolArgs, escapeCqText, unquoteJsonString, splitSerializedBubbles, looksLikeSerializedBubbleArray } from '../lib/text-safe.js';
 import { normalizeOwnerQQ, normalizeIdList, allowed } from '../lib/config.js';
 import { readRoleState, writeRoleState, sanitizeRoleName, listRoles } from '../lib/role-access.js';
+import { isSessionSilent, setSessionSilent, listSilentSessions } from '../lib/session-silent.js';
 import { sleep, withTimeout } from '../lib/async.js';
 import { convKey, canonicalKey } from '../lib/keys.js';
 import { EXPLICIT_END_RE, hasExplicitEnd, isSleepingConfig, normalizeSpeakerIds } from '../lib/sleep-guard.js';
@@ -835,6 +836,10 @@ export function startConsoleServer() {
         sendJson({
           role: rs.role ?? null,
           roleMode: rs.mode ?? 'active',
+          /* 2026-09-29：roleMode 是**全局**静默（所有会话，主人私聊除外；管理端开关 / 旧 /silent 遗留值）；
+           * 按会话静默单独列出，别把两者混成一个字段（QQ 里的 /silent 现在只写按会话这张表）。 */
+          silentSessions: listSilentSessions(),
+          silentSessionCount: listSilentSessions().length,
           dshReady,
           ownerQQ: cfgRef.ownerQQ ?? null,
           allowGroups: cfgRef.allow?.groups ?? [],
@@ -842,6 +847,34 @@ export function startConsoleServer() {
           socialPaused: social.paused,
           activity: readActivityTail(100)
         });
+        return;
+      }
+      /* ── 按会话静默：查询 / 开关（2026-09-29）────────────────────────────────
+       * GET  /api/silent-sessions                  → { sessions:[{key,since,by}] }
+       * POST /api/silent-sessions { key, silent }  → 开关某个会话（silent 缺省 true）
+       * 与 QQ 里 /silent 写的是同一份 state/silent-sessions.json，改完即时生效、持久化。 */
+      if (req.method === 'GET' && url.pathname === '/api/silent-sessions') {
+        sendJson({ ok: true, sessions: listSilentSessions() });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/silent-sessions') {
+        const body = await readBody();
+        const targetKey = String(body.key ?? '').trim();
+        if (!targetKey) { sendJson({ ok: false, error: '缺少 key（形如 group:123 / private:456）' }, 400); return; }
+        const on = body.silent === undefined ? true : !!body.silent;
+        const r = setSessionSilent(targetKey, on, { by: 'console' });
+        log(`控制台：按会话静默 ${targetKey} → ${on ? '开' : '关'}（当前共 ${r.sessions.length} 个会话被静默）`);
+        sendJson({ ok: true, key: targetKey, silent: on, sessions: listSilentSessions() });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/role-mode') {
+        const body = await readBody();
+        const rs = readRoleState();
+        const mode = body.mode === 'silent' ? 'silent' : 'active';
+        writeRoleState(rs.role, mode);
+        // 这是**全局**静默开关（所有会话，主人私聊除外）；QQ 里的 /silent 不再走这条路。
+        log(`控制台：全局静默模式 ${mode === 'silent' ? '开启' : '关闭'}（所有会话）`);
+        sendJson({ ok: true, roleMode: mode });
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/role') {
@@ -861,15 +894,6 @@ export function startConsoleServer() {
           log('控制台：角色已清除');
           sendJson({ ok: true, role: null });
         }
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/api/role-mode') {
-        const body = await readBody();
-        const rs = readRoleState();
-        const mode = body.mode === 'silent' ? 'silent' : 'active';
-        writeRoleState(rs.role, mode);
-        log(`控制台：静默模式 ${mode === 'silent' ? '开启' : '关闭'}`);
-        sendJson({ ok: true, roleMode: mode });
         return;
       }
       // ── 人格管理 ──────────────────────────────────────────────────────────

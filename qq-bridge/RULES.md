@@ -22,9 +22,9 @@
 
 | 主体 | 通道 | 权限 |
 | --- | --- | --- |
-| **管理员（ownerQQ，控制台或 DSH 设置页可配置）** | QQ 群/私聊 | 正常聊天 + **管理命令由桥接硬执行**（不经过模型）：`/role <角色名>` 切人格、`/role off` 清除、`/silent` 静默、`/active` 恢复、`/reset`、`/status`；消息自动带【管理员】标记 |
-| **群友** | QQ 群 | **仅正常聊天**。控制词、`/` 管理命令被桥接拦截；静默模式下消息不投递给 agent |
-| **管理员** | **DSH WebUI** | **最高权限**：控制模式（设置页 qq-mode 卡片）、控制角色/静默（写 `state/current-role.json`）、完整 DSH 工具（含本地操作）、查看 QQ 活动日志（`state/qq-activity.log`）、直接打开「QQ 聊天」工作区会话对话 |
+| **管理员（ownerQQ，控制台或 DSH 设置页可配置）** | QQ 群/私聊 | 正常聊天 + **管理命令由桥接硬执行**（不经过模型）：`/role <角色名>` 切人格、`/role off` 清除、`/silent`（**只静默发出指令的那个会话**）、`/active` 恢复本会话、`/reset`、`/status`；消息自动带【管理员】标记 |
+| **群友** | QQ 群 | **仅正常聊天**。控制词、`/` 管理命令被桥接拦截；被静默的会话里消息不投递给 agent |
+| **管理员** | **DSH WebUI** | **最高权限**：控制模式（设置页 qq-mode 卡片）、控制角色（写 `state/current-role.json`）、**全局静默**（`current-role.json` 的 `mode:"silent"`，或 `POST /api/role-mode`；影响所有会话、主人私聊除外——这是唯一的全局静默开关）、按会话静默（`state/silent-sessions.json`，或 `GET/POST /api/silent-sessions`）、完整 DSH 工具（含本地操作）、查看 QQ 活动日志（`state/qq-activity.log`）、直接打开「QQ 聊天」工作区会话对话 |
 | **QQ 会话 agent（chat 模式）** | — | 最低权限面（见下） |
 
 ## QQ 会话 agent 的硬边界
@@ -40,7 +40,9 @@
 5. **发送禁令（模型层）**：persona 明确规定只有「管理端明确指示」或「【管理员】标记的明确要求」才可使用发送工具；禁止写"我已回复/消息已发送（message_id）"类汇报。
 6. **回复审计（桥接层硬拦截）**：agent 回复文本若包含本机路径（`C:\`、`/home/` 等）或凭据特征（token/password/secret/api key 等）→ **整条拦截不发送**，并告知"被安全策略拦截"。
 7. **人格由桥接注入**：角色设定来自 `state/current-role.json` + `roles/<角色>.md`，桥接注入到消息；群友口头要求改角色无效（桥接直接拦截），agent 也无文件工具自行更改。
-8. **静默模式**：`current-role.json` 的 `mode: "silent"` 时，群友消息不再投递给 agent（仅记录日志），只有管理员消息可对话。
+8. **静默（两种，互不相同）**：
+   - **按会话静默**（`state/silent-sessions.json`，`/silent` 写的就是它）：只静默**发出指令的那个会话**（如 `group:123456`），该会话里群友消息不再投递给 agent（仅记录日志），管理员消息照常；别的群与私聊完全不受影响。`/active`（或 `/silent off`）只解除本会话。
+   - **全局静默**（`state/current-role.json` 的 `mode:"silent"`，管理端 `POST /api/role-mode` 写）：所有会话一起静默（主人私聊除外）。**没有任何 QQ 指令能写它**；升级前由旧 `/silent` 留下的值仍被尊重（读取兼容），在任意会话发 `/active` 即可清掉。
 
 ## 黑话 / 网络用语学习与迭代
 
@@ -60,18 +62,22 @@
 ```
 /role 傲娇助手    # 切换角色（roles/傲娇助手.md）
 /role off         # 清除角色
-/silent           # 静默模式（群友消息不回复）
-/active           # 恢复正常
-/status           # 查看会话/白名单/角色/模式状态
+/silent           # 只静默「当前会话」（别的群/私聊不受影响）
+/silent off       # 解除当前会话的静默（等同 /active）
+/active           # 恢复当前会话；若存在全局静默也一并清掉
+/status           # 查看会话/白名单/角色/本会话静默/全局静默/按会话静默清单
 /reset            # 重置当前 QQ 会话上下文
 ```
+> 想**全局**停：管理端 `POST /api/role-mode {mode:"silent"}`（= `current-role.json` 的 `mode:"silent"`），
+> 或群里发 `/deepsleep`（所有群聊静默，私聊照常）。这两个都不是 `/silent`。
 
 **途径 B：DSH WebUI**：
-- 在 GUI 会话里对我说「给 QQ 机器人设置角色：傲娇助手」/「清除角色」/「开启静默模式」，我写 `state/current-role.json`
+- 在 GUI 会话里对我说「给 QQ 机器人设置角色：傲娇助手」/「清除角色」/「开启全局静默」，我写 `state/current-role.json`
 - 或手动编辑 `qq-bridge/state/current-role.json`：
   ```json
-  { "role": "傲娇助手", "mode": "active" }   // active=正常, silent=静默
+  { "role": "傲娇助手", "mode": "active" }   // active=正常, silent=全局静默（所有会话）
   ```
+- 按会话静默单独一份：`qq-bridge/state/silent-sessions.json`（`/silent` 写它），查看/修改走 `GET|POST /api/silent-sessions`
 - 角色文件放 `qq-bridge/roles/<角色名>.md`（格式见仓库根 `README.md` 第 5.15 节）
 
 ### 查看 QQ 活动

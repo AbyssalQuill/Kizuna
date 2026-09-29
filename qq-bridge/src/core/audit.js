@@ -4,6 +4,7 @@ import { log, appendActivity } from '../lib/log.js';
 import { redactSensitiveText, redactSensitive, tokenDisclosureIn } from '../lib/text-safe.js';
 import { SENSITIVE_RE, sensitiveHitKind, sensitiveHitSample } from '../sensitive.js';
 import { readRoleState } from '../lib/role-access.js';
+import { isSessionSilent } from '../lib/session-silent.js';
 import { readJsonSafe, atomicWriteJson } from '../lib/json-fs.js';
 import { TOOL_LOG_FILE, FEEDBACK_FILE, STATE_DIR } from '../lib/paths.js';
 import { sendToQQ } from './qq-send.js';
@@ -16,9 +17,16 @@ export function shouldAuditKey() {
   return true;
 }
 
+/* 出站静默拦截（2026-09-29 修「/silent 误静默所有会话」）：
+ *   ① 按会话静默：只有**被 /silent 点名的那个会话**被拦，别的群/私聊照发（本改动的正题）；
+ *   ② 全局静默：current-role.json 的 mode:"silent"（管理端的角色模式开关 / 升级前的旧值）
+ *      仍然是"所有会话都拦"，主人私聊除外 —— 这是**只读兼容**，不再由 /silent 写入。
+ * 历史缺陷：这里以前只有 ②，key 只用来放行主人私聊，不看是哪个会话，所以一条 /silent 就全局生效。 */
 export function shouldBlockSilentReply(key) {
+  const k = String(key ?? '');
+  if (isSessionSilent(k)) return true;
   const roleState = readRoleState();
-  return roleState.mode === 'silent' && key !== `private:${String(cfgRef.ownerQQ ?? '')}`;
+  return roleState.mode === 'silent' && k !== `private:${String(cfgRef.ownerQQ ?? '')}`;
 }
 
 export async function handleSensitiveIntercept(key, kindLabel, hasKnownToken, sample) {

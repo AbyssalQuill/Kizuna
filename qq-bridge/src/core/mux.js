@@ -58,6 +58,7 @@ import { isSafeLocalMediaPath, isProbablySafeImageFileRef } from '../lib/media-g
 import { KNOWN_AGENT_TOKENS, redactSensitiveText, SENSITIVE_ARG_KEYS, redactSensitive, sanitizeToolArgs, extractToolTargetKey, escapeCqText, unquoteJsonString } from '../lib/text-safe.js';
 import { normalizeOwnerQQ, normalizeIdList, allowed } from '../lib/config.js';
 import { readRoleState, writeRoleState, sanitizeRoleName, listRoles } from '../lib/role-access.js';
+import { isSessionSilent, setSessionSilent, listSilentSessions } from '../lib/session-silent.js';
 // 2026-09-22：人设切换：从角色库合成 → 原子写 persona.md（斜杠命令 /role 与模型侧工具共用这一份实现）
 import { switchPersona, listCharacterPacks } from '../lib/persona-switch.js';
 import { sleep, withTimeout } from '../lib/async.js';
@@ -363,10 +364,13 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     return;
   }
 
-  // 静默模式：群友消息不投递给 agent（只记录）；管理员消息照常
-  if (roleState.mode === 'silent' && !isOwner) {
-    appendActivity(`${key}（静默模式）群友 ${event.user_id}：${textContent.slice(0, 80)}`);
-    log(`静默模式，忽略群友消息 ${key}`);
+  // 静默：群友消息不投递给 agent（只记录）；管理员消息照常。
+  // 2026-09-29 修「/silent 误静默所有会话」：主判据换成**按会话**的静默表（只拦这个 key），
+  // current-role.json 的全局 mode:"silent" 只作只读兼容（管理端开关 / 升级前旧值）。
+  const sessionSilent = isSessionSilent(key);
+  if ((sessionSilent || roleState.mode === 'silent') && !isOwner) {
+    appendActivity(`${key}（静默模式${sessionSilent ? '' : '·全局'}）群友 ${event.user_id}：${textContent.slice(0, 80)}`);
+    log(`静默模式，忽略群友消息 ${key}（${sessionSilent ? '本会话静默' : '全局静默'}）`);
     return;
   }
 
@@ -477,7 +481,8 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     }
     if (plainContent === '/status') {
       const rs = readRoleState();
-      await sendToQQ(key, `会话 ${state.sessions[key] ?? '未创建'}；白名单 ${allowed(kind, id, cfgRef) ? '通过' : '拦截'}；角色 ${rs.role ?? '无'}；模式 ${rs.mode}`);
+      const silentList = listSilentSessions().map((x) => x.key);
+      await sendToQQ(key, `会话 ${state.sessions[key] ?? '未创建'}；白名单 ${allowed(kind, id, cfgRef) ? '通过' : '拦截'}；角色 ${rs.role ?? '无'}；本会话静默 ${isSessionSilent(key) ? '开' : '关'}；全局静默 ${rs.mode === 'silent' ? '开（所有会话，管理端开关）' : '关'}；按会话静默中共 ${silentList.length} 个${silentList.length ? '：' + silentList.join('、') : ''}`);
       return;
     }
     /* ── /token [天数]：今日 token 消耗总量 + 花费（桥侧直接算，不经过模型）───────────
@@ -558,13 +563,30 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       return;
     }
     if (plainContent === '/silent' || plainContent === '/quiet') {
-      writeRoleState(roleState.role, 'silent');
-      await sendToQQ(key, '好，我先安静待一阵：群聊我只悄悄看、不再回应（被 @ 也不回啦）。想让我恢复开麦，发 /active 就行。');
+      /* 2026-09-29 修「/silent 误静默所有会话甚至是私聊」：
+       * 原来写的是 current-role.json 的全局 mode:"silent"，一处为真 → 所有群 + 所有私聊一起闭嘴。
+       * 现在只写**本会话**的静默表（state/silent-sessions.json）；别的群/私聊照常。 */
+      const sr = setSessionSilent(key, true, { by: String(event.user_id ?? '') });
+      log(`[command] ${key} /silent：只静默本会话（当前共 ${sr.sessions.length} 个会话被静默）`);
+      await sendToQQ(key, '好，我只在这个会话里安静待着：这里的消息我悄悄看、不再回应（被 @ 也不回啦）。其他群和私聊不受影响。想让我在这个会话恢复开麦，发 /active 就行。');
+      return;
+    }
+    if (/^\/(?:silent|quiet)\s+(?:off|close|stop)$/i.test(plainContent)) {
+      const sr = setSessionSilent(key, false);
+      log(`[command] ${key} /silent off：本会话恢复（当前共 ${sr.sessions.length} 个会话被静默）`);
+      await sendToQQ(key, '好啦，这个会话恢复开麦：正常回应，有事随时喊我。');
       return;
     }
     if (plainContent === '/active' || plainContent === '/speak') {
-      writeRoleState(roleState.role, 'active');
-      await sendToQQ(key, '好啦，恢复开麦：群聊正常回应，有事随时喊我。');
+      // 撤销本会话静默；顺手清掉历史遗留的全局静默（旧 /silent 或管理端开关留下的），
+      // 否则全局为真时按会话的恢复根本看不出效果。
+      const wasGlobalSilent = roleState.mode === 'silent';
+      setSessionSilent(key, false);
+      if (wasGlobalSilent) writeRoleState(roleState.role, 'active');
+      log(`[command] ${key} /active：本会话恢复${wasGlobalSilent ? '，并关闭历史遗留的全局静默' : ''}`);
+      await sendToQQ(key, wasGlobalSilent
+        ? '好啦，恢复开麦：本会话解除静默，之前那个「全局静默」（旧指令或管理端开关留下的）也一并关掉了，所有会话都恢复正常回应。'
+        : '好啦，恢复开麦：本会话正常回应，有事随时喊我。');
       return;
     }
     if (plainContent === '/sleep') {
