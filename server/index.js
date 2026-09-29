@@ -8292,6 +8292,35 @@ async function applyLocalNapcatTokens(body = {}, dirOverride = null) {
   };
 }
 
+/**
+ * 2026-09-29 反馈修：连着服务器时，桥控制台那份 /api/napcat/tokens 只回掩码（如 `06****28`），
+ * 于是「NapCat 鉴权令牌」卡上三处输入框全是空的、页面上任何地方都读不到 WebUI 令牌明文 ——
+ * 而 NapCat WebUI 的登录页偏偏要手填 token（用户被卡在「请输入token」页 + 两行 Unauthorized）。
+ * 管理器自己手里就有明文（出 ?token= 入口链接、写 NapCat 配置用的都是它），所以这里在把桥响应
+ * 交给界面前，把明文补成 `current`（与本机 OneKey 形态同形），供卡片明文展示 + 一键复制。
+ * 收口：掩码字段 `napcat.*` / `bridge.*` 原样保留；同一明文本来就随 ?token= 链接交给浏览器，
+ * 本端点只在本机 127.0.0.1 的管理端 GUI 上被调用，这里不扩大暴露面。
+ * 取不到就留空串 —— 界面按"没有明文"处理，绝不拿掩码冒充明文。
+ */
+async function withPlainNapcatTokens(json) {
+  if (!json || typeof json !== 'object') return json;
+  const current = { webui: '', http: '', ws: '' };
+  try {
+    const rt = resolveRemoteBridgeTarget();
+    const server = rt?.server ?? null;
+    const port = Number(server?.remotePorts?.napcatWebui) || 6099;
+    const st = server ? await getRemoteServerStatus(server, rt?.conn ?? null).catch(() => null) : null;
+    /* 服务端状态里只有 WebUI 令牌（NAPCATWEBUI）—— 也正是登录 NapCat WebUI 要手填的那一个。
+     * HTTP / WS 令牌服务端状态没有，这里就不编：留空串，界面按"没有明文"处理。 */
+    current.webui = String(st?.napcat?.webuiToken ?? '').trim();
+    const scope = server?.id ?? 'remote';
+    if (!current.webui) current.webui = cachedNapcatWebuiToken(scope, port);
+  } catch (e) {
+    mlog(`[napcat] 取服务端明文令牌失败（界面将只显示掩码）：${e?.message ?? e}`);
+  }
+  return { ...json, current: { ...current, ...(json.current ?? {}) } };
+}
+
 /* NapCat 鉴权令牌（WebUI / HTTP / WS）：
  *  · 先看当前目标（2026-09-30：需求「改成服务器连接时就看服务器」）：
  *    已连接服务器且 Bridge 控制台隧道(13100)在 → 一律转发给那台服务器上的桥，
@@ -8302,9 +8331,12 @@ async function applyLocalNapcatTokens(body = {}, dirOverride = null) {
  *    不碰登录/扫码/退出类接口，也不轮询（卡片只在挂载与手动刷新时取一次）——
  *    既不会打限流，也不会影响登录态。
  * 重启容器要等它起来（约 30~60 秒），加上写盘后的复验，超时给到 4 分钟。 */
-app.get('/api/napcat/tokens', (req, res) => {
+app.get('/api/napcat/tokens', async (req, res) => {
   if (resolveRemoteBridgeTarget()) {
-    void proxyToBridgeConsole(req, res, { path: '/api/napcat/tokens', method: 'GET', timeoutMs: 60000 });
+    /* 2026-09-29：远端那台不再"原样转发" —— 桥只回掩码，明文由管理器补进 current（见 withPlainNapcatTokens）。 */
+    const r = await callBridgeConsole({ path: '/api/napcat/tokens', method: 'GET', timeoutMs: 60000 });
+    if (r.fail) { res.json(r.fail); return; }
+    res.json(await withPlainNapcatTokens(r.json));
     return;
   }
   const local = buildLocalNapcatTokenStatus();

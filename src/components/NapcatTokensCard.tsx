@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyRound, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Eye, EyeOff } from 'lucide-react';
+import { KeyRound, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Eye, EyeOff, Copy } from 'lucide-react';
 import { getNapcatTokens, applyNapcatTokens } from '../api';
 import { initialFromCache, writeCacheValue, dropCacheValue, warmCache } from '../lib/read-cache';
 import { ReadBar, Skeleton } from './ReadState';
@@ -93,6 +93,22 @@ export default function NapcatTokensCard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [show, setShow] = useState(false);
+
+  /* 2026-09-29 反馈修：用户被挡在 NapCat WebUI 的「请输入token」页 —— 这张卡里 WebUI 令牌只以
+     password 输入框呈现（要自己先点「显示输入」才看得见），也没有复制按钮，而 NapCat 登录页
+     偏偏要手填。这里补一个一键复制（明文展示见下方令牌行）。
+     127.0.0.1 在 Chromium 里属安全上下文，navigator.clipboard 可用；真不可用时如实提示手选。 */
+  const [copied, setCopied] = useState(false);
+  const copyToken = useCallback(async (v: string) => {
+    if (!v) return;
+    try {
+      await navigator.clipboard.writeText(v);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setMsg('复制失败：请点下方「显示输入」后手动选中令牌复制。');
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setErr('');
@@ -320,6 +336,21 @@ export default function NapcatTokensCard() {
                 </>
               )}
             </div>
+
+            {/* 2026-09-29 反馈修：NapCat WebUI 的登录页要求手填 token，而这张卡原先只在 password
+                输入框里给出该值（默认隐藏）。这里把「现行」WebUI 令牌明文列出并给一键复制 ——
+                只读展示，不参与改值；要改装下方「WebUI 登录令牌（6099）」输入框。 */}
+            {String(st?.current?.webui ?? '') !== '' && (
+              <div className="lrn-inline-note" style={{ ...rowStyle, marginTop: 6 }}>
+                <span className="f-label">现行 WebUI 登录令牌：</span>
+                <code style={{ fontSize: 13, userSelect: 'all' }}>{String(st?.current?.webui)}</code>
+                <button className="btn btn-sm btn-outline"
+                  onClick={() => void copyToken(String(st?.current?.webui))}>
+                  <Copy size={13} /> {copied ? '已复制' : '复制'}
+                </button>
+                <span className="lrn-updated">登录 NapCat WebUI 时粘进「请输入token」框</span>
+              </div>
+            )}
 
             <div className="cfg-fields">
               <label className="field-row">
