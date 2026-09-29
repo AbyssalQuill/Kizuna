@@ -21,7 +21,7 @@ export const COMPOSE_END = '      # === qq-bridge persona/rules END ===';
 /** preset 的 text: |- 块内缩进（6 空格），插入的每一行都必须带同样缩进，否则 YAML 会散架 */
 const INDENT = '      ';
 const NO_PERSONA_LINE = '(主人还没有上传人设：不要扮演任何角色，也不要自己编一个；就做那个说话直接、有判断、不谄媚的助手。)';
-const NO_RULES_LINE = '(主人还没有写发言规则：按 [SPEECH - FALLBACK ONLY] 那一节打字。)';
+const NO_RULES_LINE = '(主人还没有写发言规则：按 [WHO YOU ARE] 分层里第 3 层说的那样打字——没有被注入的发言规则时，按系统提示词里那份兜底的打字方式说话。)';
 
 function indentBlock(text, fallbackLine) {
   const body = String(text || '').replace(/\r\n/g, '\n').trim();

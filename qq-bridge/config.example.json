@@ -151,6 +151,7 @@
       "sleepMaxMs": 0,
       "recommendedSleepMinMs": 300000,
       "recommendedSleepMaxMs": 7200000,
+      "_probabilityNote": "【2026-09-30 语义变更：概率 → 开关】recommendedProbability / activeProbability 不再是「回不回的阈值」。桥里那颗骰子（Math.random() < probability）已删：群里的普通消息**一律**送到模型面前，接不接、接几条由模型自己按发言规则判断（主人原话：『别写死，让模型自己判断』）。这两个键现在只剩两个作用：① 数字会如实显示在唤醒正文的 [WakeRef] 行里（让模型知道主人配的是什么）；② recommendedProbability 显式写 0 = 明确关闭本类会话的普通消息唤醒（静默开关，不是概率）。注意 **删掉这个键**和**写 0** 不是一回事：删键 = 没设置（普通消息照旧交给模型），写 0 = 明确关闭；旧配置缺这个键不会被当成 0（core/social-state.js 的 defaultWakeConfig / applyOwnerWakeProbabilityToSessions 都按这个口径处理，缺键时既不写 0 也不同步 0）。要静默某个群优先用 social.deepsleepGroups（单群静默名单）/ social.deepsleep，或在群里发 /silent —— 那才是非决策类硬性护栏。JSON 不支持注释，说明放这个键里，运行时忽略。",
       "recommendedProbability": 0.05,
       "recommendedKeywords": [
         "机器人",
@@ -173,7 +174,7 @@
       "recommendedNameMention": true,
       "recommendedQuestion": true,
       "recommendedPoke": true,
-      "recommendedHint": "如果你要潜水，推荐先调用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话就可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看 newMessages，判断不需要你参与可直接沉睡，若参与了则下次想睡需再等观察窗口。潜水时长推荐 5~120 分钟；普通消息概率一律按唤醒正文 [WakeRef] 行里的主人配置来，不要在这里写死任何概率数字。@/名字/关键词/提问唤醒建议保持开启。需要等特定某人/某几人时，可额外设置 triggers.speakerIds。",
+      "recommendedHint": "如果你要潜水，推荐先调用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话就可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看 newMessages，判断不需要你参与可直接沉睡，若参与了则下次想睡需再等观察窗口。潜水时长推荐 5~120 分钟；普通消息不再由桥按概率过滤（2026-09-30 起）：群里的普通消息都会送到你面前，接不接、接几条由你按发言规则自己判断，不要去写死任何概率数字（triggers.probability 只在你要本会话完全静默时才写 0，那是关闭开关）。@/名字/关键词/提问唤醒建议保持开启。需要等特定某人/某几人时，可额外设置 triggers.speakerIds。",
       "batchWindowMs": 8000,
       "maxWakePerMinute": 1,
       "maxWakePerHour": 12,
@@ -230,11 +231,13 @@
       "activePersona": ""
     },
     "proactive": {
+      "_probabilityNote": "【2026-09-30 语义变更：概率 → 开关】probability（群）/ privateProbability（私聊）不再是「每次机会开口的概率」。桥里那颗骰子（Math.random() < prob）连同四个机械系数（有想法 ×1.4 / 刚回过话 ×0.5 / 深夜 ×0.3 / 一小时内自己已说 5 句 ×0.3）一起删掉了：现在每次主动机会只要满足**结构性前提**（social.proactive.enabled、冷场 idleThresholdMs、有话题 freshContextOnly、会话不忙、不在 deepsleep/免打扰）就把这一步交给模型，由它自己判断值不值得开口（[Wake TYPES] 第 3 条：觉得不值得就 qq_mark_read）。两个键只剩一个作用：显式写 0 = 明确关闭该类会话的主动冒泡（关/开，不是阈值；privateProbability: 0 的老语义『私聊从不主动找人』保持不变）。缺键不会被当成 0。判据实现在 core/social-state.js 的 proactiveGate（纯函数，有单测）。JSON 不支持注释，说明放这个键里，运行时忽略。",
       "enabled": true,
       "checkIntervalMinMs": 1800000,
       "checkIntervalMaxMs": 5400000,
       "idleThresholdMs": 900000,
-      "probability": 0.3
+      "probability": 0.3,
+      "privateProbability": 0.7
     },
     "feedback": {
       "maxLength": 500,

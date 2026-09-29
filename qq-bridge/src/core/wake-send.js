@@ -225,8 +225,27 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
       return `speaker:${senderLabel}`;
     }
   }
-  if (Number(tr.probability) > 0 && Math.random() < Number(tr.probability)) return 'probability';
-  return null;
+  /* 2026-09-30 需求（主人原话："修复群聊插话概率的问题，别写死让模型自己判断"）。
+   *
+   * 这一行原来是一颗骰子：`Number(tr.probability) > 0 && Math.random() < Number(tr.probability)`。
+   * 后果有两层，都是"写死"：
+   *   ① 骰子输了就地丢掉 —— 普通群消息**根本不会送到模型面前**，模型连这条消息都看不到，
+   *      自然谈不上"自己判断要不要接话"；
+   *   ② 骰子把两件事混成一件（看不看得到 / 回不回），所以观感必然是"随机插话"：同一条消息
+   *      有时被接、有时被无视，和内容无关 —— 这正是"人机味"的机制来源之一。
+   * 界面上的「插话概率」（social.wake.recommendedProbability / activeProbability，以及模型自己写进
+   * triggers.probability 的值）走的就是这一行，所以改这个数字既是"写死"，也永远改不出人味。
+   *
+   * 现在：普通群消息**一律交给模型**（reason 仍沿用 'probability'，于是下游按 reason 分类的硬性
+   * 护栏——免打扰时段 / 凌晨静默 / 空会话守卫 / 唤醒限频保险丝 / 优先级合并——全部原样生效），
+   * 说不说、说几条、怎么说是模型自己的事（见 preset 的 [WAKE TYPES] 与 speech-rules.md）。
+   *
+   * 唯一保留的"非决策"开关：triggers.probability 显式写成 0 = 本会话不吃普通群消息（静默）。
+   * 这是关/开，不是阈值；缺键 / null / 空串 / 任何 >0 的数值都不再被当作概率使用。
+   * （"静默某个群"的正式入口仍然是 social.deepsleep / deepsleepGroups / /silent。） */
+  const rawProb = tr.probability;
+  if (rawProb !== undefined && rawProb !== null && rawProb !== '' && Number(rawProb) === 0) return null;
+  return 'probability';
 }
 
 // 运行时「人设/发言规则」文件注入（桌面 GUI 写入 qq-bridge/persona.md 与 speech-rules.md，桥只读；
@@ -326,21 +345,31 @@ function buildRuntimeOverrideBlock() {
 }
 
 /**
- * 「用户配置的插话概率 / 当前生效值 / 来源」这一行（2026-09-19）。
- * 首轮与哨兵轮都要带：模型每轮都用 qq_set_wake_config 重设唤醒条件，拿不到这个数字就会一直
- * 沿用自己上一轮拍的值 —— 在界面上改概率等于没改（这就是"插话概率改了不生效"的机制原因）。
- * 来源标记的语义：owner = 用户配置（照它填）；model = 模型自己按语境定的（继续用它的）。
+ * 「普通消息怎么判 / 当前记录值 / 来源」这一行（2026-09-19 引入，2026-09-30 改造）。
+ *
+ * 2026-09-19 的原意：模型每轮都用 qq_set_wake_config 重设唤醒条件，拿不到曲线值就会一直沿用
+ * 自己上一轮拍的数字，于是"界面上改概率等于没改"。当时这一行让模型去填 triggers.probability。
+ *
+ * 2026-09-30 起 probability 不再是"回不回的阈值"（骰子已删，见 evaluateWakeTrigger 的说明）：
+ * 普通群消息一律送到模型面前，接不接由模型自己按发言规则判断。这一行的职责因此变成**如实告知**：
+ *   · 别再把 triggers.probability 当成"插话概率"去填/去猜（填什么都一样，数值不参与判断）；
+ *   · 只有真的要"本会话完全静默、普通消息别再叫我"时才写 0 —— 那是关闭开关。
+ * 仍然每轮都带（首轮 + 哨兵轮）：模型手里那条值必须与桥的实际语义一致，否则它会继续按旧语义
+ * 用概率回话，等于换了个地方继续"写死"。
+ * 来源标记保留：owner = 主人配置的值；model = 模型自己写过的值。
  */
 function wakeRefLine(key) {
   const st = getSocialState(key);
   const tr = st?.wakeConfig?.triggers ?? {};
-  const ownerProb = Number(cfgRef.social?.wake?.recommendedProbability) || 0;
-  const cur = Number(tr.probability) || 0;
+  const ownerRaw = cfgRef.social?.wake?.recommendedProbability;
+  const ownerSet = ownerRaw !== undefined && ownerRaw !== null && ownerRaw !== '';
+  const ownerProb = ownerSet ? Math.min(1, Math.max(0, Number(ownerRaw) || 0)) : null;
+  const cur = Number(tr.probability);
+  const curShown = Number.isFinite(cur) ? Math.min(1, Math.max(0, cur)) : '未设置';
   const src = tr.probabilitySource === 'model' ? 'model' : 'owner';
-  return `[WakeRef] 主人配置的普通消息插话概率=${ownerProb}（当前生效=${cur}，来源=${src}）`
-    + (src === 'model'
-      ? '；qq_set_wake_config 时若不特别指定，请改回主人的值。'
-      : '；qq_set_wake_config 时把 triggers.probability 填成这个值。')
+  return '[WakeRef] 普通消息不再按概率过滤：群里的普通消息一律交到你面前，接不接、接几条由你按发言规则自己判断（不是抽签）。'
+    + `记录：主人配置=${ownerProb === null ? '未设置' : ownerProb}，当前生效=${curShown}，来源=${src}`
+    + '；只有要本会话完全静默（普通消息别叫你）时才把 triggers.probability 设为 0，那是关闭开关、不是概率，其它数值都不参与判断。'
     + deepsleepLine(key);
 }
 

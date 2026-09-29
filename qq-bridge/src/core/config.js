@@ -188,7 +188,7 @@ export function loadConfig() {
         recommendedNameMention: true,
         recommendedQuestion: true,
         recommendedPoke: true,
-        recommendedHint: 'When thinking about diving, judge smartly instead of waiting blindly: if the other person said goodnight / the topic is over / you already answered everything needed, wrap up right away (qq_set_wake_config / qq_mark_read). Only wait briefly when you want to confirm whether the other person is done (qq_wait_for_messages, within 30s). Recommended dive length 5-120 minutes. For the ordinary-message wake probability, always use the owner value printed in the [WakeRef] line of the wake body; never invent or hardcode a probability number of your own. Keep @ / name / keyword / question wake triggers on. To wait for a specific person, add triggers.speakerIds.',
+        recommendedHint: 'When thinking about diving, judge smartly instead of waiting blindly: if the other person said goodnight / the topic is over / you already answered everything needed, wrap up right away (qq_set_wake_config / qq_mark_read). Only wait briefly when you want to confirm whether the other person is done (qq_wait_for_messages, within 30s). Recommended dive length 5-120 minutes. Ordinary group messages are NOT probability-filtered any more (2026-09-30): the bridge hands every one of them to you, and YOU decide whether to join by your own speech rules - never invent or hardcode a probability number. triggers.probability is only an off-switch now: write 0 when you want this session to stop waking you on ordinary messages. Keep @ / name / keyword / question wake triggers on. To wait for a specific person, add triggers.speakerIds.',
         batchWindowMs: 8000,
         maxWakePerMinute: 1,
         maxWakePerHour: 12,

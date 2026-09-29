@@ -14,14 +14,16 @@ export const TUNABLE_SPECS = [
   { key: 'proactiveEnabled', path: ['social', 'proactive', 'enabled'], type: 'bool', label: '主动冒泡总开关', desc: 'false=关闭所有主动冒泡（群/私聊都不主动找人）；true=打开' },
   { key: 'groupProactiveMin', path: ['social', 'proactive', 'checkIntervalMinMs'], type: 'dur', min: 60000, max: 86400000, label: '群主动最短间隔', desc: '群聊两次主动机会之间的最短间隔（调小=更频繁）' },
   { key: 'groupProactiveMax', path: ['social', 'proactive', 'checkIntervalMaxMs'], type: 'dur', min: 60000, max: 86400000, label: '群主动最长间隔', desc: '群聊两次主动机会之间的最长间隔' },
-  { key: 'groupProbability', path: ['social', 'proactive', 'probability'], type: 'float', min: 0, max: 1, label: '群主动概率', desc: '群聊每次机会实际开口概率，0~1（0.2≈五次机会开一次口）' },
+  { key: 'groupProbability', path: ['social', 'proactive', 'probability'], type: 'float', min: 0, max: 1, label: '群主动冒泡开关(0=关)', desc: '2026-09-30 起不再是概率：群聊每次主动机会都会交给模型自己判断值不值得开口，桥只保留"冷场/有话题"这两个结构性前提。写 0 = 明确关闭群聊主动冒泡；其它数值不再参与判断（保留键只为兼容老配置）。' },
   { key: 'privateProactiveMin', path: ['social', 'proactive', 'privateCheckIntervalMinMs'], type: 'dur', min: 60000, max: 86400000, label: '私聊主动最短间隔', desc: '私聊（含主人私聊）主动找人的最短间隔' },
   { key: 'privateProactiveMax', path: ['social', 'proactive', 'privateCheckIntervalMaxMs'], type: 'dur', min: 60000, max: 86400000, label: '私聊主动最长间隔', desc: '私聊（含主人私聊）主动找人的最长间隔' },
-  { key: 'privateProbability', path: ['social', 'proactive', 'privateProbability'], type: 'float', min: 0, max: 1, label: '私聊主动概率', desc: '私聊主动开口概率（0=私聊从不主动找人）' },
+  { key: 'privateProbability', path: ['social', 'proactive', 'privateProbability'], type: 'float', min: 0, max: 1, label: '私聊主动冒泡开关(0=关)', desc: '2026-09-30 起不再是概率：私聊每次主动机会都交给模型自己判断，桥只保留"冷场/有话题"两个前提。写 0 = 私聊从不主动找人（原来就是这个语义，保持不变）；其它数值不再参与判断。' },
   { key: 'idleThresholdMs', path: ['social', 'proactive', 'idleThresholdMs'], type: 'dur', min: 60000, max: 86400000, label: '冷场判定时长', desc: '对方多久没说话才算冷场，才可能主动开口' },
   { key: 'replyCheckMs', path: ['social', 'autoReplyCheckMs'], type: 'dur', min: 15000, max: 3600000, label: '回复检查间隔', desc: '回复后多久系统自动再检查一次是否漏回' },
   // 2026-09-15：活跃模式的随机搭话概率：转活跃时用它，不再沿用潜水那套 0.05（当时的反馈是"活跃跟潜水没区别"）
-  { key: 'wakeActiveProbability', path: ['social', 'wake', 'activeProbability'], type: 'float', min: 0, max: 1, label: '活跃模式搭话概率', desc: '群里转成"活跃"后，每条消息被随机唤醒的概率（默认 0.3=三成）。调小=更省额度、更安静' },
+  // 2026-09-30：骰子已删（见 core/wake-send.js 的 evaluateWakeTrigger）——活跃模式下本来就是每条都唤醒（anyMessage），
+  // 潜水模式下现在也是每条普通消息都交给模型自己判断。这个键只作为"记录值"出现在唤醒正文的 [WakeRef] 行里。
+  { key: 'wakeActiveProbability', path: ['social', 'wake', 'activeProbability'], type: 'float', min: 0, max: 1, label: '活跃模式搭话记录值(不再当概率用)', desc: '2026-09-30 起不再决定"每条消息被随机唤醒的概率"：群里每条普通消息都会被送到模型面前、由它自己判断接不接。这个键只剩记录/展示作用（0 也不再表示关闭；要静默某个群请用群静默名单）。' },
   { key: 'wakeMaxPerHour', path: ['social', 'wake', 'maxWakePerHour'], type: 'dur', min: 0, max: 600, label: '群每小时唤醒上限', desc: '额度保险丝：同一群每小时最多唤醒多少次（默认 12，0=不限）。调小最直接地省额度' },
   { key: 'dndWindows', path: ['social', 'dndWindows'], type: 'str', label: '免打扰时段', desc: '如 23:00-08:00 或 23:00-08:00,13:00-14:00;空=关闭。免打扰内不主动找话,但被@/私聊仍秒回' },
   { key: 'proactiveFreshOnly', path: ['social', 'proactive', 'freshContextOnly'], type: 'bool', label: '主动需有话题', desc: 'true=主动开口前需有新消息或近2h群友话题,避免凌晨空转(默认 true)' },

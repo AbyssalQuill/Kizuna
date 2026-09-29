@@ -53,6 +53,17 @@ export function defaultWakeConfig() {
   const hardMax = Number(w.sleepMaxMs) || 0;
   if (hardMin > 0 && finiteMs < hardMin) finiteMs = hardMin;
   if (hardMax > 0 && finiteMs > hardMax) finiteMs = hardMax;
+  /* 2026-09-30：`triggers.probability` 不再是"回不回的阈值"（骰子已删，见 wake-send.js 的
+   * evaluateWakeTrigger 注释），它现在只有两个含义：显式 0 = 明确关闭本会话的普通消息唤醒；
+   * 其它数值不参与任何判断，只在 [WakeRef] 行里如实报出。
+   *
+   * 关键坑（必须这样写）：配置里**没有** recommendedProbability 这个键时，绝不能写成 0 ——
+   * 0 会被上面的语义读成"明确关闭"，于是"旧配置缺键"反而变成永久静默（以前是概率 0 = 骰子
+   * 永远不中，看起来一样，但那时它的名字叫概率，现在它叫开关，含义变了）。缺键 = 不写这个字段。 */
+  const rawRec = w.recommendedProbability;
+  const hasRec = rawRec !== undefined && rawRec !== null && rawRec !== '';
+  const recNum = hasRec ? Number(rawRec) : Number.NaN;
+  const recProb = hasRec && Number.isFinite(recNum) ? Math.min(1, Math.max(0, recNum)) : null;
   return {
     mode: defaultMode,
     infinite: defaultInfinite,
@@ -65,7 +76,8 @@ export function defaultWakeConfig() {
       question: w.recommendedQuestion !== false,
       poke: w.recommendedPoke !== false,
       anyMessage: defaultMode === 'active',
-      probability: Math.min(1, Math.max(0, Number(w.recommendedProbability) || 0)),
+      // 缺键 → undefined（＝"没有开关"，不是"关闭"）；显式 0 → 明确关闭；其它值只是记录。见上面注释。
+      probability: recProb === null ? undefined : recProb,
       /* 2026-09-19 需求"插话概率等所有概率都要改好落地"。
        * 这个值有两个来源：① 用户配置里的 recommendedProbability（这里叫 owner）；
        * ② 模型自己按语境用 qq_set_wake_config 定的值（model）。
@@ -98,26 +110,39 @@ export function defaultWakeConfig() {
  */
 export function applyOwnerWakeProbabilityToSessions() {
   const w = cfgRef?.social?.wake ?? {};
-  const ownerProb = Math.min(1, Math.max(0, Number(w.recommendedProbability) || 0));
-  const activeProb = Math.min(1, Math.max(0, Number(w.activeProbability) || 0));
+  /* 2026-09-30：probability 只把"显式 0"当关闭开关用（骰子已删），所以这里必须能区分
+   * "主人写了 0" 和 "配置里根本没这个键"：
+   *   · 没写（undefined/null/空串/非数字）→ 返回 null = 什么都不做，绝不把会话写成 0（写了就是永久静默）；
+   *   · 写了 0 → 0，照旧同步（这是主人明确要关掉本类会话的普通消息唤醒）；
+   *   · 其它数值 → 原样同步（数值不参与判断，但 [WakeRef] 行会如实报出，保持"界面改了就变"的手感）。 */
+  const toProb = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : null;
+  };
+  const ownerProb = toProb(w.recommendedProbability);
+  const activeProb = toProb(w.activeProbability);
   let updated = 0;
   let overridden = 0;
+  let skipped = 0;
   for (const [key, st] of social.conversations.entries()) {
     const tr = st?.wakeConfig?.triggers;
     if (!tr) continue;
     // 活跃模式用 activeProbability（它本来就是"墙上说的活跃概率"），潜水模式用 recommendedProbability
-    const want = st.wakeConfig?.mode === 'active' && activeProb > 0 ? activeProb : ownerProb;
+    const want = st.wakeConfig?.mode === 'active' && activeProb !== null && activeProb > 0 ? activeProb : ownerProb;
+    // 配置里没写这个键 → 不动会话（否则"缺键"会被同步成 0 = 明确关闭，群里就再也不理普通消息了）
+    if (want === null) { skipped += 1; continue; }
     const wasModel = tr.probabilitySource === 'model';
     if (Number(tr.probability) !== want || wasModel) {
       tr.probability = want;
       tr.probabilitySource = 'owner';
       updated += 1;
       if (wasModel) overridden += 1;
-      log(`[config] 插话概率已按主人配置更新 ${key}: ${want}${wasModel ? '（覆盖了模型之前自定的值）' : ''}`);
+      log(`[config] 普通消息唤醒记录值已按主人配置更新 ${key}: ${want}${wasModel ? '（覆盖了模型之前自定的值）' : ''}`);
     }
   }
   if (updated) saveSocialState();
-  return { updated, overridden, kept: 0 };
+  return { updated, overridden, kept: skipped };
 }
 
 // 软重置唤醒配置：保留当前"模式"（活跃/潜水）与关键触发条件（指定成员/关键词/概率），// 只把其余参数回归推荐默认——用于"无行动/连续未设置唤醒"等兜底场景，
@@ -141,7 +166,10 @@ export function softResetWakeConfig(st) {
       poke: oldTr.poke === true || def.triggers.poke,
       speakerIds: normalizeSpeakerIds(oldTr.speakerIds),
       keywords: Array.isArray(oldTr.keywords) ? oldTr.keywords.map((k) => String(k).slice(0, 100)).filter(Boolean).slice(0, 50) : def.triggers.keywords,
-      probability: Number.isFinite(prevProb) && prevProb > 0 ? Math.min(1, Math.max(0, prevProb)) : def.triggers.probability,
+      /* 2026-09-30：原来的判据是 `prevProb > 0` —— 显式 0（=明确关闭本会话的普通消息唤醒）
+       * 会被当成"没值"而退回默认值，于是"我刚静默过的群，软重置后又开始理每条消息"。
+       * 现在只要是有效数字就保留（含 0），只有脏值才回退默认。 */
+      probability: Number.isFinite(prevProb) ? Math.min(1, Math.max(0, prevProb)) : def.triggers.probability,
       // 软重置要保留"这个概率是谁定的"：模型定的就继续归模型，用户配置来的就继续跟用户配置走
       probabilitySource: oldTr.probabilitySource === 'model' ? 'model' : 'owner'
     },
@@ -816,31 +844,58 @@ export function scheduleProactiveCheck(key) {
     ensureWakeable(st, { key });
     const idleThreshold = Number(p.idleThresholdMs) || 15 * 60 * 1000;
     const idle = Date.now() - (st.lastIncomingAt || 0);
-    const probBase = Number(isPrivate ? p.privateProbability : p.probability);
-    let prob = Math.min(1, Math.max(0, Number.isFinite(probBase) ? probBase : 0.4));
     const pendingThoughts = Array.isArray(st.pendingThoughts) ? st.pendingThoughts.filter((t) => t && (!t.expiresAt || Date.now() < Number(t.expiresAt))).length : 0;
-    if (pendingThoughts > 0) prob = Math.min(1, prob * 1.4);
-    if (st.lastAiReplyAt && Date.now() - Number(st.lastAiReplyAt) < 30 * 60 * 1000) prob *= 0.5;
-    const hour = new Date().getHours();
-    if (hour >= 23 || hour < 8) prob *= 0.3;
-    const recent = Array.isArray(st.recentMessages) ? st.recentMessages : [];
-    const aiCount = recent.filter((m) => m && m.isSelf && Date.now() - Number(m.time || 0) < 60 * 60 * 1000).length;
-    if (aiCount >= 5) prob *= 0.3;
     // 有话题才开口（默认开启 freshContextOnly）：未读/待办想法/近 2h 他人发言都没有就只重排下一轮，
-    // 不触发 LLM——配合 DND 与冷场概率衰减，避免凌晨/无话题空转。
+    // 不触发 LLM——配合 DND 避免凌晨/无话题空转。
     const fresh = (Array.isArray(st.unread) && st.unread.length > 0)
       || pendingThoughts > 0
-      || recent.some((m) => m && !m.isSelf && Date.now() - Number(m.time || 0) < 2 * 60 * 60 * 1000);
-    const freshOnly = cfgRef.social?.proactive?.freshContextOnly !== false;
-    if (freshOnly && !fresh) {
-      log(`[default] proactive 无话题可开,跳过本轮 ${key}`);
-    } else if (idle >= idleThreshold && Math.random() < prob && !isConversationBusy(key, st)) {
+      || (Array.isArray(st.recentMessages) ? st.recentMessages : []).some((m) => m && !m.isSelf && Date.now() - Number(m.time || 0) < 2 * 60 * 60 * 1000);
+    const gate = proactiveGate({
+      probCfg: isPrivate ? p.privateProbability : p.probability,
+      freshOnly: cfgRef.social?.proactive?.freshContextOnly !== false,
+      fresh,
+      idleMs: idle,
+      idleThresholdMs: idleThreshold,
+      busy: isConversationBusy(key, st)
+    });
+    if (gate.fire) {
       void dispatchWake(key, 'proactiveCheck').catch((error) => log(`[default] proactive 唤醒异常 ${key}:`, error?.message ?? error));
+    } else {
+      log(`[default] proactive 本轮不开口(${gate.why}) ${key}`);
     }
     scheduleProactiveCheck(key);
   }, delay);
   st.proactiveTimer.unref?.();
   log(`[default] 已安排主动机会检查 ${key}，约 ${Math.round(delay / 60000)}min 后`);
+}
+
+/**
+ * 「这一轮主动机会要不要真的开口」的判定（纯函数，2026-09-30 去概率化）。
+ *
+ * 为什么改（主人原话："修复群聊插话概率的问题，别写死让模型自己判断"，并明确要求
+ * "不要保留任何『多少概率才回』这类机械判断，只保留非决策类硬性护栏"）：
+ * 原来这里是 `Math.random() < prob`，而且 prob 还被四个机械系数乘来乘去
+ * （有想法 ×1.4、刚回过话 ×0.5、深夜 ×0.3、一小时里自己说过 5 句 ×0.3）。
+ * 结果就是"要不要开口"完全由桥拍板、模型只是被叫醒后补一句 —— 概率低的时候它整晚没有
+ * 开口机会，概率高的时候它被叫醒却无话可说，两边都像机器。
+ *
+ * 现在：桥只做**结构性**判定（开关 / 有没有话题 / 是否冷场 / 会话是否正忙），
+ * 剩下的"值不值得开口、开什么口"一律交给模型 —— 被叫醒时 preset 的 [WAKE TYPES] 第 3 条
+ * 就是"没人先说话，觉得值得开口才开，否则 qq_mark_read"，代价是多花一步判断。
+ *
+ * @param {{probCfg?:*, freshOnly?:boolean, fresh?:boolean, idleMs?:number, idleThresholdMs?:number, busy?:boolean}} a
+ * @returns {{fire:boolean, why:string}} fire=true 时把这一步交给模型；why 只用于日志
+ */
+export function proactiveGate(a) {
+  const { probCfg, freshOnly, fresh, idleMs, idleThresholdMs, busy } = a || {};
+  // 显式 0 = 明确关闭这一类会话的主动冒泡（关/开，不是阈值）。缺键 / null / 空串 / 非数字都不算关闭。
+  if (probCfg !== undefined && probCfg !== null && probCfg !== '' && Number(probCfg) === 0) return { fire: false, why: 'off-switch' };
+  // 「有话题才开口」：没有可判断的内容，叫醒模型也只能空转（配置项 social.proactive.freshContextOnly）
+  if (freshOnly !== false && !fresh) return { fire: false, why: 'no-topic' };
+  // 冷场判定：对方还在说话时不主动插一脚（配置项 social.proactive.idleThresholdMs）
+  if (!(Number(idleMs) >= Number(idleThresholdMs))) return { fire: false, why: 'not-idle' };
+  if (busy) return { fire: false, why: 'busy' };
+  return { fire: true, why: 'model-decides' };
 }
 
 // 对方持续输入时，唤醒最多再顺延的总上限（P4-22 迁入）
