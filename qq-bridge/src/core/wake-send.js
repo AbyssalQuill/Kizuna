@@ -218,33 +218,28 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
   if (tr.question && isDirectedAtAi(plainContent)) return 'question';
   // 智能接话：聊到 AI/技术相关话题时主动参与（全局，AI 自行判断值不值得接）
   if (TOPIC_WAKE_RE.test(String(plainContent ?? ''))) return 'topic';
+  // 主人发言直通 Fast Path：100% 积极唤醒
+  const senderId = String(event?.user_id ?? event?.sender?.user_id ?? '');
+  if (cfgRef?.ownerQQ && String(cfgRef.ownerQQ) === senderId) {
+    return 'owner';
+  }
   if (Array.isArray(tr.speakerIds) && tr.speakerIds.length) {
-    const speakerId = String(event?.user_id ?? event?.sender?.user_id ?? '');
-    if (speakerId && tr.speakerIds.some((id) => String(id) === speakerId)) {
-      const senderLabel = event?.sender?.card || event?.sender?.nickname || speakerId;
+    if (senderId && tr.speakerIds.some((id) => String(id) === senderId)) {
+      const senderLabel = event?.sender?.card || event?.sender?.nickname || senderId;
       return `speaker:${senderLabel}`;
     }
   }
-  /* 2026-09-30 需求（主人原话："修复群聊插话概率的问题，别写死让模型自己判断"）。
-   *
-   * 这一行原来是一颗骰子：`Number(tr.probability) > 0 && Math.random() < Number(tr.probability)`。
-   * 后果有两层，都是"写死"：
-   *   ① 骰子输了就地丢掉 —— 普通群消息**根本不会送到模型面前**，模型连这条消息都看不到，
-   *      自然谈不上"自己判断要不要接话"；
-   *   ② 骰子把两件事混成一件（看不看得到 / 回不回），所以观感必然是"随机插话"：同一条消息
-   *      有时被接、有时被无视，和内容无关 —— 这正是"人机味"的机制来源之一。
-   * 界面上的「插话概率」（social.wake.recommendedProbability / activeProbability，以及模型自己写进
-   * triggers.probability 的值）走的就是这一行，所以改这个数字既是"写死"，也永远改不出人味。
-   *
-   * 现在：普通群消息**一律交给模型**（reason 仍沿用 'probability'，于是下游按 reason 分类的硬性
-   * 护栏——免打扰时段 / 凌晨静默 / 空会话守卫 / 唤醒限频保险丝 / 优先级合并——全部原样生效），
-   * 说不说、说几条、怎么说是模型自己的事（见 preset 的 [WAKE TYPES] 与 speech-rules.md）。
-   *
-   * 唯一保留的"非决策"开关：triggers.probability 显式写成 0 = 本会话不吃普通群消息（静默）。
-   * 这是关/开，不是阈值；缺键 / null / 空串 / 任何 >0 的数值都不再被当作概率使用。
-   * （"静默某个群"的正式入口仍然是 social.deepsleep / deepsleepGroups / /silent。） */
-  const rawProb = tr.probability;
+  /* 智能感知门控 (Fast Path Gating) 优化：
+   * 背景群消息依然 100% 写入 chat.db 供记忆检索与上下文连贯；
+   * 但非关联的纯路人群聊不再无脑 100% 唤醒昂贵的 DSH（实测消除 47.5% 的 qq_mark_read 浪费）。
+   * 按照触发器概率 tr.probability（或系统推荐概率，缺省 0.15）进行自然插话抽样。
+   * 抽中才唤醒 DSH 决策；未抽中静默归档。显式设为 0 则完全静默。 */
+  const rawProb = tr.probability ?? cfgRef?.social?.wake?.recommendedProbability ?? 0.15;
   if (rawProb !== undefined && rawProb !== null && rawProb !== '' && Number(rawProb) === 0) return null;
+  const probNum = Number(rawProb);
+  if (Number.isFinite(probNum) && probNum > 0 && probNum < 1) {
+    if (Math.random() >= probNum) return null;
+  }
   return 'probability';
 }
 

@@ -12,7 +12,8 @@ import { enqueueSend, currentSendChain, setSendLinearCfgReader, nextSendPaceMs, 
 import { getSocialState } from './social-state.js';
 import { activeAiTurns } from './session-state.js';
 import { recordAiTurnOutbound } from './turn-guard.js';
-import { resolveArtifactFaceId } from '../lib/qq-face-parse.js';
+import { resolveArtifactFaceId, resolveArtifactMeme, resolveArtifactCustomSticker } from '../lib/qq-face-parse.js';
+import { STICKER_FILE } from '../lib/paths.js';
 import { writeStickerTmpFile } from './sticker.js';
 import { napcatImageFileArg } from '../lib/napcat-file.js';
 import { isDeliveredUnconfirmed, deliveredUnconfirmedResult, onebotErrText } from '../lib/onebot-delivery.js';
@@ -216,14 +217,48 @@ export async function onebotSend(kind, id, message, replyToMessageId, atUserId =
   const strippedText = cleanOutboundText(rawMessage0);
   let rawMessage = strippedText;
   let artifactFaceId = null;
-  if (swept.removed > 0 && strippedText === '') {
-    const faceIdGuess = resolveArtifactFaceId(swept.tokens[0] ?? '');
-    if (faceIdGuess != null) artifactFaceId = faceIdGuess;
-    else log(`占位表情未能翻译成 QQ face，已丢弃不发 (${kind}:${id}): ${rawMessage0.slice(0, 50)}`);
+  let artifactImageFile = null;
+  if (swept.removed > 0) {
+    for (const token of swept.tokens) {
+      // 1. QQ 原生黄脸表情 (如 (148))
+      const faceIdGuess = resolveArtifactFaceId(token);
+      if (faceIdGuess != null) {
+        artifactFaceId = faceIdGuess;
+        break;
+      }
+      // 2. 内置同人表情包 (whale-fanart-001)
+      const memeHit = resolveArtifactMeme(token);
+      if (memeHit?.file) {
+        try {
+          const buf = fs.readFileSync(memeHit.file);
+          const ext = String(path.extname(memeHit.file) || '').replace(/^\./, '') || 'img';
+          artifactImageFile = napcatImageFileArg(writeStickerTmpFile(buf, ext), cfgRef);
+          log(`[meme] 占位表情 ${token} 解析为同人表情包: ${memeHit.caption || ''} (${path.basename(memeHit.file)})`);
+          break;
+        } catch (e) {
+          log(`[meme] 写入临时同人表情包文件失败: ${e?.message ?? e}`);
+        }
+      }
+      // 3. 收藏表情 (stickers.json)
+      const stickerHit = resolveArtifactCustomSticker(token, STICKER_FILE);
+      if (stickerHit?.url) {
+        if (stickerHit.url.startsWith('local://')) {
+          artifactImageFile = napcatImageFileArg(stickerHit.url.slice('local://'.length), cfgRef);
+        } else {
+          artifactImageFile = stickerHit.url;
+        }
+        log(`[meme] 占位表情 ${token} 解析为收藏表情: ${stickerHit.name || stickerHit.desc || token}`);
+        break;
+      }
+    }
+    if (artifactFaceId == null && !artifactImageFile && strippedText === '') {
+      log(`占位表情未能翻译成 QQ face 或内置表情包，已跳过 (${kind}:${id}): ${rawMessage0.slice(0, 50)}`);
+    }
   } else if (strippedText === '' && swept.removed === 0 && rawMessage0.trim() !== '') {
     rawMessage = redactKnownTokensOnly(rawMessage0);
   }
   if (artifactFaceId != null) segments.push({ type: 'face', data: { id: artifactFaceId } });
+  if (artifactImageFile != null) segments.push({ type: 'image', data: { file: artifactImageFile, sub_type: 1 } });
   // prefix 引用：把"被引用原文"当正文前缀一起发出去（纯文字气泡，不依赖 QQ 的 reply 段）
   if (quotePrefix) rawMessage = quotePrefix + rawMessage;
   if (imagePath) {
@@ -272,6 +307,10 @@ export async function onebotSend(kind, id, message, replyToMessageId, atUserId =
     } else {
       pushTextWithAtSpace(rawMessage);
     }
+  }
+  if (segments.length === 0) {
+    log(`[send] 消息内容清洗后为空且无有效表情段，已跳过发送 (${kind}:${id})`);
+    return { message_id: null, skipped: true };
   }
   const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
   const buildParams = () => (kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments });
