@@ -1079,8 +1079,11 @@ export async function pumpMux() {
                 // 私聊本身每条消息必唤醒，自发起唤醒（追念/主动等）也不需要反复设置唤醒条件；
                 // 活跃模式（anyMessage）每次消息都会唤醒，均无需“防遗忘”提醒/兜底重置，
                 // 避免私聊或追念收尾时被无意义的控制台提醒打扰，多耗费一整轮模型往返。
+                const missSt = getSocialState(key);
+                const missWc = missSt?.wakeConfig || {};
+                const missTr = missWc?.triggers || {};
                 const isPrivateChat = key.startsWith('private:');
-                const lastReason = String(missSt.lastWakeReason ?? '').split(':')[0];
+                const lastReason = String(missSt?.lastWakeReason ?? '').split(':')[0];
                 const isSelfInitiated = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/.test(lastReason);
                 if (missWc.mode === 'active' || missTr.anyMessage === true || isPrivateChat || isSelfInitiated) {
                   wakeConfigMissCount.delete(key);
