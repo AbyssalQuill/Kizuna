@@ -19,14 +19,17 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const stateDir = process.argv[2] || path.resolve(HERE, '..', 'state');
 const W = Number(process.argv[3] || 1000000);
 
-// ── 单价（与 config.tokenCost 同源；改价请同时改这里与管理端）──────────────────
-const PRICE = { pHit: 0.02, pMiss: 1, pOut: 4, peakMult: 2, peakHours: new Set([9, 10, 11, 14, 15, 16, 17]) };
+// ── 单价：改用 core/token-pricing.js 这唯一权威源（2026-09-30）────────────────────
+// 以前这里自己抄了一份单价、而且峰谷只看小时（漏了周末/节假日整日谷价与 cacheWrite），
+// 于是同一个问题（一次请求多少钱）在不同文件里有不同答案。现在统一走 costOfTokens。
+import { DEFAULT_TOKEN_COST, costOfTokens } from '../src/core/token-pricing.js';
+const PRICE = { ...DEFAULT_TOKEN_COST, peakHours: new Set(DEFAULT_TOKEN_COST.peakHours) };
 const BJ = (t) => new Date(Number(t) + 8 * 3600e3);
 const bjHour = (t) => BJ(t).getUTCHours();
-const costOf = (r) => {
-  const mult = PRICE.peakHours.has(bjHour(r.tsMs)) ? PRICE.peakMult : 1;
-  return ((Number(r.cacheRead) * PRICE.pHit + Number(r.prompt) * PRICE.pMiss + Number(r.completion) * PRICE.pOut) / 1e6) * mult;
-};
+const costOf = (r) => costOfTokens(
+  { cacheRead: r.cacheRead, missInput: r.prompt, cacheWrite: r.cacheWrite, output: r.completion },
+  PRICE, { atMs: r.tsMs },
+);
 
 const file = path.join(stateDir, 'token-usage.jsonl');
 if (!fs.existsSync(file)) {
@@ -61,7 +64,7 @@ let sxy = 0; let sxx = 0;
 for (const r of warm) { const d = Number(r.cacheRead) - mx; sxy += d * (costOf(r) - my); sxx += d * d; }
 const b = sxx > 0 ? sxy / sxx : 0;
 const a0 = my - b * mx;
-console.log(`① 边际（${warm.length} 次 ≥50k）：每次 = ¥${a0.toFixed(5)} + ${(b * 1e6).toFixed(4)} ¥/M × 上下文（缓存价 ${(PRICE.pHit * 1e6).toFixed(2)} ¥/M）`);
+console.log(`① 边际（${warm.length} 次 ≥50k）：每次 = ¥${a0.toFixed(5)} + ${(b * 1e6).toFixed(4)} ¥/M × 上下文（缓存命中价 ${PRICE.pHit} ¥/M）`);
 
 // ② 重建单价与周期长度：上下文大幅回落（< 前一次 60%）= 压缩/轮换发生
 const bySess = new Map();

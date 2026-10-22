@@ -1222,16 +1222,16 @@ export async function runDeploy(taskId, source, target, opts = {}) {
          * （2026-09-23：原来这里的回步骤还是老形状，机器上没脚本时会静默走回老毛病）。 */
         const r = await runCmd(srcConn, [
           'cd /root/qq-bridge || exit 1',
-          'OLD=$(pgrep -f "node src/bridge[.]js" | head -1)',
+          'OLD=$(pgrep -f "node .*bridge[.]js" | head -1)',
           'if [ -f tools/restart-bridge.sh ]; then',
           '  bash tools/restart-bridge.sh',
           'else',
           '  echo "restart-script-missing → 走兜底：先杀旧桥再起"',
           '  rm -f state/bridge.lock',
-          '  pkill -f "node src/bridge[.]js" 2>/dev/null; sleep 2; pkill -9 -f "node src/bridge[.]js" 2>/dev/null; sleep 1',
+          '  pkill -f "node .*bridge[.]js" 2>/dev/null; sleep 2; pkill -9 -f "node .*bridge[.]js" 2>/dev/null; sleep 1',
           '  nohup bash start-bridge.sh >/dev/null 2>&1 &',
           '  sleep 6',
-          '  NEW=$(pgrep -f "node src/bridge[.]js" | head -1)',
+          '  NEW=$(pgrep -f "node .*bridge[.]js" | head -1)',
           '  if [ -n "$NEW" ]; then echo "bridge-up pid=$NEW old=$OLD"; else echo "bridge-down"; fi',
           'fi',
         ].join('\n'), 180000);
@@ -1512,16 +1512,16 @@ export async function runDeploy(taskId, source, target, opts = {}) {
        * （首次克隆）时才走兜底，而兜底也必须先杀旧桥，并用"pid 变了"当判据。 */
       const r = await runCmd(dstConn, [
         'cd /root/qq-bridge || exit 1',
-        'OLD=$(pgrep -f "node src/bridge[.]js" | head -1)',
+        'OLD=$(pgrep -f "node .*bridge[.]js" | head -1)',
         'if [ -f tools/restart-bridge.sh ]; then',
         '  bash tools/restart-bridge.sh',
         'else',
         '  echo "restart-script-missing → 走兜底：先杀旧桥再起"',
         '  rm -f state/bridge.lock',
-        '  pkill -f "node src/bridge[.]js" 2>/dev/null; sleep 2; pkill -9 -f "node src/bridge[.]js" 2>/dev/null; sleep 1',
+        '  pkill -f "node .*bridge[.]js" 2>/dev/null; sleep 2; pkill -9 -f "node .*bridge[.]js" 2>/dev/null; sleep 1',
         '  nohup bash start-bridge.sh >/dev/null 2>&1 &',
         '  sleep 6',
-        '  NEW=$(pgrep -f "node src/bridge[.]js" | head -1)',
+        '  NEW=$(pgrep -f "node .*bridge[.]js" | head -1)',
         '  if [ -n "$NEW" ]; then echo "bridge-up pid=$NEW old=$OLD"; else echo "bridge-down"; fi',
         'fi',
       ].join('\n'), 180000);
@@ -1555,7 +1555,7 @@ export async function runDeploy(taskId, source, target, opts = {}) {
      * 否则这一步会指名道姓地说出来（而不是让用户以为部署成功了）。 */
     const checks = [
       ['DSH Web(3080)', `curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:3080/ || echo down`],
-      ['Bridge(3100)', `NOW=$(pgrep -f 'node src/bridge[.]js' | head -1); echo "http=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:3100/ 2>/dev/null) pid=$NOW"`],
+      ['Bridge(3100)', `NOW=$(pgrep -f 'node .*bridge[.]js' | head -1); echo "http=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:3100/ 2>/dev/null) pid=$NOW"`],
       ['NapCat WebUI(6099)', `curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:6099/ || echo down`],
     ];
     for (const [label, cmd] of checks) {

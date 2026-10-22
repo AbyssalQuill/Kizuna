@@ -316,6 +316,125 @@ export function installPresets(target) {
     const o = stripLegacyModsearchOverlay(target);
     if (!o.ok) warn(`历史 modsearch 覆盖行未清理：${o.reason}`);
   } catch (e) { warn(`清理历史 modsearch 覆盖行异常：${e?.message ?? e}`); }
+  /* 0.2.1：把 .agent-presets 编译成 profile patch 里的声明行（见 syncPresetDeclaration21 注释）。
+   * 放在最后的理由：前面几步（cpSync / syncPresetOverrides / tool-web 门控）都会改
+   * agent.cordis.yml，声明必须在它们之后按最终形态编译。
+   * installPresets 是同步函数，这里不能 await；用 promise 链把声明同步挂上去。
+   * 失败只 warn：声明没同步顶多是沿用上一次的 preset，而 throwing 会中断整条安装路径。 */
+  void syncPresetDeclaration21(target).then((d) => {
+    if (d.ok && d.changed) log(`[dsh-side] 0.2.1 预设声明已同步（${d.plugins} 个插件行）`);
+    else if (!d.ok) warn(`0.2.1 预设声明未同步：${d.reason}`);
+  }).catch((e) => warn(`0.2.1 预设声明同步异常：${e?.message ?? e}`));
+}
+
+/* ── 2026-10-21：DSH 0.2.1 的 preset 声明同步 ────────────────────────────────
+ * 0.2.1 不再扫描 `$DSH_HOME/.agent-presets/<id>/` 目录：预设变成 profile 的
+ * `cordis.patch.yml` 里一条 `@deepseek-ai/dsh-agent-preset` 声明行（plugins 内联）。
+ * 于是 preset 出现"双源"：仓库源 + .agent-presets 是源，profile patch 才是生效的那份。
+ * 以前只在升级当天手工跑 gen-preset-221.mjs / apply-preset-221.mjs 生成过一次，
+ * 之后任何人改 persona / speech-rules / agent.cordis.yml 都不会生效，且毫无报错 ——
+ * 排查时会反复怀疑"改了没反应"。所以把生成接到 installPresets 尾部，每次启动自愈。
+ *
+ * 位置必须在 syncPresetOverrides 之后：那一步才把 persona 合进 agent.cordis.yml。
+ * 失败一律只 warn 不抛：预设装不上会把整条桥拖死，比"沿用上一次的声明"糟得多。
+ */
+/** 按需加载 js-yaml：装不上就返回 null，让调用方降级，而不是 import 阶段直接炸掉整个模块。
+ *  打包 runtime 上并不保证有 js-yaml，而 dsh-side.js 是桥启动必加载的模块 ——
+ *  为了一个只在装 preset 时用得上的 YAML 序列化把整条桥搞挂，代价完全不对等。 */
+let yamlLib;
+async function loadYamlLazy() {
+  if (yamlLib !== undefined) return yamlLib;
+  try { yamlLib = (await import("js-yaml")).default; } catch { yamlLib = null; }
+  return yamlLib;
+}
+const PRESET_DECL_BEGIN = '# === qq-bridge agent preset (0.2.1) BEGIN ===';
+const PRESET_DECL_END = '# === qq-bridge agent preset (0.2.1) END ===';
+
+/** 0.1.2 → 0.2.1 的插件配置改名表（依据两侧真实 Config schema，不是猜的）。 */
+const PRESET_RENAMES_21 = {
+  '@deepseek-ai/dsh-persona': { text: 'prefix' },
+};
+
+/** 0.2.1 只注册 provider / model 两个提示变量（见 dsh-agent-loop 的 systemPrompt.variable），
+ *  0.1.2 可用的 {{cwd}} 已被移除，留着会让整轮直接报 unknown prompt variable 而失败。 */
+const PRESET_VAR_FIXES_21 = { '{{cwd}}': '（隔离 DSH 实例，路径不对外）' };
+
+function compilePresetPlugins21(rows, presetDir) {
+  const fixText = (s) => {
+    let out = s;
+    for (const [from, to] of Object.entries(PRESET_VAR_FIXES_21)) out = out.split(from).join(to);
+    return out;
+  };
+  const fixRow = (row) => {
+    if (!row || typeof row !== 'object') return row;
+    if (typeof row.name === 'string' && row.name.startsWith('./')) {
+      row.name = path.join(presetDir, row.name.slice(2));
+    }
+    const table = typeof row.name === 'string' ? PRESET_RENAMES_21[row.name] : undefined;
+    if (row.config && typeof row.config === 'object' && !Array.isArray(row.config)) {
+      if (table) {
+        for (const [from, to] of Object.entries(table)) {
+          if (from in row.config) {
+            if (!(to in row.config)) row.config[to] = row.config[from];
+            delete row.config[from];
+          }
+        }
+      }
+      for (const key of Object.keys(row.config)) {
+        if (typeof row.config[key] === 'string') row.config[key] = fixText(row.config[key]);
+      }
+    }
+    if (Array.isArray(row.config)) row.config.forEach(fixRow);
+    return row;
+  };
+  return rows.map(fixRow);
+}
+
+/** 把 patch 里的 0.2.1 声明块收敛成唯一一份（无则追加）。纯字符串切片，不拼正则。 */
+function replaceDeclBlock(text, block) {
+  let out = text;
+  for (;;) {
+    const i = out.indexOf(PRESET_DECL_BEGIN);
+    if (i < 0) break;
+    const j = out.indexOf(PRESET_DECL_END, i);
+    if (j < 0) break;
+    out = out.slice(0, i) + out.slice(j + PRESET_DECL_END.length);
+  }
+  const segs = out.split(/\n(?=- insert:\n {4}- id: preset-qq-chat)/);
+  out = segs.filter(function (seg, i) { return i === 0 || seg.indexOf("id: preset-qq-chat") < 0; }).join("\n");
+  return out.trimEnd() + "\n\n" + block;
+}
+export async function syncPresetDeclaration21(target) {
+  const presetDir = path.join(target.home, '.agent-presets', 'qq-chat');
+  const metaFile = path.join(presetDir, 'preset.yml');
+  const rowsFile = path.join(presetDir, 'agent.cordis.yml');
+  const yaml = await loadYamlLazy();
+  if (!yaml) return { ok: false, reason: "js-yaml 不可用（npm i js-yaml）" };
+  if (!fs.existsSync(metaFile) || !fs.existsSync(rowsFile)) {
+    return { ok: false, reason: 'preset 源文件不存在' };
+  }
+  const meta = yaml.load(fs.readFileSync(metaFile, 'utf8')) || {};
+  const rows = yaml.load(fs.readFileSync(rowsFile, 'utf8')) || [];
+  const plugins = compilePresetPlugins21(rows, presetDir);
+  const decl = {
+    id: 'qq-chat',
+    name: meta.name || 'QQ 聊天角色',
+    description: meta.description || '',
+    order: meta.order ?? 10,
+    plugins,
+  };
+  const blockText = yaml.dump([{ insert: [{ id: 'preset-qq-chat', name: '@deepseek-ai/dsh-agent-preset', config: decl }] }], { lineWidth: 200, noRefs: true });
+  const block = `${PRESET_DECL_BEGIN}\n# 由 dsh-side.syncPresetDeclaration21 从 .agent-presets/qq-chat 生成，手改会被启动覆盖。\n${blockText.trimEnd()}\n${PRESET_DECL_END}\n`;
+
+  const patchFile = path.join(target.profileDir, 'cordis.patch.yml');
+  if (!fs.existsSync(patchFile)) return { ok: false, reason: 'profile patch 不存在' };
+  let text = fs.readFileSync(patchFile, 'utf8');
+  // 0.2.1 声明块的替换改走纯字符串切片（replaceDeclBlock）：首尾标记都是字面量。
+  // 之前用 new RegExp 拼转义串，层数算错 -> 实际匹配不到旧块，每次调用都追加一份新块。
+  const next = replaceDeclBlock(text, block);
+  if (next === text) return { ok: true, changed: false };
+  fs.writeFileSync(patchFile, next, 'utf8');
+  return { ok: true, changed: true, plugins: plugins.length };
 }
 
 /* 桥把当前配置注进来（installToIsolatedDsh 拿不到 cfg，而代理开关来自配置）。 */

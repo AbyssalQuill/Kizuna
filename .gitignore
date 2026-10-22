@@ -95,4 +95,7 @@ pnpm-workspace.yaml
 
 # 临时部署包（别进仓库）
 /_*.tar
+/QQ-Bridge-packaging/
+**/.syncbak-*/
+/tools/_*.ps1
 

@@ -19,7 +19,7 @@ const check = async (name, fn) => {
 };
 
 const { initTokenMeter, getTokenReport } = await import(new URL('../src/core/token-meter.js', import.meta.url));
-const { initTokenReportCore, buildTokenReportText, summarizeMeasuredCost, DEFAULT_TOKEN_COST, fmtTok } =
+const { initTokenReportCore, buildTokenReportText, summarizeMeasuredCost, DEFAULT_TOKEN_COST, fmtTok, TOKEN_REPORT_SCOPE_LINE } =
   await import(new URL('../src/core/token-report.js', import.meta.url));
 const { resolveToolTier, toolAllowedByTier, measureSchemaShare, normalizeToolTier, TOOL_TIERS } =
   await import(new URL('../src/lib/tool-tiers.js', import.meta.url));
@@ -81,15 +81,26 @@ await check('① 有数据时正文包含总量与钱数，且估算行不并进
      * 标签后用全角冒号、同行多个数值用「｜」分隔、数值带 tok。第 1 行**不带口径注**（同日主人明确
      * 「我没让你带括号里的废话，计费日换日」，所以这里反过来钉住"没有那句括号"）；估算数仍在
      * data.est / todayEst 里。断言随契约对齐，但钉住的实质没变：总量带千分位、两个日界各自带标签、
-     * 钱数在、估算不进钱。 */
+     * 钱数在、估算不进钱。
+     * 2026-10-01 契约变更（主人原话「计费要改，只统计机器人消耗的」）：正文末尾补第 6 行**口径声明**
+     * —— 「口径：只统计机器人（QQ 桥）自己的消耗，不含本机 DSH 桌面端与子代理」。前 5 行的版式
+     * 与第 1 行"不带括号注"的要求都没动，只是把"这份数只算机器人"从注释里搬到用户看得见的地方。
+     * 2026-09-30 补后半句：面板 ¥9.7903 = 本机 ¥7.9668 + 服务端 ¥1.8235，两者口径不同，所以
+     * 声明里必须写明"面板 = 本机 + 服务端合计、与本行不等属正常"，否则用户还是会以为算错了。 */
     assert.ok(r.text.includes(Number(billed).toLocaleString('en-US')), r.text);
     const dayLines = r.text.split('\n');
-    assert.equal(dayLines.length, 5, r.text);
+    assert.equal(dayLines.length, 6, r.text);
     assert.match(dayLines[0], /^今日 ：[\d,]+ tok$/, dayLines[0]);
     assert.match(dayLines[1], /^自然日：[\d,]+ tok$/, dayLines[1]);
     assert.match(dayLines[2], /^命中率：\d+\.\d%｜未命中 [\d,]+｜命中 [\d,]+｜输出 [\d,]+$/, dayLines[2]);
     assert.match(dayLines[3], /^费用：¥\d+\.\d{4}$/, dayLines[3]);   // 20:00 谷时：不分谷/峰，所以没有括号
     assert.match(dayLines[4], /^全天预估：约 [\d,]+ tok$/, dayLines[4]);
+    assert.equal(dayLines[5], TOKEN_REPORT_SCOPE_LINE, dayLines[5]);
+    assert.match(dayLines[5], /^口径：只统计这台桥（服务端）自己那份/, dayLines[5]);
+    // ④ 口径声明必须把「面板 = 本机 + 服务端」说出来，否则用户拿面板数一对就以为算错了
+    assert.match(dayLines[5], /面板数字 = 本机 \+ 服务端合计/, dayLines[5]);
+    assert.match(dayLines[5], /与本行不等属正常/, dayLines[5]);
+    assert.equal(r.data.scope, 'robot', String(r.data.scope));
     // 估算行绝不进 billedTotal
     assert.equal(billed, 4 * (1000 + 50 + 200000));
     /* 估算行也绝不进钱：4 行真实数据 = 4×(200000×0.02 + 1000×1 + 50×4)/1e6 = ¥0.0208（20:00 谷时无倍率）。

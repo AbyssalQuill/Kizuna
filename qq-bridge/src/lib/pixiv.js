@@ -588,7 +588,7 @@ function isAdult(item) {
 export const PIXIV_SCAN_PAGES_DEFAULT = 3; // 默认往后扫几页（克制值：3 页 = 最多 180 条原始数据）
 export const PIXIV_SCAN_PAGES_MAX = 10;    // 上限（镜像站 lastPage 实测就是 10）
 const R18_VALUES = ['exclude', 'only', 'include'];
-const SORT_VALUES = ['date_desc', 'date_asc', 'random'];
+const SORT_VALUES = ['date_desc', 'date_asc', 'random', 'popular', 'bookmarks_desc'];
 const ORIENTATION_VALUES = ['portrait', 'landscape', 'square'];
 const ILLUST_TYPE_CODE = { illust: 0, manga: 1 }; // 2=动图(ugoira)，不属于这两类
 /** 实测 aiType=2 才是 AI 生成（见文件头）。写成"!=0"会把整页都当 AI 排掉。 */
@@ -621,8 +621,8 @@ export function normalizePixivFilters(opts = {}) {
     const v = String(opts.sort).trim().toLowerCase();
     if (SORT_VALUES.includes(v)) sort = v;
     else if (/pop|hot|bookmark|fav|rank|收藏|人气|热度/.test(v)) {
-      warnings.push(`sort=「${opts.sort}」做不到：镜像站返回体里没有收藏数（bookmarkData 恒为 null，实测 bookmarkCount/like/view 出现 0 次），只能按投稿时间排，已回落 date_desc`);
-    } else warnings.push(`sort=「${opts.sort}」不认识（只有 date_desc/date_asc/random），已回落 date_desc`);
+      sort = 'popular';
+    } else warnings.push(`sort=「${opts.sort}」不认识（支持 date_desc/date_asc/random/popular），已按默认 date_desc 处理`);
   }
 
   let tags = [];
@@ -784,6 +784,18 @@ function sortByCreateDate(items, dir) {
   });
 }
 
+/** 按收藏数/热度降序排序（高赞/精选图优先排在前面，同赞数按最新排）。 */
+function sortByBookmarks(items) {
+  return items.slice().sort((a, b) => {
+    const ba = Number(a?.bookmarks) || 0;
+    const bb = Number(b?.bookmarks) || 0;
+    if (bb !== ba) return bb - ba;
+    const ta = Date.parse(a?.createDate ?? '') || 0;
+    const tb = Date.parse(b?.createDate ?? '') || 0;
+    return tb - ta;
+  });
+}
+
 /** Fisher–Yates 洗牌（sort='random' 用；不追求可复现，只在已扫到的页里打乱）。 */
 function shuffle(items) {
   const out = items.slice();
@@ -801,6 +813,8 @@ function toResult(it) {
     title: String(it.title ?? '').trim(),
     author: String(it.userName ?? '').trim(),
     tags: (Array.isArray(it.tags) ? it.tags : []).map(String).slice(0, 8),
+    bookmarks: Number(it.bookmarks) || 0,
+    views: Number(it.views) || 0,
     pages: Number(it.pageCount) || 1,
     width: Number(it.width) || 0,
     height: Number(it.height) || 0,
@@ -915,6 +929,7 @@ export async function pixivSearch(query, opts = {}) {
 
   // 排序只在已扫到的页内生效（镜像站不给服务端排序，而且我们要先凑够 limit 才能截断）
   const ordered = f.sort === 'random' ? shuffle(kept)
+    : (f.sort === 'popular' || f.sort === 'bookmarks_desc') ? sortByBookmarks(kept)
     : f.sort === 'date_asc' ? sortByCreateDate(kept, 1)
       : sortByCreateDate(kept, -1);
   const results = ordered.slice(0, limit).map(toResult);
@@ -1055,6 +1070,8 @@ function appApiRowToWebRow(it) {
     userName: String(it?.user?.name ?? ''),
     userId: String(it?.user?.id ?? ''),
     tags,
+    bookmarks: Number(it?.total_bookmarks ?? it?.bookmark_count) || 0,
+    views: Number(it?.total_view ?? it?.view_count) || 0,
     // 缩略图 URL 里带日期路径 —— 搜索结果的"推大图"（pixivImageCandidates）就是靠它，所以必须留着
     url: String(imgs.square_medium ?? imgs.medium ?? imgs.large ?? imgs.thumb ?? ''),
     width: Number(it?.width) || 0,

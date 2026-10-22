@@ -1751,8 +1751,8 @@ export function voiceTurnHint(key) {
   const { p, cooling, hit } = dice('voice', key, cfg.send?.probability ?? 0.2, cfg.send?.cooldownMs ?? 0);
   const cap = Math.min(60, Number(cfg.maxChars) || 60);
   if (hit) {
-    // 2026-09-19：与表情同理：HIT 从"许可"改成"指令"（原文 you MAY → 实际常常抽了也不发）
-    return `[Voice] dice HIT (p=${p}, default voice=${voiceName}): ADD ONE short voice bubble to this turn's reply (qq_send_voice) - text is still the carrier, never voice instead of the answer, never the same words twice, under ${cap} chars; skip it only if this line has nothing speakable in it.\n`;
+    // 2026-10-22：允许纯语音回复，或文字+语音；但发语音绝不能与文字同义复述（情绪/娇憨/反应/补充而非复读）
+    return `[Voice] dice HIT (p=${p}, default voice=${voiceName}): SEND A SHORT VOICE BUBBLE (qq_send_voice, under ${cap} chars). You can reply with VOICE ALONE (no text bubble needed, like a real person speaking a voice note), OR send both text and voice. If sending both: voice MUST NEVER repeat or paraphrase the text (never the same words or meaning twice); let voice add emotion, a tease, a murmur, or a fresh reaction instead.\n`;
   }
   const why = cooling ? 'cooldown' : 'dice MISS';
   return `[Voice] ${why} (p=${p}, default voice=${voiceName})${p <= 0 ? ' voice off' : ''}: text only this turn unless someone explicitly asks you to speak or sing (when they do, OMIT the voice field so the default above is used).\n`;

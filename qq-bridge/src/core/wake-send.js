@@ -629,6 +629,9 @@ export function buildWakePrompt(key, reason) {
   if (reason === 'proactiveCheck') {
     return `${baseWithProtocol}[Wake] ${key} proactive opening`;
   }
+  if (reason === 'afterthought') {
+    return `${baseWithProtocol}[Wake] ${key} afterthought (距离上一条回复过去了约半分钟，主人暂时还没回。就像真人聊天一样，如果你突然想到了什么小细节、一句心疼或撒娇的碎碎念、想延伸的新话题、或者随手发个可爱表情包黏黏他，可以自然主动再发 1 条；如果觉得此时话题已经完整、安静最合适，就直接回 OK 结束。)`;
+  }
   if (reason === 'poke') {
     return `${baseWithProtocol}[Wake] ${key} poked`;
   }
@@ -1099,7 +1102,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   // 非保持会话把窗口收紧到 SHORT：那种回合很快就结束，拖 5 秒不如让它照旧多注入一次。
   const cycAt = Number(steerCycleAt.get(key)) || 0;
   const cycleWindow = holdActiveKeys.has(key) ? STEER_CYCLE_MS : STEER_CYCLE_SHORT_MS;
-  if (cycAt && Date.now() - cycAt < cycleWindow) {
+  if (!forced && !opts.noCycleGate && cycAt && Date.now() - cycAt < cycleWindow) {
     const agoMs = Date.now() - cycAt;
     // 记下"被推迟交付"的 seq：mark_read 在没有展示水位时会全清 unread，那会把这批一起吞掉
     // （§2026-09-11 20:03:46 同类）。记在这里 = 告诉 mark_read"这几条别动，它们还在等下一个周期"。
@@ -1827,7 +1830,7 @@ export async function sendWakePrompt(key, reason) {
     const hasAnyTool = !!tools && typeof tools === 'object' && Object.values(tools).some((v) => v !== false);
     if (!hasAnyTool) {
       const unread = (st.unread || []).length;
-      const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck' };
+      const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck', afterthought: 'afterthought' };
       promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     } else {
       // 哨兵轮 prompt 每轮都带当前令牌：模型不必凭记忆/跨轮次查找 token，

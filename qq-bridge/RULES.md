@@ -44,6 +44,51 @@
    - **按会话静默**（`state/silent-sessions.json`，`/silent` 写的就是它）：只静默**发出指令的那个会话**（如 `group:123456`），该会话里群友消息不再投递给 agent（仅记录日志），管理员消息照常；别的群与私聊完全不受影响。`/active`（或 `/silent off`）只解除本会话。
    - **全局静默**（`state/current-role.json` 的 `mode:"silent"`，管理端 `POST /api/role-mode` 写）：所有会话一起静默（主人私聊除外）。**没有任何 QQ 指令能写它**；升级前由旧 `/silent` 留下的值仍被尊重（读取兼容），在任意会话发 `/active` 即可清掉。
 
+## 会话归档（`src/core/session-archive.js`）
+
+DSH 侧会话目录会堆积，桥自己定时把「空闲」的会话归档，防止 `~/.dsh/sessions` 无限膨胀。
+
+配置在 `config.json` 的 `social.sessionArchive`（当前线上值）：
+
+```json
+{
+  "enabled": true,
+  "intervalMs": 600000,
+  "idleMinutes": 30,
+  "batchMax": 20,
+  "pruneDays": 0
+}
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `enabled` | 关掉时启动日志会打「空闲会话自动归档已关闭」，不巡检 |
+| `intervalMs` | 巡检间隔，默认 10 分钟 |
+| `idleMinutes` | 闲置多久算候选，默认 30 分钟 |
+| `batchMax` | 单次最多归档几个，防一口气搬空 |
+| `pruneDays` | 归档目录保留天数；`0` = 不清理 |
+
+**怎么确认它在工作**：`state/bridge.log` 里搜 `[archive]`，正常形如
+
+```
+[archive] 已归档闲置会话 session-xxx（闲置 31 分钟）
+[archive] 巡检完成：扫描 87，保护 9，候选 1，归档 1，清理 0，失败 0（本地已归档 159）
+```
+
+启动时会有一行「空闲会话自动归档已启用：每 10 分钟巡检一次，闲置超过 30 分钟即归档（保留期 不清理）」。没有这行、或显示「已关闭」，就是没跑起来。
+
+**控制台也能查/手动触发**：同一路径两个方法 ——
+
+```
+GET  /api/social/session-archive              → sessionArchiveStatus()
+POST /api/social/session-archive              → 立即巡检
+     body: {force:false 或 dryRun:true, allWorkspaces, idleMinutes, batchMax}
+```
+
+只查状态用 GET；想先看会动哪些会话就 `POST {"dryRun":true}`，它不会真的搬。
+
+**注意区分**：这里归档的是 DSH 会话目录，不是会话内部的上下文压缩（后者由预设层 `compaction-basic` 管）。两件事完全不同，排查时别混。
+
 ## 黑话 / 网络用语学习与迭代
 
 - 桥接会把普通群聊消息放入滚动窗口（`state/slang.json` 的候选来源），攒够 `slang.extractMinMessages` 条后交给独立 DSH 学习会话提取“疑似黑话”。

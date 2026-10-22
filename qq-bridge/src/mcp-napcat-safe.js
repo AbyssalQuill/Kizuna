@@ -2318,7 +2318,7 @@ registerTool(
       const mrVoice = await autoMarkReadAfterSend(key, token, markRead);
       return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrVoice }, null, 2) }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `发送语音失败：${error?.message ?? error}（语音发不出去时改用文字回复，不要反复重试）` }], isError: true };
+      return { content: [{ type: 'text', text: `发送语音失败：${error?.message ?? error}（若本轮尚未发送过文字，可改用文字回复；若本轮已有文字发出，严禁补发文字避免重复刷屏，直接 OK 结束本轮即可）` }], isError: true };
     }
   }
 );
@@ -3425,6 +3425,9 @@ function stageImageBytes(buf, cfg, tag) {
                 original: true,
                 sha256: crypto.createHash('sha256').update(buf).digest('hex'),
                 format: extF,
+                viewWith: staged,
+                viewTool: 'mcp__vision__qq_view_image',
+                selfViewCall: { tool: 'mcp__vision__qq_view_image', args: { file: staged } },
                 sent: dataF?.sent ?? null,
                 quoted: dataF?.quoted ?? null,
                 markRead: await autoMarkReadAfterSend(key, token, markRead),
@@ -3503,6 +3506,10 @@ function stageImageBytes(buf, cfg, tag) {
                 original: true,
                 sha256: crypto.createHash('sha256').update(bufM).digest('hex'),
                 format: extM,
+                viewWith: stagedM,
+                viewTool: 'mcp__vision__qq_view_image',
+                viewByMessage: 'mcp__vision__qq_view_message_image',
+                selfViewCall: { tool: 'mcp__vision__qq_view_image', args: { file: stagedM } },
                 sent: sentM?.sent ?? null,
                 quoted: sentM?.quoted ?? null,
                 markRead: await autoMarkReadAfterSend(key, token, markRead),
@@ -3554,6 +3561,9 @@ function stageImageBytes(buf, cfg, tag) {
               imageUrl: got.url || url,
               bytes: buf.length,
               format: ext,
+              viewWith: tmpPath,
+              viewTool: 'mcp__vision__qq_view_image',
+              selfViewCall: { tool: 'mcp__vision__qq_view_image', args: { file: tmpPath } },
               sent: data?.sent ?? null,
               quoted: data?.quoted ?? null,
               markRead: await autoMarkReadAfterSend(key, token, markRead),
@@ -3602,7 +3612,7 @@ if (cfg.social?.tools?.pixiv !== false) {
       multiPage: z.boolean().optional().describe('true = only multi-image works (pageCount>1): for sets / series, or manga with panels'),
       excludeAi: z.boolean().optional().describe('true = drop AI-generated works (aiType=2, plus an AI-tag fallback; measured: aiType=2 is AI, 1 is hand-drawn)'),
       illustType: z.enum(['illust', 'manga']).optional().describe('Only illustrations (illust, illustType=0) or manga (manga, illustType=1). illustType=2 animations (ugoira) belong to neither and are excluded by both values'),
-      sort: z.enum(['date_desc', 'date_asc', 'random']).optional().describe('Order: date_desc = newest first (default) / date_asc = oldest first / random (useful for "just give me any"). **Popularity / bookmark sorting is not supported** - no source returns a bookmark count; popular/hot/rank fall back to date_desc with the reason written into scan.warnings'),
+      sort: z.enum(['date_desc', 'date_asc', 'random', 'popular', 'bookmarks_desc']).optional().describe('Order: popular = highest bookmarks / favorites first (RECOMMENDED for picking top-quality / aesthetic artwork) / date_desc = newest first (default) / date_asc = oldest first / random'),
       scanPages: z.number().optional().describe('How many pages to walk forward looking for matches: default 3, cap 10 (clamped). Filtering is local and a page holds only 60 works (30 via app-api), so too few hits means walking further; scan.pagesScanned is the real number of pages scanned - few results does not mean the site has few'),
     },
     async ({ query, page, limit, r18, tags, author, orientation, minWidth, minHeight, multiPage, excludeAi, illustType, sort, scanPages }) => {
@@ -3643,7 +3653,7 @@ if (cfg.social?.tools?.pixiv !== false) {
       multiPage: z.boolean().optional().describe('true = only multi-image works (pageCount>1); combine with page to pick which image of a set'),
       excludeAi: z.boolean().optional().describe('true = drop AI-generated works (aiType=2 plus an AI-tag fallback)'),
       illustType: z.enum(['illust', 'manga']).optional().describe('Only illustrations (illust, illustType=0) or manga (manga, illustType=1); illustType=2 animations (ugoira) are excluded by both values'),
-      sort: z.enum(['date_desc', 'date_asc', 'random']).optional().describe('Order: date_desc = newest first (default) / date_asc = oldest first / random. **Popularity / bookmark sorting is not supported** (no source returns a bookmark count); it falls back to date_desc and writes the reason into a warning'),
+      sort: z.enum(['date_desc', 'date_asc', 'random', 'popular', 'bookmarks_desc']).optional().describe('Order: popular = highest bookmarks / favorites first (RECOMMENDED for picking top-quality / aesthetic artwork) / date_desc = newest first (default) / date_asc = oldest first / random'),
       scanPages: z.number().optional().describe('How many pages to walk forward looking for matches: default 3, cap 10. Filtering is local, so too few hits means walking further'),
       markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
       crossSession: z.boolean().optional().describe('ONLY when deliberately sending into a different session than the one you are answering; the key must be that session\'s own (a key that is not this session\'s is refused)'),
@@ -3908,6 +3918,11 @@ if (cfg.social?.tools?.pixiv !== false) {
               bytes: buf.length,
               sha256,
               format: ext,
+              // 你自己也看得见这张图：用视觉工具按这个路径回看（napcat 那一路经压缩代理只剩文本）。
+              // selfViewCall 是「下一步该怎么调」的现成一行，模型照抄即可，不用再猜工具名/参数名。
+              selfViewCall: { tool: 'mcp__vision__qq_view_image', args: { file: tmpPath } },
+              viewWith: tmpPath,
+              viewTool: 'mcp__vision__qq_view_image',
               pixels: gotPixels || undefined,
               fetchedFrom: gotFrom,
               // 元数据是谁给的（app-api / web-ajax / mirror）+ 字节是谁给的（直联 i.pximg / 镜像代理）

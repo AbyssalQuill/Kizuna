@@ -20,7 +20,7 @@ import { log } from '../lib/log.js';
 import { STATE_DIR, ROOT } from '../lib/paths.js';
 import { readJsonSafe, atomicWriteJson, atomicWriteText } from '../lib/json-fs.js';
 import { dshReady } from './dsh-session.js';
-import { learnerSessions, learnerWaiters, learnerCollectors, markPersistentLearner, unmarkPersistentLearner, isLearnerSessionGone } from './slang.js';
+import { learnerSessions, learnerWaiters, learnerCollectors, markPersistentLearner, unmarkPersistentLearner, isLearnerSessionGone, learnSessionExistsForRestore } from './slang.js';
 import { initMemoryDb, setProfileField, getProfile, profileDisplayName } from './memory.js';
 import { initChatDb } from './chat-db.js';
 import { ensureLearningToken } from './learning-token.js';
@@ -122,10 +122,15 @@ export async function ensurePersonaLearnerSession() {
   }
   const saved = readJsonSafe(PERSONA_SESSION_FILE, null);
   if (saved?.sessionId) {
-    personaLearnerSessionId = String(saved.sessionId);
-    learnerSessions.add(personaLearnerSessionId);
-    markPersistentLearner(personaLearnerSessionId);
-    return personaLearnerSessionId;
+    // 同 slang：复用前先确认 DSH 侧还认得这个会话（0.2.1 起会话按 cwd 分目录，旧 id 会失效）
+    if (await learnSessionExistsForRestore(saved.sessionId)) {
+      personaLearnerSessionId = String(saved.sessionId);
+      learnerSessions.add(personaLearnerSessionId);
+      markPersistentLearner(personaLearnerSessionId);
+      return personaLearnerSessionId;
+    }
+    log(`人格学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
+    try { fs.unlinkSync(PERSONA_SESSION_FILE); } catch {}
   }
   if (!apiRef) throw new Error('人格学习 API 未注入（setPersonaLearnApi 未调用）');
   const dir = path.join(STATE_DIR, 'persona-agent');

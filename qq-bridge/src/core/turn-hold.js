@@ -37,7 +37,7 @@
 //   6. 每个提前返回都留日志 —— 这个功能吃过四次"静默失败"的亏。
 import { log } from '../lib/log.js';
 import { inboxDeliveryPending, noteStepEnd, noteInboxDelivery } from './inbox-marks.js';
-import { getSocialState, saveSocialState } from './social-state.js';
+import { getSocialState, saveSocialState, scheduleAfterthought } from './social-state.js';
 import { reverse, TurnStartAt, collectors, holdActiveKeys, turnHasBubble } from './session-state.js';
 import { steerIntoRunningTurn, markSteerCycleStart, collectMidTurnBatch, rotationDue, markRotatePending } from './wake-send.js';
 import { touchTurnGuardsByKey } from './turn-guard.js';
@@ -156,6 +156,19 @@ async function holdLoop({ key, sid, st, turn, t, cfg, shouldAbort }) {
   const maxWaitMs = Math.max(idleCloseMs, Math.round(Number(t.maxWaitMs) || 3600000));
   // 单次 HTTP 请求最多持有多久（必须 < 插件侧 timeoutMs，也必须 < undici 的 300s）。
   const requestBudgetMs = Math.min(120000, Math.max(3000, Math.round(Number(t.requestBudgetMs) || 55000)));
+  /* 2026-09-29：报障「私聊卡在『深度求索中…22 分 42 秒』」。
+   * 现场（生产 bridge.log / dsh-qq-hold.log，private:1736784911 turn=6）：
+   * 从 14:06:33 起每 55s 回一次 `keep-holding`、exchanges=0，模型这一步一个气泡都没有
+   * （turnHasBubble=false），手上也没有待交付批次 —— 于是 answered-idle 那条永远命中不了，
+   * 只能等 idleCloseMs（默认 1800s=30 分钟），界面就一直挂着"思考中"。
+   * 保持的唯一价值是"把对方连发的几句并在同一回合"；本回合一个字都没说过时，
+   * 静默这么久只剩副作用（界面骗人 + 消息被拖着不复试）。
+   * 语义（noBubbleCloseMs，默认 120s，下限 30s）：
+   *   本回合没说过话 + 距本回合保持开始已静默超过它 + 手上无待交付批次 → 放行关回合。
+   * 基准用 totalStartedAt（跨"分段持有"累计，见 _holdStartedAt），不能用 lastActivity：
+   *   后者每次钩子重新进入都会重置，而单段预算只有 55s，判据永远到不了（线上就是这样挂满 30 分钟的）。
+   * 放行不等于丢消息：未读仍在 unread 里，由投递看门狗 / 下一次唤醒照常取（同 2026-09-22 那条判据）。 */
+  const noBubbleCloseMs = Math.max(30000, Math.round(Number(t.noBubbleCloseMs) || 120000));
 
   const turnNo = Number(turn) || 0;
   if (Number(st._holdTurn) !== turnNo) {
@@ -184,6 +197,17 @@ async function holdLoop({ key, sid, st, turn, t, cfg, shouldAbort }) {
     st._holdStartedAt = 0;
     saveSocialState();
     log(`[hold] ${key} 回合保持结束（${reason}，本回合共 ${1 + exchanges} 次来回）`);
+    if (reason === 'answered-idle' && key && key.startsWith('private:')) {
+      try {
+        if (st.afterthoughtTimer) {
+          clearTimeout(st.afterthoughtTimer);
+          st.afterthoughtTimer = null;
+        }
+        scheduleAfterthought(key);
+      } catch (e) {
+        log(`[afterthought] 回合收尾安排追念失败: ${e?.message ?? e}`);
+      }
+    }
     return { close: true, reason, exchanges };
   };
 
@@ -198,7 +222,7 @@ async function holdLoop({ key, sid, st, turn, t, cfg, shouldAbort }) {
    * 连 'answered-idle' 那条都命中不了，必然拖到 30 分钟 —— 这正是线上看到的现象。
    * 所以：自发起回合 + 手上没有待交付批次 → 立刻收尾。
    * 待交付批次非空时仍不收（那是刚到的真实消息，必须让它 steer 进本回合）。 */
-  const SELF_INITIATED_WAKES = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart)$/;
+  const SELF_INITIATED_WAKES = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/;
   const wakeBaseReason = String(st.lastWakeReason ?? '').split(':')[0];
   if (SELF_INITIATED_WAKES.test(wakeBaseReason) && collectMidTurnBatch(st).length === 0) {
     log(`[hold] ${key} 本回合是自发起唤醒（${wakeBaseReason}）且无待交付消息 → 立即收尾，不再挂住"深度求索中"`);
@@ -234,6 +258,17 @@ async function holdLoop({ key, sid, st, turn, t, cfg, shouldAbort }) {
       if (answered) {
         log(`[hold] ${key} 本回合已经答过（${answeredIdleMs === 0 ? '答完即刻收' : Math.round(answeredIdleMs / 1000) + 's 无新消息'}）→ 收回合，别再让界面挂着"思考中"`);
         return finish('answered-idle');
+      }
+    }
+    /* 2026-09-29：模型一步都没说话（无气泡）且手上没有待交付批次 → 静默 noBubbleCloseMs 后放行。
+     * 放在这里：answered-idle 之后、idle/max-wait 之前 —— 后两条是兜底，不该再让对方等 30 分钟。
+     * 只在"无待交付"时命中：手头有刚到的消息时必须留给下面的 steer 逻辑并进本回合。 */
+    if (!collectMidTurnBatch(st).length && !inboxDeliveryPending(sid) && now() - totalStartedAt >= noBubbleCloseMs) {
+      let spoke = false;
+      try { spoke = turnHasBubble(key, sid, st) === true; } catch { spoke = false; }
+      if (!spoke) {
+        log(`[hold] ${key} 本回合模型一步都没说话（无气泡，已静默 ${Math.round((now() - totalStartedAt) / 1000)}s，无待交付）→ 放行关回合，不再挂到 ${Math.round(idleCloseMs / 1000)}s`);
+        return finish('no-bubble-idle');
       }
     }
     if (now() - lastActivity >= idleCloseMs) return finish('idle');

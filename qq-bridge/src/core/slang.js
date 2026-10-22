@@ -62,6 +62,38 @@ export function isLearnerSessionGone(message) {
   return /not[\s._-]*found|no such session|unknown session|invalid session|404|会话(不存在|已失效|无效)/i.test(msg);
 }
 
+/**
+ * 恢复持久化的学习会话前先探活：0.2.1 起会话存储按 cwd 分目录，升级/清理后旧 sessionId
+ * 可能只剩在 state/*.json 里、DSH 侧早没了。直接复用会让之后每次 prompt 都吃
+ * "session ... not found"（实测人格学习连续 44 次全挂），所以复用前先问一次。
+ *
+ * 约定：探活本身失败（网络/接口异常/分页没走完）一律按"还在"处理 —— 宁可多试一次复用，
+ * 也不能因为一次抖动就把登记删掉、白丢一个已经喂了大量语料的学习会话。
+ */
+export async function learnSessionExistsForRestore(sessionId) {
+  const id = String(sessionId ?? '').trim();
+  if (!id) return false;
+  if (!apiRef?.sessions?.list) return true;
+  try {
+    const seen = new Set();
+    let cursor = null;
+    for (let page = 0; page < 50; page++) {
+      const req = {};
+      if (cursor) req.cursor = cursor;
+      const res = await apiRef.sessions.list(req);
+      if (!res?.result?.ok) return true;
+      const value = res.result.value ?? {};
+      for (const item of value.items ?? []) {
+        const sid = item?.sessionId ?? item?.id;
+        if (typeof sid === 'string' && sid) seen.add(sid);
+      }
+      cursor = value.nextCursor ?? value.cursor ?? null;
+      if (!cursor) return seen.has(id);
+    }
+    return true; // 翻到上限还没扫完：不确定，按还在处理
+  } catch { return true; }
+}
+
 /** main 侧整体替换（console 批量操作后） */
 export function setSlangEntries(next) { slangEntries = next; }
 export function setSlangLearnerSessionId(v) { slangLearnerSessionId = v; }
@@ -87,9 +119,14 @@ export async function ensureSlangLearnerSession() {
   }
   const saved = readJsonSafe(SLANG_SESSION_FILE, null);
   if (saved?.sessionId) {
-    slangLearnerSessionId = String(saved.sessionId);
-    learnerSessions.add(slangLearnerSessionId);
-    return slangLearnerSessionId;
+    // 复用前探活：DSH 侧会话没了就丢掉登记、走下面的新建，别让后续 prompt 反复 not found
+    if (await learnSessionExistsForRestore(saved.sessionId)) {
+      slangLearnerSessionId = String(saved.sessionId);
+      learnerSessions.add(slangLearnerSessionId);
+      return slangLearnerSessionId;
+    }
+    log(`黑话学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
+    try { fs.unlinkSync(SLANG_SESSION_FILE); } catch {}
   }
   const dir = path.join(STATE_DIR, 'slang-agent');
   fs.mkdirSync(dir, { recursive: true });

@@ -506,8 +506,18 @@ export class NodeApiClient {
         if (shouldResetSeqWatermark(known, maxRec)) {
           console.log(`[dsh-client] 会话 ${sessionId} 快照最大 seq=${maxRec} 远低于持久化水位 ${known}，判定 DSH 侧序号已重置，丢弃旧水位`);
           this._sidSeq.delete(sessionId);
+          // 【2026-10-21 修：重放放大】
+          // 原来这里 known=0，等于把闸门整个拆掉 —— 快照里最多 200 条历史会被当成新事件
+          // 全部投给下游，而下游 pumpMux 对重放帧和实时帧完全同形、分不出来，于是历史回合的
+          // 副作用被重跑一遍（重复计 token、重复累加 noActionCount、重复 saveSocialState、
+          // 重放"无正文收尾"把新未读误标已读）。0.2.1 升级后每个活跃会话的 seq 都从 1 重计，
+          // 几乎必然触发一次，实测同一秒 8 个会话同时重置、tool-calls.jsonl 里 332 个键多出 668 份。
+          //
+          // 正确做法：seq 重置后"快照里最新那条"就是已知的最新状态，把它当作新水位起点，
+          // 只放行比它更大的实时帧。历史既不重放，新事件也不丢（seq 单调递增）。
+          known = maxRec;
+          this._sidSeq.set(sessionId, maxRec);
           this._scheduleSeqSave();
-          known = 0;
         }
         let max = known;
         for (const rec of value.records) {

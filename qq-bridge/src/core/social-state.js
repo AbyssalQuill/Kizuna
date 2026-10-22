@@ -466,6 +466,12 @@ export function isConversationBusy(key, st) {
   return false;
 }
 
+// 检查当前是否有真实的 DSH 模型回合在跑（模型正在思考/执行工具）
+export function isTurnActivelyRunning(key) {
+  const sid = state.sessions[key];
+  return Boolean(sid && (TurnStartAt.has(sid) || collectors.has(sid)));
+}
+
 // ── M8 内层 SCC（P4-17 迁入）：访问器 + 调度器。sendWakePrompt 仍驻 main，
 //    经 setWakeSender/dispatchWake 注入解耦。 ──────────────────────────────────
 
@@ -559,6 +565,9 @@ export function getSocialState(key) {
       pendingWakeTimer: null,
       sleepTimer: null,
       replyCheckTimer: null,
+      afterthoughtTimer: null,
+      _lastAfterthoughtIncomingAt: 0,
+      _lastAfterthoughtAt: 0,
       proactiveTimer: null,
       lastIncomingAt: 0,
       preSleepWaitSatisfiedAt: 0,
@@ -602,6 +611,13 @@ export function resetConversationKeepingLedger(key) {
   const canonical = canonicalKey(key);
   if (!canonical) return null;
   const prev = social.conversations.get(canonical) || null;
+  // 【2026-10-21 修：定时器泄漏】
+  // 原来这里直接 delete，没先清定时器。proactive/reply 的回调是闭包捕获旧 st 的，
+  // 删掉 map 里的条目并不会让已排的 timer 消失 —— 到点后它仍按旧 st 评估 idle/fresh，
+  // 命中就 dispatchWake，给一个"刚重置过的新会话"多排一次唤醒；replyCheck 那个虽多半
+  // 因旧 st.unread 为空而 return，但 timer 本身一直挂着。反复 reset 就累积多条主动链。
+  // 清定时器必须发生在 delete 之前（clearSocialTimers 内部按 key 取 st，删了就取不到了）。
+  if (prev) clearSocialTimers(canonical);
   social.conversations.delete(canonical);
   if (!prev) return null;
   const carried = carryReplyLedger(prev);
@@ -653,6 +669,9 @@ export function loadSocialState() {
           pendingWakeTimer: null,
           sleepTimer: null,
           replyCheckTimer: null,
+          afterthoughtTimer: null,
+          _lastAfterthoughtIncomingAt: Number(val._lastAfterthoughtIncomingAt) || 0,
+          _lastAfterthoughtAt: Number(val._lastAfterthoughtAt) || 0,
           proactiveTimer: null,
           lastIncomingAt: Number(val.lastIncomingAt) || 0,
           lastAiSeenAt: Number(val.lastAiSeenAt) || 0,
@@ -754,9 +773,23 @@ export function ensureWakeable(st, opts = {}) {
 
 export function cancelReplyCheck(key) {
   const st = social.conversations.get(key);
-  if (!st || !st.replyCheckTimer) return;
-  clearTimeout(st.replyCheckTimer);
-  st.replyCheckTimer = null;
+  if (!st) return;
+  if (st.replyCheckTimer) {
+    clearTimeout(st.replyCheckTimer);
+    st.replyCheckTimer = null;
+  }
+  if (st.afterthoughtTimer) {
+    clearTimeout(st.afterthoughtTimer);
+    st.afterthoughtTimer = null;
+  }
+  if (st.afterthoughtTimer) {
+    clearTimeout(st.afterthoughtTimer);
+    st.afterthoughtTimer = null;
+  }
+}
+
+export function cancelAfterthought(key) {
+  cancelReplyCheck(key);
 }
 
 export function cancelProactiveCheck(key) {
@@ -953,18 +986,49 @@ export function scheduleWake(key, reason) {
     }
     return;
   }
+
+  // 思考中即时注入（需求：在思考的过程中，如果又发了一条，还能看见，而不必再次收尾和唤醒，也不是合并为窗口）：
+  // 如果会话当前正有真实的 DSH 模型回合在跑（TurnStartAt 或 collectors 标记在跑）：
+  // 绝不等待合并窗、不排队，立即将新未读 steer 进在途回合，让模型在当前思考中直接看见并一并处理！
+  const sid = state.sessions[key];
+  const isTurnRunning = Boolean(sid && (TurnStartAt.has(sid) || collectors.has(sid)));
+  if (isTurnRunning && typeof steerSender === 'function') {
+    log(`[steer] ${key} 模型正在思考中（Turn 运行中），立即执行在途回合即时注入（跳过合并窗与节流）`);
+    cancelReplyCheck(key);
+    void (async () => {
+      try {
+        const ok = await steerSender(key, reason, {
+          immediate: true,
+          force: true,
+          noTypingGate: true,
+          skipHold: true,
+          noCollect: true,
+          noCycleGate: true
+        });
+        if (ok === true) {
+          log(`[steer] ${key} 思考中即时注入成功：已直接送达在途回合 inbox，模型在思考中即可看见并一并处理`);
+          if (st.pendingWakeTimer) {
+            clearTimeout(st.pendingWakeTimer);
+            st.pendingWakeTimer = null;
+          }
+          return;
+        }
+        log(`[steer] ${key} 思考中即时注入返回 ${JSON.stringify(ok)}，未成功送达，安排常规唤醒`);
+        schedulePendingWake(key, reason, st);
+      } catch (err) {
+        log(`[steer] ${key} 思考中即时注入异常，安排常规唤醒:`, err?.message ?? err);
+        schedulePendingWake(key, reason, st);
+      }
+    })();
+    return;
+  }
+
+  schedulePendingWake(key, reason, st);
+}
+
+function schedulePendingWake(key, reason, st) {
   if (isConversationBusy(key, st)) {
-    // 2026-09-12 架构收敛：这里故意不做任何投递，只放行到下面的合并窗。
-    // 与 wake-send.js 的 busy 分支（真正投递那一刻的判定）分工如下：
-    //   · 这里 = "合并窗之前"的判定。此刻刚到的消息还没攒够，必须先走合并窗
-    //     （2026-09-11 的实测教训：为了压延迟把合并窗压到 800ms，两条隔 2 秒的消息被拆成两批，
-    //      "正常人肯定一起回"的话被甩成两条回复）。在这里 steer 会绕过合并窗，等于把那个坑再踩一次。
-    //   · wake-send.js 那份 = "投递那一刻"的判定。那时批已经攒好，才该决定"塞进在途回合"还是"正常唤醒"。
-    // 所以：忙时不暂存、不丢消息，只是等合并窗；到点后由 wake-send 优先 steer 进在途回合，
-    // 塞不进去则走正常唤醒——而正常唤醒现在也是 steer 投递（prompt-deliver.js），
-    // 因此无论哪条路都不可能再卡在 DSH 的 next-turn 队列里（2026-09-11 23:58 报的故障）。
     log(`[default] ${key} 会话繁忙但模型未在等待工具里 → 先攒合并窗，到点后优先塞进在途回合（不暂存，避免永久卡死）`);
-    // 故意不 return：继续走下面的合并窗 + 正常唤醒流程
   }
   cancelReplyCheck(key); // 真实唤醒已接管，取消普通回复检查，避免 30s 后再补一刀
   if (st.sleepTimer) {
@@ -1313,6 +1377,58 @@ export function scheduleReplyCheck(key) {
   log(`[default] 已安排回复检查唤醒 ${key}，${Math.round(delay / 1000)}s 后检查`);
 }
 
+// 短时延展追念 / 碎碎念机制 (Afterthought & Continuation)
+// AI 在主人私聊收尾后开启 25s ~ 45s 的轻量观察窗口，自然概率触发一次追念
+export function scheduleAfterthought(key) {
+  if (!key || !key.startsWith('private:')) return; // 碎碎念专属于主人私聊
+  if (cfgRef.social?.enabled === false) return;
+  if (social.paused) return;
+  if (inDndWindow()) return;
+  const st = getSocialState(key);
+  if (!st) return;
+  if (st.afterthoughtTimer) return;
+  const lastIncoming = Number(st.lastIncomingAt) || 0;
+  if (st._lastAfterthoughtIncomingAt && st._lastAfterthoughtIncomingAt === lastIncoming) {
+    return; // 这一轮交互已经追念过一次，绝不连环追发
+  }
+
+  const delay = Math.round(25000 + Math.random() * 20000);
+  st.afterthoughtTimer = setTimeout(() => {
+    st.afterthoughtTimer = null;
+    // 检查1：如果有新未读，正常唤醒接管
+    if (Array.isArray(st.unread) && st.unread.length > 0) {
+      log(`[afterthought] 存在未读新消息，跳过追念 ${key}`);
+      return;
+    }
+    // 检查2：如果会话正在忙（在途思考/执行工具），跳过
+    if (isConversationBusy(key, st)) {
+      log(`[afterthought] 会话忙，跳过追念 ${key}`);
+      return;
+    }
+    // 检查3：防重复（同一轮用户发言只追念一次）
+    const currentIncoming = Number(st.lastIncomingAt) || 0;
+    if (st._lastAfterthoughtIncomingAt && st._lastAfterthoughtIncomingAt === currentIncoming) {
+      log(`[afterthought] 本轮交互已追念过，跳过 ${key}`);
+      return;
+    }
+    // 检查4：自然概率骰子（默认 0.45）
+    const p = Number(cfgRef.social?.afterthoughtProbability ?? 0.45);
+    const dice = Math.random();
+    if (dice > p) {
+      log(`[afterthought] 概率未命中 (${dice.toFixed(2)} > ${p})，保持安静 ${key}`);
+      return;
+    }
+    st._lastAfterthoughtIncomingAt = currentIncoming;
+    st._lastAfterthoughtAt = Date.now();
+    log(`[afterthought] 命中短时追念窗口 (${Math.round(delay / 1000)}s, dice=${dice.toFixed(2)} <= ${p}) → 派发唤醒 ${key}`);
+    void dispatchWake(key, 'afterthought').catch((err) => {
+      log(`[afterthought] 唤醒异常 ${key}:`, err?.message ?? err);
+    });
+  }, delay);
+  st.afterthoughtTimer.unref?.();
+  log(`[afterthought] 已安排短时追念观察 ${key}，${Math.round(delay / 1000)}s 后判定`);
+}
+
 // 回合收尾提醒 prompt（防"忘记收尾进入永眠"的兜底注入）
 // 2026-09-12：令牌标签改英文括号：[Token]（需求）；提示正文里只留"发生了什么 + 动态数值"
 // （观察时长），具体该怎么做在系统提示词 [WAKE TYPES] 第 13 条。
@@ -1347,6 +1463,10 @@ export function clearSocialTimers(key) {
   if (st.replyCheckTimer) {
     clearTimeout(st.replyCheckTimer);
     st.replyCheckTimer = null;
+  }
+  if (st.afterthoughtTimer) {
+    clearTimeout(st.afterthoughtTimer);
+    st.afterthoughtTimer = null;
   }
   if (st.proactiveTimer) {
     clearTimeout(st.proactiveTimer);

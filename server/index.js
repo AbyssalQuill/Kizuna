@@ -3998,7 +3998,7 @@ app.post('/api/ssh/sync', async (req, res) => {
         }
         // 覆盖远端 state/表情包前暂停远端桥(其 memory.db 同样常开), 结束后统一重启
         if (wantState || wantStickers) {
-          const stR = await sshExecCapture(conn, "cd /root/qq-bridge && (pkill -f 'node src/bridge[.]js' 2>/dev/null || true); sleep 1; echo stopped", 30000);
+          const stR = await sshExecCapture(conn, "cd /root/qq-bridge && (pkill -f 'node .*bridge[.]js' 2>/dev/null || true); sleep 1; echo stopped", 30000);
           steps.push({ step: '暂停远端桥(覆盖数据期间)', ok: stR.ok, msg: '已暂停' });
         }
         if (wantState) {
@@ -4147,7 +4147,7 @@ app.post('/api/ssh/sync', async (req, res) => {
       const localState = join(bridgeDir, 'state');
       if (!existsSync(localState)) return res.json({ success: false, steps: [...steps, { step: '本地 state', ok: false, msg: `本地无 state 目录: ${localState}` }] });
       steps.push({ step: '检查本地 state', ok: true, msg: localState });
-      const stopB = await sshExecCapture(conn, "cd /root/qq-bridge && (pkill -f 'node src/bridge[.]js' 2>/dev/null || true); sleep 1; pgrep -f 'node src/bridge[.]js' >/dev/null && echo still-running || echo stopped", 30000);
+      const stopB = await sshExecCapture(conn, "cd /root/qq-bridge && (pkill -f 'node .*bridge[.]js' 2>/dev/null || true); sleep 1; pgrep -f 'node .*bridge[.]js' >/dev/null && echo still-running || echo stopped", 30000);
       steps.push({ step: '暂停远端桥(合并期间避免写冲突)', ok: stopB.ok, msg: String(stopB.out || stopB.error || '') });
       const rpack = await sshExecCapture(conn, "cd /root/qq-bridge && tar czf /root/qq-bridge-state-merge.tar.gz --exclude=state/agents --exclude='state/*.log' --exclude=state/bridge.lock state 2>/dev/null && echo packed || echo pack-failed", 300000);
       steps.push({ step: '远端打包 state', ok: rpack.ok && String(rpack.out || '').includes('packed'), msg: String(rpack.out || rpack.error || '') });
@@ -4296,7 +4296,7 @@ app.post('/api/ssh/remove-stack', async (req, res) => {
   try {
     conn = await connectOne(server);
     steps.push({ step: '连接服务器', ok: true, msg: `已连接 ${server.username || ''}@${server.host}` });
-    const k = await sshExecCapture(conn, "pkill -f 'node src/bridge[.]js' 2>/dev/null; pkill -f 'start-bridge[.]sh' 2>/dev/null; sleep 1; echo done", 20000);
+    const k = await sshExecCapture(conn, "pkill -f 'node .*bridge[.]js' 2>/dev/null; pkill -f 'start-bridge[.]sh' 2>/dev/null; sleep 1; echo done", 20000);
     steps.push({ step: '停止桥进程', ok: k.ok, msg: k.ok ? (k.out || '已执行') : k.error });
     const sv = await sshExecCapture(conn, "for svc in dsh-web dsh-polyfill; do systemctl disable --now \"$svc\" >/dev/null 2>&1 && echo \"disabled $svc\" || echo \"none $svc\"; done", 120000);
     steps.push({ step: '停用 dsh-web / dsh-polyfill', ok: sv.ok, msg: sv.ok ? (sv.out || '已执行') : sv.error });
@@ -4361,7 +4361,7 @@ app.post('/api/ssh/stack', async (req, res) => {
      * 这一步是本机动作（不是远端命令），所以直接把函数放进 plan —— 执行循环已支持。 */
     ['停止本机 NapCat（单点登录互斥）', stopLocalNapcatBeforeRemote, 0],
     ['启动 NapCat', napcatCtlCommand('start'), 180000],
-    ['启动 QQ 桥', "if pgrep -f 'node src/bridge[.]js' >/dev/null; then echo already-running; else cd /root/qq-bridge && rm -f state/bridge.lock && if [ -f start-bridge.sh ]; then setsid nohup bash start-bridge.sh >state/bridge-nohup.log 2>&1 < /dev/null & else setsid nohup node src/bridge.js >state/bridge-nohup.log 2>&1 < /dev/null & fi; sleep 6; pgrep -f 'node src/bridge[.]js' >/dev/null && echo bridge-started || echo BRIDGE-NOT-RUNNING; fi", 90000],
+    ['启动 QQ 桥', "if pgrep -f 'node .*bridge[.]js' >/dev/null; then echo already-running; else cd /root/qq-bridge && rm -f state/bridge.lock && if [ -f start-bridge.sh ]; then setsid nohup bash start-bridge.sh >state/bridge-nohup.log 2>&1 < /dev/null & else setsid nohup node src/bridge.js >state/bridge-nohup.log 2>&1 < /dev/null & fi; sleep 6; pgrep -f 'node .*bridge[.]js' >/dev/null && echo bridge-started || echo BRIDGE-NOT-RUNNING; fi", 90000],
     // 2026-09-15 反馈"点了启动Bot但 Core 没起来"。真正决定机器人能不能干活的是"桥有没有连上 NapCat"：
     // 进程在 ≠ 能收消息（QQ 掉登录/等扫码时，桥会一直重试、控制台也可能还没起）。这一步把实情摆出来，
     // 让"没启动"和"启动了但 NapCat 还没登录"在界面上区分得清清楚楚。
@@ -4369,7 +4369,7 @@ app.post('/api/ssh/stack', async (req, res) => {
     ['端口自检', "ss -lntp 2>/dev/null | grep -E ':(3080|3100|3000|3001|6099)' || echo '未发现监听端口（可能还在启动）'", 30000],
   ];
   const stopPlan = [
-    ['停止 QQ 桥', "pkill -f 'node src/bridge[.]js' 2>/dev/null; pkill -f 'start-bridge[.]sh' 2>/dev/null; sleep 2; pgrep -f 'node src/bridge[.]js' >/dev/null && echo still-running || echo stopped", 60000],
+    ['停止 QQ 桥', "pkill -f 'node .*bridge[.]js' 2>/dev/null; pkill -f 'start-bridge[.]sh' 2>/dev/null; sleep 2; pgrep -f 'node .*bridge[.]js' >/dev/null && echo still-running || echo stopped", 60000],
     ['停止 NapCat', napcatCtlCommand('stop'), 180000],
     ['停止 DSH', 'systemctl stop dsh-web 2>&1; if systemctl cat dsh-polyfill.service >/dev/null 2>&1; then systemctl stop dsh-polyfill 2>&1; POLY=$(systemctl is-active dsh-polyfill 2>/dev/null); else POLY=未安装; fi; sleep 2; echo "dsh-web=$(systemctl is-active dsh-web 2>/dev/null) dsh-polyfill=$POLY"', 60000],
   ];
@@ -4424,8 +4424,8 @@ app.post('/api/ssh/service', async (req, res) => {
   /* 2026-09-14：起桥必须放进子 shell `( ... & )`：直接 `... &` 会让后台进程挂在这次
    * SSH 通道上，ssh2 收不到退出码（报 "远程命令 exit null"，看着像失败，其实桥起来了/或相反）。
    * 子 shell + setsid + 三个重定向 = 彻底脱离，通道正常关闭并带回退出码。 */
-  const bridgeStart = 'cd ' + B + ' && rm -f state/bridge.lock && (setsid nohup bash start-bridge.sh >state/bridge-nohup.log 2>&1 < /dev/null &) ; sleep 7; pgrep -f \'node src/bridge[.]js\' >/dev/null && echo bridge-started || echo BRIDGE-NOT-RUNNING';
-  const bridgeStop = 'pkill -f \'node src/bridge[.]js\' 2>/dev/null; sleep 2; pgrep -f \'node src/bridge[.]js\' >/dev/null && echo still-running || echo stopped';
+  const bridgeStart = 'cd ' + B + ' && rm -f state/bridge.lock && (setsid nohup bash start-bridge.sh >state/bridge-nohup.log 2>&1 < /dev/null &) ; sleep 7; pgrep -f \'node .*bridge[.]js\' >/dev/null && echo bridge-started || echo BRIDGE-NOT-RUNNING';
+  const bridgeStop = 'pkill -f \'node .*bridge[.]js\' 2>/dev/null; sleep 2; pgrep -f \'node .*bridge[.]js\' >/dev/null && echo still-running || echo stopped';
   const cmdOf = (c, a) => {
     if (c === 'dsh') return `systemctl ${a} dsh-web 2>&1; sleep 2; echo "dsh-web=$(systemctl is-active dsh-web 2>/dev/null)"`;
     if (c === 'napcat') {
@@ -4457,7 +4457,7 @@ app.post('/api/ssh/service', async (req, res) => {
     const tail = out.split('\n').filter(Boolean).slice(-1)[0] || '';
     // 成败按"动作方向"判断：stop 之后应为"已停"（dsh-web=inactive / napcat::Exited / stopped），
     // start|restart 之后应为"在跑"（dsh-web=active / napcat::Up / bridge-started）。
-    const upRe = /dsh-web=active|::Up |bridge-started/;
+    const upRe = /dsh-web=active|::Up |bridge-started|already-running/;
     const downRe = /dsh-web=inactive|::Exited|^stopped$/;
     const okFlag = r.ok && (act === 'stop' ? downRe.test(tail) : upRe.test(tail));
     const preNote = preStop && preStop.ok ? `（${preStop.out}）` : '';
@@ -6720,7 +6720,7 @@ function sshExecCaptureRaw(conn, command, timeoutMs = 8000) {
  * 重启远端桥（代码同步 / 数据合并 / 克隆 三条路都用这一个）。
  *
  * 2026-09-19 真机事故：这一步报成功、其实什么都没重启：
- * 原来各处都是内联一条 `cd /root/qq-bridge && nohup bash start-bridge.sh …& sleep 3; pgrep -f 'node src/bridge[.]js' && echo bridge-up || echo bridge-down`：
+ * 原来各处都是内联一条 `cd /root/qq-bridge && nohup bash start-bridge.sh …& sleep 3; pgrep -f 'node .*bridge[.]js' && echo bridge-up || echo bridge-down`：
  *   ① `start-bridge.sh` 不会替你杀旧进程 → 旧桥继续占着 3100，新实例报 `listen EADDRINUSE` 自己退出；
  *   ② 而判据只看"有没有桥进程"—— 旧桥正好命中，于是永远回 "bridge-up"、界面显示"重启成功"，
  *      新同步上去的代码一行都没生效（实测 2026-09-19 的两次同步都是这样，服务器 pid 一直没变）。
@@ -6806,7 +6806,7 @@ function resolveBridgeTarget() {
 /* 2026-09-14：连上服务器后要能在界面上看到服务端的真实运行状态：
  *   DSH  = systemctl is-active dsh-web
  *   NapCat = systemctl is-active napcat（或回退 docker ps）→ 归一成 Up/Exited + 3000/3001/6099 端口
- *   桥   = pgrep -f 'node src/bridge[.]js' + 3100
+ *   桥   = pgrep -f 'node .*bridge[.]js' + 3100
  * 实现要点：
  *   · 一条组合命令 + 分段标记（@@XXX），只走一次 exec（ssh2 的 exec 只是新开一条 channel，
  *     用的还是 sshConnections 里那一条已建立的连接）；
@@ -6892,7 +6892,7 @@ function buildRemoteStatusCommand(server) {
     "echo '@@PORTS'",
     portLoop,
     "echo '@@BRIDGEPROC'",
-    "pgrep -af 'node src/bridge[.]js' 2>/dev/null || true",
+    "pgrep -af 'node .*bridge[.]js' 2>/dev/null || true",
     "echo '@@BRIDGEDIR'",
     'for d in /root/qq-bridge "$HOME/qq-bridge" /opt/qq-bridge /srv/qq-bridge "$HOME/app/qq-bridge" "$HOME/workspace/qq-bridge"; do [ -f "$d/config.json" ] && { echo "$d"; break; }; done',
     "echo '@@DSHTOKEN'",
@@ -8710,7 +8710,7 @@ function zeroDayScoped(rep) {
 app.get('/api/learning/token-report', async (_req, res) => {
   const cfg = loadConfig();
   const connected = cfg.activeServerId ? cfg.servers.find((s) => s.id === cfg.activeServerId) || null : null;
-  const out = { ok: true, at: Date.now(), mode: connected && sshConnections.has(connected.id) ? 'ssh' : 'local', local: null, remote: null, total: null, localReason: '', remoteReason: '', remoteServer: null, remoteStale: false, remoteStaleDay: false, remoteAt: 0, contextSavings: null };
+  const out = { ok: true, at: Date.now(), mode: connected && sshConnections.has(connected.id) ? 'ssh' : 'local', local: null, remote: null, total: null, localReason: '', remoteReason: '', remoteServer: null, remoteStale: false, remoteStaleDay: false, localStaleDay: false, remoteAt: 0, contextSavings: null };
   let remoteSavings = null;
 
   // ① 本机那份：永远保留（哪怕服务器连上了）——以前 SSH 模式把这块整个吞掉了
@@ -8718,7 +8718,20 @@ app.get('/api/learning/token-report', async (_req, res) => {
   try {
     const t = getLocalBridgeTarget();
     const r = await fetchTokenReportFrom(t.base, t.token);
-    if (r.ok) { out.local = r.report; localSavings = r.contextSavings || null; }
+    if (r.ok) {
+      out.local = r.report; localSavings = r.contextSavings || null;
+      /* 2026-09-29：本机那份以前被无条件并进合计。桥侧现在带 hoursStale / hoursDate ——
+       * 本机桥跨过北京 00:00 后一直没收到当天记录时，它的分时桶还是前一天的；口径与服务端
+       * 缓存那条一致：跨了日就不并入当日，当日窗口字段清零（dates 历史曲线保留）。
+       * 注：这是防「昨天的分时并进今天」的潜在风险，**不是**当日「面板 ¥9.7903 vs /token
+       * ¥2.5954」的成因 —— 那次是本机账本里 21 条对账补记（reconciled:true）重复写入会话
+       * 累计值、虚增 96,822,208 命中 tok（与两侧差值精确相等），见计量侧的 reconcile 修复。
+       * 旧版桥没有该字段（undefined）→ 行为不变。 */
+      if (isObj(out.local) && out.local.hoursStale === true) {
+        out.localStaleDay = true;
+        out.local = zeroDayScoped(out.local);
+      }
+    }
     else out.localReason = bridgeUnreachableText('local', t.base, r.error);
   } catch (e) {
     out.localReason = bridgeUnreachableText('local', getLocalBridgeTarget().base, String(e?.message || e));

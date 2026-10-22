@@ -211,7 +211,7 @@ import {
   getSocialState, loadSocialState, ensureWakeable, cancelReplyCheck,
   cancelProactiveCheck, setupSleepTimer, scheduleProactiveCheck, setWakeSender, setSteerSender,
   formatParticipation, suggestQuietMs, PEER_TYPING_HOLD_MAX_MS, scheduleWake,
-  scheduleReplyCheck, buildWakeReminderPrompt,
+  scheduleReplyCheck, scheduleAfterthought, buildWakeReminderPrompt,
   startDeliveryWatchdog,
   // 配置里的插话概率一改 → 立刻同步到正在跑的会话（只动 source=owner 的，见 social-state.js）
   applyOwnerWakeProbabilityToSessions,
@@ -839,6 +839,7 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 process.on('unhandledRejection', (error) => log('未处理异常:', error?.message ?? error));
+process.on('uncaughtException', (error) => log('【未捕获异常已拦截】避免桥接直接退出:', error?.stack ?? error?.message ?? error));
 process.on('exit', () => { shutdownLocalVoiceEngine(); releaseLock(); });
 
 // 2026-09-12 保命护栏：stdout/stderr 的管道断了（管理器被重启/被 Electron 壳 taskkill 之后就是这种情况）

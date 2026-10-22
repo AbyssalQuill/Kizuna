@@ -17,6 +17,15 @@
 // 并把已对账水位写进 state/token-reconcile.json —— 因此可反复执行、不会重复补，
 // 也不会因为文件截断（MAX_LINES 裁剪）把历史重新加一遍。
 //
+// ── 2026-09-30 两道防线（QQ `/token` 与面板钱数对不上的那次事故的正面修复）──────────────
+// 事故：账本里同一会话在 02:16 写了 3 条一模一样的对账补记行，单条 cacheRead 5,434,432 /
+// 7,144,512（不可能值），合计虚增 命中 96,822,208 + 未命中 3,226,461。
+//   ① 对账幂等：补账成功后**必须把水位抬到 DSH 当前值**并把缺口指纹 ackSig 落盘；桥侧的
+//      sessionSums 是"可失状态"（MAX_LINES 裁剪 / 7 天窗口重建 / 文件截断都会让它变小），
+//      只要水位不随之前移，同一缺口就会被反复打开、反复补上。详见 reconcileWithDsh 的注释。
+//   ② 单条硬上限：任一字段超过 MAX_ROW_TOKENS 的记录**拒绝入账**并写
+//      state/token-meter-reject.log（带时间/sessionId/数值），保证不可能值永不进账本。
+//
 // 单钩子用法：集成方（mux）在事件环每帧只调一次 meterTokenFrame(frame)，其余全在本模块内完成：
 //   (a) 深度扫描（≤6 层、数组元素>200 跳过）整帧 usage 键（snake/camel 命名 + usage 对象内含键），
 //       命中且 sessionId 存在 → 写 est:false 行；
@@ -69,6 +78,31 @@ const REAL_SIG_KEEP_MS = 24 * 60 * 60 * 1000; // 真实 usage 签名保留窗口
 const REAL_SIG_MAX_PER_SESSION = 64;          // 每会话最多保留的签名条数（防无界增长）
 const DEFAULT_RECONCILE_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 只对"最近 6 小时内还动过"的会话补差额
 
+/* ── 单条记录硬上限（2026-09-30 加）──────────────────────────────────────────────
+ * 一次请求的 usage 不可能超过这些量级：单步上下文上限是百万 token 级、输出十几万，
+ * cacheRead 更不可能超过上下文窗口本身（它是"这次请求命中了多少已缓存的输入"）。
+ * 线上真实事故（2026-09-29 定位）：账本 state/token-usage.jsonl 里出现 21 条对账补记，
+ * 单条 cacheRead 高达 7,144,512，且同一会话在 02:16 写了 3 条一模一样的行；
+ * 面板因此虚增 命中 96,822,208 + 未命中 3,226,461，QQ 的 `/token` 与面板钱数对不上。
+ * 闸门口径：**任一字段严格大于**上限 → 拒绝入账（不写文件）+ 落一行
+ * state/token-meter-reject.log（带时间/sessionId/字段/数值）+ console.warn。
+ * 判定用「严格大于」是刻意的：等于上限仍放行（有一批历史行正好等于量级边界）。
+ * 阈值**故意不做成环境变量**：能被现场调高就等于没有这道闸门，而超限值只可能来自
+ * 重复补账 / 快照重放这类缺陷 —— 放进来就会与真实用量混在账本里，事后无法区分。
+ * 三个入口都过这道闸门：真实 usage 帧（meterTokenFrame）、估算行（flushEstimate /
+ * meterActivityEstimate）、对账补记（reconcileWithDsh 的补账行）。估算行的上限同样适用：
+ * 单回合暂存字符上限 ACC_CHARS_CAP=5,000,000 换算成 prompt ≈ 2.78M token，本身就是异常值，
+ * 被拒时同样留日志（估算行不进钱，丢掉它只损失一个估算，不会污染账本）。 */
+const MAX_ROW_TOKENS = {
+  cacheRead: 1000000,    // 命中缓存输入：单请求不可能 >100 万（用户给定的量级判据）
+  cacheWrite: 1000000,   // 缓存写入：同上
+  prompt: 1000000,       // 未命中输入（=计费的新鲜输入）：单请求不可能 >100 万
+  completion: 200000,    // 输出：提供方单次输出上限远低于此
+  total: 4000000,        // 总量：上限取四桶上限之和，保证"各桶都合法"的行不会被总量误杀
+};
+const TOKEN_REJECT_LOG = 'token-meter-reject.log'; // 超限拒绝的审计日志
+const REJECT_KEEP = 20;                            // 内存里保留的最近拒绝条数（状态接口展示用）
+
 // 计费日偏移（分钟）：480 = UTC 自然日 = 北京时每天 08:00 换日（对齐提供方控制台）。
 // 设 0 则退回北京自然日口径；环境变量 QQ_TOKEN_DAY_OFFSET_MIN 可覆盖（便于现场比对/回退）。
 const DAY_OFFSET_ENV = 'QQ_TOKEN_DAY_OFFSET_MIN';
@@ -120,7 +154,17 @@ const meter = {
   dshHome: null,         // DSH home（用于定位 projcache）；未设置 = 不对账
   lastErr: null,
   slotByDay: new Map(),  // 计费日 -> 24 个时段槽的用量（外推用；见 slotOf）
+  /* 计费日 -> 24 个时段槽的**计费四元组**（{missInput,cacheRead,cacheWrite,completion}）。
+   * 2026-09-30 加：`/token N` 的多日金额要逐日按峰谷倍率算，而 meter.days 只有整日合计、
+   * meter.hours 只有「今天」，两者都判不出「这一天的这一小时是不是高峰」。这里按槽留一份
+   * 计费四元组，report 侧用 token-pricing.slotAtMs 还原时刻再判峰谷（估算行 est:true 不进这里，
+   * 估算永不进钱）。 */
+  costSlotsByDay: new Map(),
   lastBillBySession: new Map(), // 会话 -> 上一条真实请求的计费规模（重试估算用）
+  // 超限拒绝记录（单条硬上限闸门）：最近 REJECT_KEEP 条 + 最近一条，供状态接口/排障查看
+  rejects: [],
+  lastReject: null,
+  rejectedCount: 0,
 };
 
 function emptyAgg() {
@@ -306,6 +350,16 @@ function applyToMemory(rec) {
     let arr = meter.slotByDay.get(key);
     if (!arr) { arr = new Array(24).fill(0); meter.slotByDay.set(key, arr); }
     arr[slot] += rec.est ? rec.total : (rec.prompt + rec.completion + (rec.cacheRead || 0) + (rec.cacheWrite || 0));
+    // 计费四元组（多日金额逐槽判峰谷用；估算行不进账）
+    if (!rec.est) {
+      let cost = meter.costSlotsByDay.get(key);
+      if (!cost) { cost = new Array(24).fill(null); meter.costSlotsByDay.set(key, cost); }
+      const b = cost[slot] || (cost[slot] = { missInput: 0, cacheRead: 0, cacheWrite: 0, completion: 0 });
+      b.missInput += rec.prompt;
+      b.cacheRead += rec.cacheRead || 0;
+      b.cacheWrite += rec.cacheWrite || 0;
+      b.completion += rec.completion;
+    }
   }
 }
 /** 计费日内的时段槽 0..23：0 = 换日那一刻（默认北京 08:00），按北京时钟小时推进 */
@@ -410,20 +464,70 @@ function notifyRecord(rec) {
   }
 }
 
-function writeRecord(rec) {
+/** 单条记录的字段是否越过硬上限（见 MAX_ROW_TOKENS）；越限返回 {field,value,limit}，否则 null */
+function rowLimitViolation(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  for (const field of Object.keys(MAX_ROW_TOKENS)) {
+    const v = Number(rec[field]);
+    if (Number.isFinite(v) && v > MAX_ROW_TOKENS[field]) {
+      return { field, value: Math.round(v), limit: MAX_ROW_TOKENS[field] };
+    }
+  }
+  return null;
+}
+
+/** 超限拒绝的审计落盘：时间 / sessionId / 字段 / 数值 / 整条记录（截断），并在进程日志里 warn 一行。
+ *  为什么要留两份：日志文件按行 append 便于 grep 单个 sessionId；console.warn 让桥日志同刻可见。 */
+function logRejectedRow(rec, bad, kind) {
+  const at = new Date().toISOString();
+  const entry = {
+    at, kind,
+    tsMs: Number.isFinite(Number(rec?.tsMs)) ? Math.round(Number(rec.tsMs)) : null,
+    sessionId: rec?.sessionId != null ? String(rec.sessionId) : null,
+    convKey: rec?.convKey != null ? String(rec.convKey) : null,
+    field: bad.field, value: bad.value, limit: bad.limit,
+    reconciled: rec?.reconciled === true, est: rec?.est === true,
+    rec: JSON.stringify(rec).slice(0, 600),
+  };
+  meter.lastReject = entry;
+  meter.rejectedCount += 1;
+  meter.rejects.push(entry);
+  if (meter.rejects.length > REJECT_KEEP) meter.rejects.splice(0, meter.rejects.length - REJECT_KEEP);
+  try {
+    ensureInitDir();
+    fs.appendFileSync(path.join(meter.stateDir, TOKEN_REJECT_LOG), `${JSON.stringify(entry)}\n`);
+  } catch (error) { meter.lastErr = error; }
+  try {
+    console.warn(`[token-meter] 拒绝超限记录：${bad.field}=${bad.value} > ${bad.limit} kind=${kind} sessionId=${entry.sessionId ?? '-'} ts=${new Date(entry.tsMs ?? Date.now()).toISOString()}`);
+  } catch { /* 日志失败不影响主流程 */ }
+}
+
+/** 只建目录不读文件（拒绝路径也要能落日志，且不能触发一次全量回读） */
+function ensureInitDir() { try { fs.mkdirSync(meter.stateDir, { recursive: true }); } catch { /* 忽略 */ } }
+
+/** 写一条计量记录；返回 {ok, reason}。reason: '' | 'oversize'（超限拒绝）| 'io-error'
+ *  超限记录**绝不入账**（见 MAX_ROW_TOKENS 的注释：不可能值进账本以后无法与真实用量区分）。 */
+function writeRecordEx(rec) {
   ensureInit();
+  const bad = rowLimitViolation(rec);
+  if (bad) {
+    logRejectedRow(rec, bad, rec?.reconciled ? 'reconcile' : (rec?.est ? 'estimate' : 'usage'));
+    return { ok: false, reason: 'oversize', field: bad.field, value: bad.value, limit: bad.limit };
+  }
   try {
     fs.appendFileSync(meter.file, JSON.stringify(rec) + '\n');
   } catch (error) {
     meter.lastErr = error;
-    return false;
+    return { ok: false, reason: 'io-error' };
   }
   meter.lineCount += 1;
   applyToMemory(rec);
   if (meter.lineCount > MAX_LINES) pruneFile();
   notifyRecord(rec);
-  return true;
+  return { ok: true, reason: '' };
 }
+
+function writeRecord(rec) { return writeRecordEx(rec).ok; }
 
 // ── usage 深度扫描 ────────────────────────────────────────────────────────────
 function collectUsageFields(frame) {
@@ -535,10 +639,10 @@ function flushEstimate(sessionId, now) {
     promptChars: Math.round(acc.promptChars),
     completionChars: Math.round(acc.completionChars)
   };
-  const ok = writeRecord(rec);
-  return ok
+  const w = writeRecordEx(rec);
+  return w.ok
     ? { recorded: true, kind: 'estimate', usage: { prompt, completion, total }, est: true }
-    : { recorded: false, reason: 'io-error' };
+    : { recorded: false, reason: w.reason };
 }
 
 /**
@@ -585,8 +689,10 @@ export function meterTokenFrame(frame) {
       meter.turnAcc.delete(sessionId);     // 释放暂存
       // 记下这次真实请求的规模：重试事件的估算用它当参照（见 llm/retry 分支）
       meter.lastBillBySession.set(sessionId, prompt + completion + cacheRead + cacheWrite);
-      const ok = writeRecord(rec);
-      return ok ? { recorded: true, kind: 'usage', usage: { prompt, completion, total, cacheRead, cacheWrite } } : { recorded: false, reason: 'io-error' };
+      const w = writeRecordEx(rec);
+      return w.ok
+        ? { recorded: true, kind: 'usage', usage: { prompt, completion, total, cacheRead, cacheWrite } }
+        : { recorded: false, reason: w.reason, rejected: w.reason === 'oversize' ? { field: w.field, value: w.value, limit: w.limit } : undefined };
     }
 
     const evType = event ? event.type : null;
@@ -696,8 +802,8 @@ export function meterActivityEstimate(params) {
     promptChars,
     completionChars
   };
-  const ok = writeRecord(rec);
-  return ok ? { recorded: true, usage: { prompt, completion, total }, est: true } : { recorded: false, reason: 'io-error' };
+  const w = writeRecordEx(rec);
+  return w.ok ? { recorded: true, usage: { prompt, completion, total }, est: true } : { recorded: false, reason: w.reason };
 }
 
 function dateKeyList(days, nowTs) {
@@ -738,7 +844,17 @@ export function getTokenReport(days = 7, opts) {
   const dates = [];
   for (const key of dateKeyList(n, nowTs)) {
     const agg = meter.days.get(key) ?? zero();
-    dates.push({ date: key, prompt: agg.prompt, completion: agg.completion, total: agg.total, estTotal: agg.estTotal, cacheRead: agg.cacheRead, cacheWrite: agg.cacheWrite, cachePrompt: agg.cachePrompt, cacheCompletion: agg.cacheCompletion, cacheSamples: agg.cacheSamples, samples: agg.samples, reconciledTotal: agg.reconciledTotal, reconciledSamples: agg.reconciledSamples, retryCount: agg.retryCount, retryEstimated: agg.retryEstimated });
+    /* slots：该计费日的分时槽计费四元组（只含真实行），用来逐小时判峰谷算钱 ——
+     * 形状 [{slot, missInput, cacheRead, cacheWrite, completion}]，空槽不出现。
+     * `/token N` 的金额路径读它（见 core/token-report.js）。 */
+    const buckets = meter.costSlotsByDay.get(key) || [];
+    const slots = [];
+    for (let s = 0; s < buckets.length; s += 1) {
+      const b = buckets[s];
+      if (!b) continue;
+      slots.push({ slot: s, missInput: b.missInput, cacheRead: b.cacheRead, cacheWrite: b.cacheWrite, completion: b.completion });
+    }
+    dates.push({ date: key, prompt: agg.prompt, completion: agg.completion, total: agg.total, estTotal: agg.estTotal, cacheRead: agg.cacheRead, cacheWrite: agg.cacheWrite, cachePrompt: agg.cachePrompt, cacheCompletion: agg.cacheCompletion, cacheSamples: agg.cacheSamples, samples: agg.samples, reconciledTotal: agg.reconciledTotal, reconciledSamples: agg.reconciledSamples, retryCount: agg.retryCount, retryEstimated: agg.retryEstimated, slots });
   }
   const tAgg = meter.days.get(todayKey) ?? zero();
   const today = {
@@ -837,9 +953,21 @@ export function getTokenReport(days = 7, opts) {
   }
 
   const nowHour = bjHourOf(nowTs);
+  /* 2026-09-29：分时桶只可能属于「它被写入的那一天」（applyToMemory 只在 `bjK === 今天` 时写桶）。
+   * 所以进程跨过北京 00:00 后若一直没收到当天记录（夜里没人说话、早上只对账补写旧帧），
+   * 桶里装的仍是**前一天**的数据，而这里原来无条件把它当「今日分时」回出去 —— 管理端会把
+   * 本机那份并进合计，读者看到的就是"昨天的量并进了今天"。这是潜在风险，**不是** 2026-09-29
+   * 那次「面板今日费用 ¥9.7903 vs /token ¥2.5954」的成因：那次经查是本机账本里 21 条对账补记
+   * （reconciled:true）把会话累计值当单帧重复写入（单条 cacheRead 高达 7,144,512，不可能），
+   * 共虚增 96,822,208 命中 tok —— 与两侧差值 131,391,808 − 34,569,600 = 96,822,208 精确相等。
+   * 判据：桶的日期必须等于今天的北京日期；不等就整列按 0 回，并把真实日期与失鲜标记
+   * （hoursDate / hoursStale）暴露给管理端，供合计前做「跨日不并入当日」校验。 */
+  const todayBj = bjKey(nowTs);
+  const hoursFresh = meter.hoursDate === todayBj;
+  const hoursDate = hoursFresh ? todayBj : (meter.hoursDate || '');
   const todayHourly = [];
   for (let h = 0; h <= nowHour; h++) {
-    const ha = meter.hours.get(h);
+    const ha = hoursFresh ? meter.hours.get(h) : null;
     todayHourly.push(ha
       ? { hour: h, prompt: ha.prompt, completion: ha.completion, total: ha.total, estTotal: ha.estTotal, cacheRead: ha.cacheRead, cacheWrite: ha.cacheWrite, cachePrompt: ha.cachePrompt, cacheCompletion: ha.cacheCompletion, cacheSamples: ha.cacheSamples }
       : { hour: h, prompt: 0, completion: 0, total: 0, estTotal: 0, cacheRead: 0, cacheWrite: 0, cachePrompt: 0, cacheCompletion: 0, cacheSamples: 0 });
@@ -853,6 +981,10 @@ export function getTokenReport(days = 7, opts) {
     key: todayKey,
   };
   const windowText = `计费日口径：北京时 ${dayWindow.startBj} 换日（对齐提供方控制台${meter.dayOffsetMin === 480 ? '，即 UTC 自然日' : ''}）；分时图仍按北京自然日`;
+  /* 失鲜说明只在真的发生（今天还没有记录、桶还停在旧日期）时追加，正常情况一个字符都不多 */
+  const staleNote = (hoursFresh || !hoursDate)
+    ? ''
+    : `；分时桶仍是 ${hoursDate} 的数据（本进程今天还没收到用量帧），已整列按 0 显示，不并入今日合计`;
   const note = base > 0
     ? `${windowText}。${projectedBy === 'shape'
       ? '「今日预计」按最近 7 天同一时段的平均用量估剩余，并按今天的实时速度封顶（不会因为最近很忙就无限外推）'
@@ -862,7 +994,8 @@ export function getTokenReport(days = 7, opts) {
     : `${windowText}。今日暂无用量记录（尚未收到 usage 帧或可估算的 transcript）`;
 
   return {
-    dates, today, todayBase: base, restOfDayEstimate, todayEstimatedTotal, todayLinearEstimatedTotal, projectedBy, todayHourly, note, dayWindow,
+    dates, today, todayBase: base, restOfDayEstimate, todayEstimatedTotal, todayLinearEstimatedTotal, projectedBy, todayHourly, note: note + staleNote, dayWindow,
+    hoursDate, hoursStale: !hoursFresh,
     reconcile: tokenReconcileStatus(),
   };
 }
@@ -896,7 +1029,11 @@ function loadReconcileFloor() {
     for (const [sid, v] of Object.entries(s)) {
       meter.reconcileFloor.set(String(sid), {
         prompt: num(v?.prompt), completion: num(v?.completion),
-        cacheRead: num(v?.cacheRead), cacheWrite: num(v?.cacheWrite), at: num(v?.at)
+        cacheRead: num(v?.cacheRead), cacheWrite: num(v?.cacheWrite), at: num(v?.at),
+        /* 缺口指纹 ackSig（2026-09-30 加）：这条会话**上一次已经被认可并补过**的 DSH 四桶指纹。
+         * 老版本水位文件没有它 → 空串 = 无凭据，此时只靠水位判据（不会误跳过真实缺口）。 */
+        ackSig: typeof v?.ackSig === 'string' ? v.ackSig : '',
+        ackAt: num(v?.ackAt),
       });
     }
   } catch { /* 没有水位文件 = 首次对账 */ }
@@ -906,12 +1043,20 @@ function saveReconcileFloor() {
   try {
     const sessions = {};
     for (const [sid, v] of meter.reconcileFloor) sessions[sid] = v;
-    fs.writeFileSync(reconcileFilePath(), `${JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), sessions }, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(reconcileFilePath(), `${JSON.stringify({ version: 2, updatedAt: new Date().toISOString(), sessions }, null, 2)}\n`, 'utf8');
   } catch (error) { meter.lastErr = error; }
 }
 
 const fl = (v) => ({ prompt: num(v?.prompt), completion: num(v?.completion), cacheRead: num(v?.cacheRead), cacheWrite: num(v?.cacheWrite) });
 const sumOf = (v) => v.prompt + v.completion + v.cacheRead + v.cacheWrite;
+/** 四桶指纹：判定「这一段 DSH 总量是否已经补过」的显式凭据（同一缺口只补一次）。 */
+const bucketSig = (v) => { const f = fl(v); return `${f.prompt}|${f.completion}|${f.cacheRead}|${f.cacheWrite}`; };
+/** 水位条目：把"已认可的 DSH 总量"连同缺口指纹一起记下（ackSig = 同一缺口只补一次的凭据）。
+ *  水位只准单调前移；带 ackedRuns 便于事后看出这条会话被认账过几次（排查重复补账用）。 */
+function ackEntry(dshNow, dshSig, at, prev) {
+  const f = fl(dshNow);
+  return { ...f, at, ackSig: dshSig, ackAt: at, ackedRuns: num(prev?.ackedRuns) + 1 };
+}
 
 /** 这个会话是不是"本桥工作区"里的会话（`<dshHome>/sessions/<slug>/session-<id>/`，
  *  slug 里带 qq-bridge 的工作区：agents / slang-agent / persona-agent / self-test 等）。
@@ -949,7 +1094,7 @@ export function reconcileWithDsh(opts = {}) {
   ensureInit();
   loadReconcileFloor();
   const dir = String(opts.dir || dshProjcacheDir() || '');
-  const out = { ok: false, reason: '', dir: dir || null, scanned: 0, added: 0, addedTokens: 0, skippedNoBaseline: 0, skippedStale: 0, sessions: [] };
+  const out = { ok: false, reason: '', dir: dir || null, scanned: 0, added: 0, addedTokens: 0, skippedNoBaseline: 0, skippedStale: 0, skippedAcked: 0, skippedOversize: 0, sessions: [] };
   if (!dir || !fs.existsSync(dir)) {
     out.reason = dir ? `找不到 DSH 会话统计目录：${dir}` : '未设置 DSH home（setTokenReconcileHome / initTokenMeter({dshHome})）';
     meter.reconcileLast = { at: Date.now(), ...out };
@@ -979,8 +1124,42 @@ export function reconcileWithDsh(opts = {}) {
       prompt: tu.uncachedInputTokens, completion: tu.outputTokens,
       cacheRead: tu.cacheReadTokens, cacheWrite: tu.cacheWriteTokens
     });
-    const floor = fl(meter.reconcileFloor.get(sid));
+    const floorRaw = meter.reconcileFloor.get(sid) || null;
+    const floor = fl(floorRaw);
     const mine = fl(meter.sessionSums.get(sid));
+    const dshSig = bucketSig(dshNow);
+    /* ── 幂等判据（2026-09-30 修「对账补记重复补账」）─────────────────────────────
+     * 线上症状：QQ `/token` 与面板的钱数对不上，账本里同一会话在 02:16 写了 3 条**一模一样**的
+     * 对账补记行，单条 cacheRead 5,434,432 / 7,144,512（不可能值），合计虚增
+     * 命中 96,822,208 + 未命中 3,226,461。
+     *
+     * 根因：旧实现只有"跳过"分支抬水位，**成功补账那条路不抬水位**（见本函数末尾的注释），
+     * 于是幂等完全依赖 `mine`（桥侧 sessionSums）。而 `mine` 是**可失状态**：它由
+     * token-usage.jsonl 回读重建，会因 ① MAX_LINES 裁剪 / pruneFile、② applyToMemory 对
+     * 7 天窗口外的行直接 return（不重建 sessionSums）、③ 文件被外部截断 而变小。
+     * 一旦 mine 掉到水位之下、水位又停在补账之前，`base = max(mine, floor)` 就退回旧水位 →
+     * **同一个缺口被重新打开并被再补一次**，如此循环（每 5 分钟一次的对账就是它反复补的机会）。
+     *
+     * 修法（两道闸门，缺一不可）：
+     *   闸门①（凭据）：水位里记着上一次被认可并补过的 DSH 四桶指纹 ackSig；DSH 现在的四桶与它
+     *     逐字相同 → 这一段早已补过，直接跳过。指纹是持久凭据，不随文件裁剪丢失。
+     *   闸门②（总量）：DSH 总量没有严格超过 max(桥侧累计, 水位) → 无缺口。
+     * 并且补账成功后必须把水位抬到 DSH 当前值（见末尾），使"已认可的 DSH 总量"单调不减 ——
+     * 这样即使桥侧自己的行被裁光，缺口也不会重新打开。**不要退回"只在跳过时抬水位"的写法。 */
+    if (floorRaw && floorRaw.ackSig && floorRaw.ackSig === dshSig) { out.skippedAcked += 1; continue; }
+    const mineSum = sumOf(mine), floorSum = sumOf(floor), dshSum = sumOf(dshNow);
+    const baseSum = Math.max(mineSum, floorSum);
+    if (dshSum <= baseSum) continue;                                 // 总量没有缺口 → 绝不因某个桶有缺口再补
+    const deficit = dshSum - baseSum;                                 // 总量缺口：补记总量不得超过它
+    const recent = nowTs - mtime <= maxAgeMs;
+    // 桥侧有基准 → 正常对账；没有基准时，只有"确实是本桥工作区里的会话 + 最近还在动"
+    // 才算数（例如子代理会话：桥没跟它的帧，但量是这套机器人花的）。
+    const owned = sumOf(mine) > 0 || (recent && isBridgeOwnedSession(sid));
+    if (!owned || !recent) {
+      if (sumOf(mine) <= 0) out.skippedNoBaseline += 1; else out.skippedStale += 1;
+      meter.reconcileFloor.set(sid, ackEntry(dshNow, dshSig, nowTs, floorRaw)); // 抬水位后跳过，防以后整段历史被补进来
+      continue;
+    }
     /* 修对账棘轮：以前只看"DSH 总量 > 水位"就认定有缺口，再逐桶补 max(0, dshNow[桶] − max(桥侧[桶], 水位[桶]))。
      * 逐桶 max(0,·) 是单向棘轮：桥侧某个桶记多了（快照重放把同一 step 记成两条不同签名之类）
      * 永远扣不回来，而另一个桶的缺口还会继续补 —— 于是会话总量单调漂到 DSH 之上、再也回不去。
@@ -994,19 +1173,6 @@ export function reconcileWithDsh(opts = {}) {
      * 所以先把总量比一遍：桥侧总量已不低于 DSH 总量就不补；要补也把"逐桶差额之和"限制在总缺口内。
      * 离线验证（只读导入本模块、stateDir/projcache 指向临时目录）：现状实现补记 4,700 后总量超 DSH 2,003；
      * 本修法补记 2,697（正好等于总缺口），总量与 DSH 相等。 */
-    const mineSum = sumOf(mine), floorSum = sumOf(floor), dshSum = sumOf(dshNow);
-    const baseSum = Math.max(mineSum, floorSum);
-    if (dshSum <= baseSum) continue;                                 // 总量没有缺口 → 绝不因某个桶有缺口再补
-    const deficit = dshSum - baseSum;                                 // 总量缺口：补记总量不得超过它
-    const recent = nowTs - mtime <= maxAgeMs;
-    // 桥侧有基准 → 正常对账；没有基准时，只有"确实是本桥工作区里的会话 + 最近还在动"
-    // 才算数（例如子代理会话：桥没跟它的帧，但量是这套机器人花的）。
-    const owned = sumOf(mine) > 0 || (recent && isBridgeOwnedSession(sid));
-    if (!owned || !recent) {
-      if (sumOf(mine) <= 0) out.skippedNoBaseline += 1; else out.skippedStale += 1;
-      meter.reconcileFloor.set(sid, { ...dshNow, at: nowTs });       // 抬水位后跳过，防以后整段历史被补进来
-      continue;
-    }
     const base = {
       prompt: Math.max(mine.prompt, floor.prompt),
       completion: Math.max(mine.completion, floor.completion),
@@ -1037,12 +1203,32 @@ export function reconcileWithDsh(opts = {}) {
       total: dTokens, cacheRead: delta.cacheRead, cacheWrite: delta.cacheWrite,
       est: false, reconciled: true, promptChars: 0, completionChars: 0
     };
-    if (writeRecord(rec)) {
+    const w = writeRecordEx(rec);
+    if (w.ok) {
       out.added += 1;
       out.addedTokens += dTokens;
       out.sessions.push({ sessionId: sid, tokens: dTokens, at: new Date(ts).toISOString() });
-    } else {
-      meter.reconcileFloor.set(sid, { ...floor });  // 落盘失败 → 回滚水位，下次再来
+      /* ★幂等的关键（2026-09-30）：补完**立刻**把水位抬到 DSH 当前值并落盘。
+       * 旧实现这里什么都没做（水位只在"跳过"分支被抬高），于是水位永远停在补账之前，
+       * 幂等只能靠 mine —— 而 mine 会被 MAX_LINES 裁剪 / 7 天窗口重建 / 文件截断抹掉，
+       * 缺口于是被重新打开、同一缺口反复补上（线上 02:16 那种"同一会话 3 条一模一样"）。
+       * 抬水位 = 把"这一段 DSH 总量已经认过账"这件事变成**持久**事实；
+       * ackSig 同时记下被认账的四桶指纹，作为"同一缺口只补一次"的显式凭据（闸门①）。
+       * 立刻 saveReconcileFloor()：写行与存水位之间崩掉也不会让同一缺口再补一次。 */
+      meter.reconcileFloor.set(sid, ackEntry(dshNow, dshSig, nowTs, floorRaw));
+      saveReconcileFloor();
+    } else if (w.reason === 'oversize') {
+      /* 缺口本身就是不可能值（单条超限，writeRecordEx 已拒绝入账并写了 reject 日志）。
+       * 这里仍抬水位：否则每 5 分钟都会撞同一个不可能值、并且它永远补不进去。
+       * "认账但不入账"= 面板不认这笔钱，账本里也不会出现不可能值 —— 与主人「不可能值永不进账本」
+       * 的要求一致；日志里留了 sessionId/数值供追查。 */
+      out.skippedOversize += 1;
+      out.oversize = out.oversize || [];
+      out.oversize.push({ sessionId: sid, field: w.field, value: w.value, limit: w.limit, at: new Date(ts).toISOString() });
+      meter.reconcileFloor.set(sid, ackEntry(dshNow, dshSig, nowTs, floorRaw));
+      saveReconcileFloor();
+    } else if (floorRaw) {
+      meter.reconcileFloor.set(sid, floorRaw);      // 落盘失败 → 水位原样回滚（含 ackSig），下次再来
     }
   }
   saveReconcileFloor();
@@ -1066,6 +1252,14 @@ export function tokenReconcileStatus() {
     dir: dshProjcacheDir(),
     last: meter.reconcileLast,
     tracked: meter.reconcileFloor.size,
+    /* 单条硬上限闸门的状态：被拒了多少条、最近一条是什么、上限值是多少。
+     * 面板/管理端可以据此一眼看出"账本里有没有被拦下来的不可能值"。 */
+    rowGuard: {
+      limits: { ...MAX_ROW_TOKENS },
+      rejected: meter.rejectedCount,
+      last: meter.lastReject,
+      log: path.join(meter.stateDir, TOKEN_REJECT_LOG),
+    },
   };
 }
 

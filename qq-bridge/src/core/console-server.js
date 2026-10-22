@@ -185,7 +185,9 @@ import {
   getSocialState, loadSocialState, ensureWakeable, cancelReplyCheck,
   cancelProactiveCheck, setupSleepTimer, scheduleProactiveCheck, setWakeSender,
   formatParticipation, suggestQuietMs, PEER_TYPING_HOLD_MAX_MS, scheduleWake,
-  scheduleReplyCheck, buildWakeReminderPrompt,
+  scheduleReplyCheck,
+  scheduleAfterthought,
+  buildWakeReminderPrompt,
   clearSocialTimers, clearAllSocialTimers, resetConversationKeepingLedger,
 } from './social-state.js';
 // 出站回复幂等账本（2026-09-16 修「reset 之后同一条回复发了两遍」，事故经过见模块顶部注释）
@@ -2416,7 +2418,10 @@ export function startConsoleServer() {
           sendCallTimes.set(key, callNow.filter((t) => now - t < 60000));
           log(`[default] 工具统一发送 ${key}: 成功 ${sentMessages.length}/${sendList.length} 条`);
           appendActivity(`${key} [default] 工具统一发送：成功 ${sentMessages.length}/${sendList.length} 条`);
-          if (sentMessages.length > 0) scheduleReplyCheck(key);
+          if (sentMessages.length > 0) {
+            scheduleReplyCheck(key);
+            scheduleAfterthought(key);
+          }
           const burstHint = sendList.length >= 3 ? '你已经连发了多条，确认是必要的吗？真人很少一口气补完。' : undefined;
           // 软提醒（lint）必须与发送结果隔离：消息已成功发出，lint 任何异常都不能把 ok 改写成失败，
           // 否则模型看到"发送失败"会换参数重发 → 撞重复拦截 → 用户其实已收到一条。
@@ -3109,6 +3114,7 @@ export function startConsoleServer() {
           st.preSleepWaitAccumMs = 0;
           saveSocialState();
           scheduleReplyCheck(key);
+          scheduleAfterthought(key);
           log(`[sticker] 工具发送表情 ${key}: ${sent.entry?.id || stickerId}`);
           appendActivity(`${key} [sticker] 工具发送表情：${label}`);
           // 2026-09-15：登记「这个会话刚发过表情包」：唤醒正文里的 [Meme] 抽签靠它做冷却
@@ -3214,6 +3220,7 @@ export function startConsoleServer() {
           st.preSleepWaitAccumMs = 0;
           saveSocialState();
           scheduleReplyCheck(key);
+          scheduleAfterthought(key);
           log(`[qqface] 工具发送 QQ 表情 ${key}: ${label}`);
           sendJson({ ok: true, key, face: { id: face.id, name: face.name || '' }, sent: 1, failed: 0, quoted: quotedInfo });
         } catch (error) {
@@ -3659,6 +3666,7 @@ export function startConsoleServer() {
           st.preSleepWaitAccumMs = 0;
           saveSocialState();
           scheduleReplyCheck(key);
+          scheduleAfterthought(key);
           log(`[rich] 工具发送卡片 ${key}: ${label}`);
           sendJson({
             ok: true,
@@ -3839,6 +3847,7 @@ export function startConsoleServer() {
           st.preSleepWaitAccumMs = 0;
           saveSocialState();
           scheduleReplyCheck(key);
+          scheduleAfterthought(key);
           log(`[docx] 工具发送文档 ${key}: ${sent.fileName}（${sent.size} 字节）`);
           sendJson({ ok: true, key, fileName: sent.fileName, fileId: sent.fileId, size: sent.size, sent: 1, failed: 0, quoted: quotedInfo });
         } catch (error) {
@@ -5471,7 +5480,10 @@ export function startConsoleServer() {
           saveSocialState();
           log(`[send] ${url.pathname} ${key}: 成功 ${sentMessages.length}/1 条`);
           appendActivity(`${key} [send] 成功 ${sentMessages.length}/1 条：${message.slice(0, 80)}`);
-          if (sentMessages.length > 0) scheduleReplyCheck(key);
+          if (sentMessages.length > 0) {
+            scheduleReplyCheck(key);
+            scheduleAfterthought(key);
+          }
           sendJson({
             ok: true, key, sent: sentMessages.length, failed: sentMessages.length ? 0 : 1, quoted: quotedInfo,
             ...(atDroppedOne ? { atUserIdDropped: atDroppedOne, hint: atNoteOne } : {})
@@ -5983,6 +5995,7 @@ export function startConsoleServer() {
             if (st.wakeConfig) st.wakeConfig.noActionCount = 0;
             saveSocialState();
             if (typeof scheduleReplyCheck === 'function') scheduleReplyCheck(key);
+            if (typeof scheduleAfterthought === 'function') scheduleAfterthought(key);
             appendActivity(`${key} [voice] 语音已发送：${text.slice(0, 30)}（${r.bytes} 字节${r.cached ? '，缓存' : ''}）`);
             sendJson({
               ok: true, sent, voice: hit ? { id: hit.id, name: hit.name } : { id: want || 'default' },
@@ -5991,7 +6004,7 @@ export function startConsoleServer() {
           } catch (error) {
             // 语音失败绝不影响对话：明确告诉模型「改用文字回复」，不要重试到烧钱
             log(`[voice] 发送语音失败 ${key}: ${error?.message ?? error}`);
-            sendJson({ ok: false, error: `${error?.message ?? error}（语音没发出去；这条内容请改用文字发送，不要反复重试）` }, 502);
+            sendJson({ ok: false, error: `${error?.message ?? error}（语音没发出去；若本轮还没发过文字可转文字发送，若本轮已发过文字则直接收尾，不要同义重复）` }, 502);
           }
           return;
         }

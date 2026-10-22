@@ -487,7 +487,8 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     }
     /* ── /token [天数]：今日 token 消耗总量 + 花费（桥侧直接算，不经过模型）───────────
      * 2026-09-21 需求："加一个 /token 指令，输入自动发送今日的 token 消耗总量与钱数消耗"。
-     * 口径与管理端「学习」页的实测区逐字一致（见 core/token-report.js 顶部注释）；
+     * 口径与面板（小鲸鱼挂件记账）同源：价目/峰谷窗口/节假日表/金额公式都取自
+     * core/token-pricing.js（见 core/token-report.js 顶部注释与 tests/token-pricing-parity.test.js）；
      * 单价可在 config.json 的 tokenCost 段覆盖。回复是多行短句，sendToQQ 会按行发成多个气泡。 */
     if (plainContent === '/token' || /^\/token\s+\d{1,2}$/.test(plainContent)) {
       const daysArg = Number(plainContent.split(/\s+/)[1]) || 1;
@@ -1075,12 +1076,13 @@ export async function pumpMux() {
                 markReadCalledKeys.delete(key);
                 wakeConfigMissCount.delete(key);
               } else {
-                // 活跃模式（anyMessage）每次消息都会唤醒，无需“防遗忘”提醒/兜底重置，
-                // 否则 AI 收尾没调 set_wake_config 就会被连坐重置成默认潜水（用户刚设的活跃模式又没了）。
-                const missSt = getSocialState(key);
-                const missWc = missSt.wakeConfig || {};
-                const missTr = missWc.triggers || {};
-                if (missWc.mode === 'active' || missTr.anyMessage === true) {
+                // 私聊本身每条消息必唤醒，自发起唤醒（追念/主动等）也不需要反复设置唤醒条件；
+                // 活跃模式（anyMessage）每次消息都会唤醒，均无需“防遗忘”提醒/兜底重置，
+                // 避免私聊或追念收尾时被无意义的控制台提醒打扰，多耗费一整轮模型往返。
+                const isPrivateChat = key.startsWith('private:');
+                const lastReason = String(missSt.lastWakeReason ?? '').split(':')[0];
+                const isSelfInitiated = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/.test(lastReason);
+                if (missWc.mode === 'active' || missTr.anyMessage === true || isPrivateChat || isSelfInitiated) {
                   wakeConfigMissCount.delete(key);
                   ensureWakeable(missSt, { key });
                 } else {

@@ -6,6 +6,7 @@ import { ROOT, STATE_DIR, STATE_FILE } from '../lib/paths.js';
 import { readJsonSafe } from '../lib/json-fs.js';
 import { log } from '../lib/log.js';
 import { normalizeOwnerQQ, normalizeIdList } from '../lib/config.js';
+import { DEFAULT_TOKEN_COST } from './token-pricing.js';
 
 export function loadConfig() {
   const p = path.join(ROOT, 'config.json');
@@ -104,14 +105,13 @@ export function loadConfig() {
       ...(file.prompt ?? {})
     },
     /* ── 2026-09-21 /token 指令的计价参数（¥ / 百万 tok）─────────────────────────────
-     * 默认值与管理端「学习」页 src/pages/Learning.tsx::COST_DEFAULT 同源，两边算出来必须一致；
-     * 改这里会同时改变 /token 的口径（面板那边仍读它自己的 localStorage，需各自设置）。 */
+     * 2026-09-30：默认值改为直接取 core/token-pricing.js（官方价目：Flash 命中 0.02 / 未命中 1 /
+     * 输出 4，高峰 ×2）。那份同时被 /token、小鲸鱼面板（镜像 lib/pricing.mjs）与
+     * tools/compaction-threshold.mjs 使用，并由 tests/token-pricing-parity.test.js 锁死一致 ——
+     * 以前默认值在 4 个文件里各写一份，改一处忘一处就是错的。 */
     tokenCost: {
-      pHit: 0.02,
-      pMiss: 1,
-      pOut: 4,
-      peakMult: 2,
-      peakHours: [9, 10, 11, 14, 15, 16, 17],
+      ...DEFAULT_TOKEN_COST,
+      peakHours: DEFAULT_TOKEN_COST.peakHours.slice(),
       ...(file.tokenCost ?? {})
     },
     security: {
