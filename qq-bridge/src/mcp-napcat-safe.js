@@ -2744,7 +2744,7 @@ registerTool(
 
 registerTool(
   'qq_qzone_comment',
-  'Comment on a QZone post by someone (or yourself). tid comes from the [tid=xxx] that qq_qzone_view returns. Write one casual natural sentence, like a real person browsing.',
+  'Comment on a QZone post by someone (or yourself). tid comes from [tid=xxx]. Write one short casual sentence like a real friend browsing (tease, react, joke; strictly NO corporate praise or emotional essays).',
   {
     key: z.string().describe('Session key: group:ID or private:QQ'),
     token: z.string().describe('Session token'),
