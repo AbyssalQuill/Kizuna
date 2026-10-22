@@ -69,25 +69,29 @@ export function saveStickerStore(file, entries) {
 export function mergeStickerLibrary(existing, fetched) {
   const out = existing.map(normalizeStickerEntry).filter(Boolean);
   const byId = new Map(out.map((e) => [e.id, e]));
+  const byMd5 = new Map(out.filter((e) => e.md5).map((e) => [e.md5, e]));
   const fetchedIds = new Set();
   for (const item of Array.isArray(fetched) ? fetched : []) {
     const id = String(item?.emoji_id || item?.resId || item?.id || '').trim();
     if (id) fetchedIds.add(id);
+    const md5 = String(item?.md5 || '').trim().toUpperCase();
+    if (md5) fetchedIds.add(md5);
   }
   for (const item of Array.isArray(fetched) ? fetched : []) {
     if (!item || typeof item !== 'object') continue;
     const id = String(item.emoji_id || item.resId || item.id || '').trim();
     if (!id) continue;
-    const old = byId.get(id);
+    const itemMd5 = String(item.md5 || '').trim().toUpperCase();
+    const old = byId.get(id) || (itemMd5 ? byMd5.get(itemMd5) : null);
     const merged = normalizeStickerEntry({
       ...(old || {}),
       id,
       resId: String(item.resId || item.emoji_id || id).trim(),
       url: String(item.url || old?.url || '').trim(),
-      md5: String(item.md5 || old?.md5 || '').trim().toUpperCase(),
-      desc: String(item.desc ?? old?.desc ?? '').trim(),
-      localNote: old?.localNote || '',
-      tags: old?.tags || [],
+      md5: itemMd5 || String(old?.md5 || '').trim().toUpperCase(),
+      desc: String((item.desc && String(item.desc).trim()) ? item.desc : (old?.desc ?? '')).trim(),
+      localNote: old?.localNote || item.localNote || '',
+      tags: (old?.tags && old.tags.length) ? old.tags : (item.tags || []),
       usage: old?.usage || '',
       source: old?.source || 'qq',
       useCount: old?.useCount || 0,
@@ -97,16 +101,19 @@ export function mergeStickerLibrary(existing, fetched) {
       updatedAt: nowIso()
     });
     if (!merged) continue;
-    if (!byId.has(id)) {
+    const existingIdx = out.findIndex((e) => e.id === id || (itemMd5 && e.md5 === itemMd5));
+    if (existingIdx < 0) {
       out.push(merged);
       byId.set(id, merged);
+      if (itemMd5) byMd5.set(itemMd5, merged);
     } else {
-      const idx = out.findIndex((e) => e.id === id);
-      if (idx >= 0) out[idx] = merged;
+      out[existingIdx] = merged;
+      byId.set(id, merged);
+      if (itemMd5) byMd5.set(itemMd5, merged);
     }
   }
   // 清理已被 QQ 端删除的收藏表情（保留手动/本地新增的非 qq 来源条目）。
-  return out.filter((e) => e.source !== 'qq' || fetchedIds.has(e.id));
+  return out.filter((e) => e.source !== 'qq' || fetchedIds.has(e.id) || (e.md5 && fetchedIds.has(e.md5)));
 }
 
 // 通过 emoji_id / md5 / url（支持模糊：去掉大小写、尾斜杠、URL 查询）查找。
@@ -172,7 +179,7 @@ export function buildStickerContext(entries, max = 8) {
     const label = e.desc || e.localNote || '（无备注，可先看图）';
     const extra = e.tags?.length ? ` [${e.tags.join('/')}]` : '';
     const used = e.useCount ? `（用过${e.useCount}次）` : '';
-    return `- ${label}${extra}${used}`;
+    return `- [${e.id}] ${label}${extra}${used}`;
   });
   return `[可用表情包]你的 QQ 收藏表情里有 ${list.length} 个表情（以下为常用/有备注的 ${top.length} 个，完整列表请用 qq_list_stickers 查看）：\n${lines.join('\n')}`;
 }

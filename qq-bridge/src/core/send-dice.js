@@ -38,7 +38,7 @@ export function dice(kind, key, probability, cooldownMs) {
 // 配置沿用既有的 social.sticker.sendProbability（管理端「表情包」卡里那个"发表情概率"），
 // 新增 sendCooldownMs 管同一会话的连发。
 export const MEME_DEFAULT_PROBABILITY = 0.3;
-export const MEME_DEFAULT_COOLDOWN_MS = 3 * 60 * 1000;
+export const MEME_DEFAULT_COOLDOWN_MS = 30 * 1000;
 
 function memeCfg() {
   const s = cfgRef?.social?.sticker ?? {};
@@ -70,7 +70,7 @@ export function memeTurnHint(key) {
   if (!c.enabled) return '';
   const { p, cooling, hit } = dice('meme', key, c.probability, c.cooldownMs);
   if (hit) {
-    return `[Meme] dice HIT (p=${p}): SEND ONE sticker or meme this turn (qq_send_sticker for QQ favorites; qq_meme_search + qq_send_meme for the meme packs, which already include the owner's own packs and the pack bound to the current character). At most one, never as a substitute for answering, and skip it only if nothing in the library fits what you are saying.\n`;
+    return `[Meme] dice HIT (p=${p}): send ONE sticker/meme this turn (e.g. qq_send_meme(query="傲娇/得意/睡觉/无语/叹气"), qq_send_sticker, or qq_send_qq_face). Never describe artwork, react to mood.\n`;
   }
   return '';
 }
