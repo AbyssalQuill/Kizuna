@@ -285,7 +285,15 @@ async function main() {
         /* 2026-09-19：外面改系统提示词、里面也要跟着改 —— 盯住 persona.md / speech-rules.md：
          * 一改就重新合成进已安装的 preset（新会话直接生效），日志留一行。 */
         try {
-          watchOverrideFiles({ home: target.home, root: ROOT, log });
+          watchOverrideFiles({
+            home: target.home, root: ROOT, log,
+            onChange: () => {
+              try {
+                const n = markStalePersonaReinjects(runtimeOverrideStamp());
+                if (n) log(`[preset] 人设已变更：标记 ${n} 个会话在下一轮补注入新版`);
+              } catch (e) { log(`[preset] 标记补注入失败：${e?.message ?? e}`); }
+            },
+          });
           log('[dsh-side] 人设/发言规则监视已启动（改动即重新合成进系统提示词）');
         } catch (eWatch) { log(`[dsh-side] 人设监视启动失败：${eWatch?.message ?? eWatch}`); }
       } catch (ePre) {

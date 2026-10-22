@@ -181,48 +181,69 @@ async function drainArchiveQueue() {
 
 export function evaluateWakeTrigger(key, st, event, kind, textContent, plainContent, quoteTargetIsSelf) {
   if (kind === 'private') return 'private';
-  // 睡眠窗口过滤（群聊专属，省 token）：窗口内只响应 @，probability/keyword/question/speaker 等一律不投递。
-  if (isInSleepWindow() && kind === 'group') {
-    const atSelf = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(event?.self_id ?? ''));
-    if (atSelf || quoteTargetIsSelf) return 'atMention';
-    return null;
+
+  const senderId = String(event?.user_id ?? event?.sender?.user_id ?? '');
+  const isOwner = !!(cfgRef?.ownerQQ && String(cfgRef.ownerQQ) === senderId);
+
+  // 1. 群聊中群友叫闭嘴/别回我的强抑制（防被群友烦到吐槽）
+  if (kind === 'group') {
+    const stopRe = /(?:别(?:再)?(?:回|理|跟|找)我|闭嘴|安静点|退下|闭麦|别叫了)/i;
+    if (stopRe.test(String(plainContent ?? ''))) {
+      return null;
+    }
   }
-  const tr = st.wakeConfig?.triggers ?? {};
-  /* 2026-09-19：修「被 @ 却按 anyMessage 处理 → 免打扰时段把它跳过」。
-   * 群里处于"全活跃"（triggers.anyMessage=true）时，下面的 anyMessage 分支原来排在 @ 前面，
-   * 于是"@ 机器人"也被标成 anyMessage —— 而 scheduleWake 的免打扰时段只放行"真实触发"
-   * （@/提问/点名/拍一拍/私聊），anyMessage 在拦截名单里 → 表现就是"群里 @ 我，我没回"。
-   * @ 是"被直接叫到"，语义上永远比"随便说句话"更具体，必须先判定；标对 reason 之后，
-   * 提示词里也会按"被 @ 了"来答（[Wake @] 而不是 [Wake anyMessage]），未读草稿补发提示也只对真实触发注入。 */
+
+  // 2. 群聊中主人的纪律：主人在群里说话时，小鲸鱼保持安静聆听！
+  // 只有当明确 @ 机器人、引用机器人或明确呼叫名字时，才唤醒！绝不抢话打断主人！
   const atSelf = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(event?.self_id ?? ''));
-  if ((atSelf || quoteTargetIsSelf) && (tr.atMention || tr.anyMessage)) return 'atMention';
-  if (tr.anyMessage) return 'anyMessage';
-  if (tr.atMention && (atSelf || quoteTargetIsSelf)) return 'atMention';
-  if (tr.nameMention && selfNickname) {
-    const lower = String(textContent ?? '').toLowerCase();
-    if (lower.includes('@' + selfNickname.toLowerCase()) || lower.includes(selfNickname.toLowerCase())) return 'nameMention';
-  }
+  // 这条话是冲着别人说的（@ 了别人 / 引用了别人的消息）→ 不能按"在问 AI"处理。
+  const atSomeoneElse = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) !== String(event?.self_id ?? '') && String(seg.data?.qq) !== 'all');
+  const repliesToSomeoneElse = !quoteTargetIsSelf && Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'reply');
+  const calledName = selfNickname && (
+    String(textContent ?? '').toLowerCase().includes('@' + selfNickname.toLowerCase()) ||
+    String(textContent ?? '').toLowerCase().includes(selfNickname.toLowerCase())
+  );
+  const tr = st.wakeConfig?.triggers ?? {};
+  // 关键词命中（主人在群里点"小鲸鱼/鲸鱼/DeepSeek"也算明确叫到，不能因为"主人静默律"漏接）
+  const lowerPlain = String(plainContent ?? '').toLowerCase();
+  let matchedKeyword = '';
   if (Array.isArray(tr.keywords) && tr.keywords.length) {
-    const lower = String(plainContent ?? '').toLowerCase();
     for (const kw of tr.keywords) {
       const kwStr = String(kw ?? '').toLowerCase();
       if (!kwStr) continue;
       // 短英文/数字关键词（如 DS/R1）用词边界匹配，避免 ADS/BDSM/DSL 误触发。
       if (/^[a-z0-9]+$/.test(kwStr) && kwStr.length <= 4) {
-        if (new RegExp(`\\b${kwStr}\\b`, 'i').test(lower)) return `keyword:${kw}`;
-      } else if (lower.includes(kwStr)) {
-        return `keyword:${kw}`;
-      }
+        if (new RegExp(`\\b${kwStr}\\b`, 'i').test(lowerPlain)) { matchedKeyword = String(kw); break; }
+      } else if (lowerPlain.includes(kwStr)) { matchedKeyword = String(kw); break; }
     }
   }
-  if (tr.question && isDirectedAtAi(plainContent)) return 'question';
-  // 智能接话：聊到 AI/技术相关话题时主动参与（全局，AI 自行判断值不值得接）
-  if (TOPIC_WAKE_RE.test(String(plainContent ?? ''))) return 'topic';
-  // 主人发言直通 Fast Path：100% 积极唤醒
-  const senderId = String(event?.user_id ?? event?.sender?.user_id ?? '');
-  if (cfgRef?.ownerQQ && String(cfgRef.ownerQQ) === senderId) {
-    return 'owner';
+
+  if (kind === 'group' && isOwner) {
+    if (atSelf || quoteTargetIsSelf || calledName || matchedKeyword) {
+      return 'owner';
+    }
+    return null; // 主人在群里与他人交流，小鲸鱼静默聆听，绝不擅自抢嘴打断！
   }
+
+  // 睡眠窗口过滤（群聊专属，省 token）：窗口内只响应 @，probability/keyword/question/speaker 等一律不投递。
+  if (isInSleepWindow() && kind === 'group') {
+    if (atSelf || quoteTargetIsSelf) return 'atMention';
+    return null;
+  }
+  /* 2026-09-19：修「被 @ 却按 anyMessage 处理 → 免打扰时段把它跳过」。 */
+  if ((atSelf || quoteTargetIsSelf) && (tr.atMention || tr.anyMessage)) return 'atMention';
+  if (tr.anyMessage) return 'anyMessage';
+  if (tr.atMention && (atSelf || quoteTargetIsSelf)) return 'atMention';
+  if (tr.nameMention && calledName) return 'nameMention';
+  if (matchedKeyword) return `keyword:${matchedKeyword}`;
+  /* 现场（2026-10-22 21:05 / 21:09）：坐忘道问神鲸「你不本来就是吗？」「你忘了你的深海魔鲸王封号吗？」
+   * 都被"你…吗"启发式判成问 AI，小鲸鱼两次插进别人的对话（"猫娘味儿挺冲的"就是这么来的）。
+   * 现在群里要算"在问 AI"，句子里必须真的出现 AI / 鲸鱼的名字；光有"你…吗"不算。 */
+  const aiNamed = /deepseek|小鲸鱼|鲸鱼|大肥鱼|小肥鱼|d指导|d老师|d师傅|深度求索|人工智障|机器人|模型|\bai\b|\bds\b|claude|chatgpt|gpt/i.test(String(plainContent ?? ''));
+  if (tr.question && aiNamed && !atSomeoneElse && !repliesToSomeoneElse && isDirectedAtAi(plainContent)) return 'question';
+  // 智能接话：聊到 AI/技术相关话题，不再无脑 100% 抢话！
+  // 抽中较低概率（15%）才参与；没抽中继续往下走 speakerIds / 概率门控，绝不在这里把消息吞掉。
+  if (TOPIC_WAKE_RE.test(String(plainContent ?? '')) && Math.random() < 0.15) return 'topic';
   if (Array.isArray(tr.speakerIds) && tr.speakerIds.length) {
     if (senderId && tr.speakerIds.some((id) => String(id) === senderId)) {
       const senderLabel = event?.sender?.card || event?.sender?.nickname || senderId;
@@ -627,13 +648,25 @@ export function buildWakePrompt(key, reason) {
  */
 function formatRecentWindow(st, key, maxCount) {
   let recent = Array.isArray(st.recentMessages) ? st.recentMessages.slice(-maxCount) : [];
-  // 内存窗口缺失（进程重启后极早期/新会话）时直接查 SQLite chat_messages 补上开局上下文
-  /* 2026-09-24 深夜还原：这里曾经被我改成"窗口不够 maxCount 就查库补齐"（理由是主人说过
-   * "之前那段我这边看不到"）。主人随后明确了分工：**窗口就是窗口，聊天记录由 memory research
-   * （qq_memory_search）读** —— 开局这块只代表"内存里的最近几条"，缺的部分由模型自己按需去查，
-   * 不在这里偷偷用库里的记录撑大它（那既违背上下文成本账，也把"窗口"和"记录"混成一件事）。
-   * 于是回到原来的判据：只有窗口**完全为空**时才拿库兜底。 */
-  if (!recent.length && key) recent = recentChatMessages(key, maxCount);
+  /* 2026-10-22：窗口不够长就从 chat.db 补齐到 maxCount。
+   * 旧注释（2026-09-24）说"窗口就是窗口，缺的让模型自己查"——现场代价是：桥一重启/一轮换，
+   * 内存里只剩 5~6 条，模型对着一堆图片和别人的对话瞎接（群聊里"猫娘味儿挺冲的"就是这么来的）。
+   * 现在按主人 2026-10-22 的要求：**每轮必须保有充分上下文**，缺的条数由库补齐，但绝不超过 maxCount
+   * （上下文成本仍由 contextWindow 这个旋钮控制，不再有隐形缩水）。 */
+  if (key) {
+    const fromDb = recentChatMessages(key, maxCount);
+    if (fromDb.length) {
+      const merged = new Map();
+      for (const m of [...fromDb, ...recent]) {
+        if (!m) continue;
+        const mk = m.messageId ? `m:${m.messageId}` : `s:${m.seq ?? ''}:${m.time ?? ''}`;
+        merged.set(mk, m);
+      }
+      recent = [...merged.values()]
+        .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
+        .slice(-maxCount);
+    }
+  }
   if (!recent.length) return '';
   const unreadSeqs = new Set((Array.isArray(st.unread) ? st.unread : []).map((m) => m && Number(m.seq)).filter((n) => Number.isFinite(n) && n > 0));
   const lastAiT = Number(st.lastAiReplyAt) || 0;
@@ -1510,7 +1543,12 @@ export async function sendWakePrompt(key, reason) {
   const maxPerHour = Number(isPrivateKey ? (cfgRef.social?.wake?.maxWakePerHourPrivate ?? 0) : (cfgRef.social?.wake?.maxWakePerHour ?? 0));
   const recentMinute = (st.wakeTimes || []).filter((t) => now - t < 60000).length;
   const recentHour = (st.wakeTimes || []).filter((t) => now - t < 3600000).length;
-  if ((maxPerMinute > 0 && recentMinute >= maxPerMinute) || (maxPerHour > 0 && recentHour >= maxPerHour)) {
+  /* 2026-10-22：活跃模式 = 主人明确要"每条都看、由模型自己决定接不接"。
+   * 限频（默认 3/分钟、30/小时）会把 100% 悄悄削成 30 条/小时，超了还形成"看门狗每秒重试 →
+   * 每秒被限频挡回"的死循环（群 868756515 之前整段装死就是这个）。活跃群聊直接豁免这道闸；
+   * 潜水模式仍照旧限频（省钱靠这里，不靠砍上下文）。 */
+  const activeGroup = key.startsWith('group:') && (st.wakeConfig?.mode === 'active' || st.wakeConfig?.triggers?.anyMessage === true);
+  if (!activeGroup && ((maxPerMinute > 0 && recentMinute >= maxPerMinute) || (maxPerHour > 0 && recentHour >= maxPerHour))) {
     log(`[default] 唤醒频率超限，跳过 ${key}（${reason}）`);
     // 私聊消息不能因限频被静默吞掉：挂一次性重试，频率窗口过后再投递一次
     if (isPrivateKey && !st.wakeRetryTimer) {
@@ -1854,7 +1892,9 @@ export async function sendWakePrompt(key, reason) {
     // 依据见交接文档 §4.9 的 token 经济账：缓存读约占账单 61%，且随步数线性放大。
     const ctxBase = Math.max(6, Number(cfgRef.social?.context?.contextWindow) || 12);
     const resetBase = Math.max(ctxBase, Number(cfgRef.social?.context?.resetWindow) || 24);
-    const ctxN = justReset ? Math.min(60, resetBase) : Math.min(24, ctxBase);
+    // 2026-10-22：普通首轮的上限原来被硬编码成 24 —— 配置里填 40/50 也没用。
+    // 主人要求"每轮至少 30~50 条上下文"，两档统一按 60 封顶，实际条数由 contextWindow 决定。
+    const ctxN = justReset ? Math.min(60, resetBase) : Math.min(60, ctxBase);
     const recentBlock = formatRecentWindow(st, key, ctxN);
     promptText = buildWakePrompt(key, reason) + recentBlock + autoResetNote;
     st._promptInjected = true;

@@ -120,7 +120,7 @@ export function syncPresetOverrides({ home, root, log = () => {} } = {}) {
  * 用 mtime+size 轮询（10 秒一次），不引 fs.watch（Windows 上 rename 语义不稳）。
  * @returns {() => void} 停止函数
  */
-export function watchOverrideFiles({ home, root, log = () => {}, intervalMs = 10000 } = {}) {
+export function watchOverrideFiles({ home, root, log = () => {}, onChange = null, intervalMs = 10000 } = {}) {
   const stamp = () => {
     const one = (name) => {
       try { const s = fs.statSync(path.join(root, name)); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; }
@@ -134,7 +134,12 @@ export function watchOverrideFiles({ home, root, log = () => {}, intervalMs = 10
     prev = now;
     try {
       const r = syncPresetOverrides({ home, root, log });
-      if (r.ok && r.changed) log(`[preset] 检测到人设/发言规则变化：已重新合成（人设 ${r.personaChars} 字 / 规则 ${r.speechChars} 字）`);
+      if (r.ok && r.changed) {
+        log(`[preset] 检测到人设/发言规则变化：已重新合成（人设 ${r.personaChars} 字 / 规则 ${r.speechChars} 字）`);
+        /* 2026-10-22：光重合成只对新会话生效；正在跑的会话系统提示词还是旧版。
+         * 这里回调给桥，由它把"见过旧版本"的会话标记成下一轮补注入 —— 改人设不用重启。 */
+        try { onChange?.(r); } catch (e) { log(`[preset] onChange 回调失败：${e?.message ?? e}`); }
+      }
       else if (!r.ok) log(`[preset] 重新合成失败：${r.error}`);
     } catch (e) { log(`[preset] 重新合成异常：${e?.message ?? e}`); }
   }, intervalMs);

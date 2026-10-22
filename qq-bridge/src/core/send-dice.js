@@ -70,7 +70,7 @@ export function memeTurnHint(key) {
   if (!c.enabled) return '';
   const { p, cooling, hit } = dice('meme', key, c.probability, c.cooldownMs);
   if (hit) {
-    return `[Meme] dice HIT (p=${p}): send ONE sticker/meme this turn (e.g. qq_send_meme(query="傲娇/得意/睡觉/无语/叹气"), qq_send_sticker, or qq_send_qq_face). Never describe artwork, react to mood.\n`;
+    return `[Meme] dice HIT (p=${p}): optional sticker allowed ONLY if mood strongly calls for it (e.g. qq_send_meme(query="傲娇/得意/睡觉/无语/叹气"), qq_send_sticker, or qq_send_qq_face). If pure text already feels natural, prefer text alone without forcing a sticker. Never describe artwork, react to mood.\n`;
   }
   return '';
 }

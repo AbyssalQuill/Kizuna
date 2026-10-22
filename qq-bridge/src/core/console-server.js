@@ -1515,10 +1515,10 @@ export function startConsoleServer() {
         // 它和其它三个键一样是正整数，漏在名单外会让这条接口写进来的值不被归一化
         //（例如字符串 "24" 也能落盘，前端再读回来就按文本渲染）。
         // 同时把"非数值时的兜底"从统一写死的 20 改成与读取处一致的每键缺省
-        //（recentLimit 100 / unreadLimit 30 / contextWindow 20 / resetWindow 24）——
+        //（recentLimit 100 / unreadLimit 30 / contextWindow 40 / resetWindow 40）——
         // 以前 recentLimit 传个非数值会被兜成 20，比桥读取处的 100 小一个量级。
         if (body.context && typeof body.context === 'object') {
-          const CONTEXT_DEFAULT = { recentLimit: 100, unreadLimit: 30, contextWindow: 20, resetWindow: 24 };
+          const CONTEXT_DEFAULT = { recentLimit: 100, unreadLimit: 30, contextWindow: 40, resetWindow: 40 };
           merged.context = { ...(current.context ?? {}), ...body.context };
           for (const k of Object.keys(CONTEXT_DEFAULT)) {
             if (merged.context[k] !== undefined) {
