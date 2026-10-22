@@ -1,10 +1,17 @@
-// Markdown / KaTeX / 代码排版图片渲染器（DeepSeek 网页端浅色白底风格）
+// Markdown / KaTeX / 代码排版图片渲染器（DeepSeek 网页端浅色白底风格，服务端纯同步预渲染）
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { marked } from 'marked';
+import katex from 'katex';
+import Prism from 'prismjs';
+import loadLanguages from 'prismjs/components/index.js';
 import { log } from './log.js';
+
+// 预加载常用语言高亮支持
+loadLanguages(['cpp', 'c', 'python', 'javascript', 'typescript', 'java', 'bash', 'json', 'yaml', 'sql', 'rust', 'go', 'html', 'css']);
 
 /**
  * 将 Markdown 文本渲染为纯白底精美图片（DeepSeek 网页端同款字体与代码公式排版）
@@ -21,7 +28,7 @@ export async function renderMarkdownToImage(markdown, options = {}) {
   const tmpRawPng = path.join(os.tmpdir(), `${tmpId}-raw.png`);
   const finalPng = options.outPath || path.join(os.tmpdir(), `${tmpId}.png`);
 
-  const htmlContent = buildDeepSeekHtml(markdown, title, width);
+  const htmlContent = buildServerRenderedHtml(markdown, title, width);
   fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
 
   try {
@@ -49,8 +56,6 @@ out_path = sys.argv[2]
 im = Image.open(raw_path).convert("RGB")
 w, h = im.size
 
-# 寻找底部最后一个非纯白像素（容差 rgb > 250）
-# 从底部向上扫描
 bottom_y = h - 1
 for y in range(h - 1, 0, -2):
     is_blank = True
@@ -63,9 +68,7 @@ for y in range(h - 1, 0, -2):
     if not is_blank:
         break
 
-# 留 32px 底部 padding
 crop_bottom = min(h, bottom_y + 48)
-# 顶部若有空白也保留 padding
 cropped = im.crop((0, 0, w, crop_bottom))
 cropped.save(out_path, "PNG", quality=95)
 print(f"{w}x{crop_bottom}")
@@ -92,30 +95,96 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function buildDeepSeekHtml(markdown, title, width) {
+/**
+ * 服务端预渲染数学公式与代码高亮，生成 100% 静态立即可截图的 HTML
+ */
+function buildServerRenderedHtml(markdown, title, width) {
   const safeTitle = escapeHtml(title);
-  const safeMarkdown = JSON.stringify(markdown);
+
+  // 1. 抽取并预渲染 LaTeX 数学公式，避免被 marked 误格式化
+  const mathPlaceholders = [];
+  const addMath = (formula, displayMode) => {
+    let rendered = '';
+    try {
+      rendered = katex.renderToString(formula.trim(), {
+        displayMode,
+        throwOnError: false
+      });
+    } catch (e) {
+      rendered = escapeHtml(formula);
+    }
+    const idx = mathPlaceholders.length;
+    const key = `@@KATEX_PLACEHOLDER_${idx}@@`;
+    mathPlaceholders.push({ key, html: rendered });
+    return key;
+  };
+
+  // 优先匹配块级公式 $$ ... $$
+  let processed = String(markdown || '').replace(/\$\$([\s\S]+?)\$\$/g, (_, f) => addMath(f, true));
+  // 匹配行内公式 $ ... $ (排查货币符号 $100 误匹配：公式内不能有换行且前后不能是纯空白)
+  processed = processed.replace(/(?<!\$)\$([^\$\n]+?)\$(?!\$)/g, (_, f) => addMath(f, false));
+
+  // 2. 配置 marked 自定义渲染器（专门生成 DeepSeek 网页端代码卡片）
+  const renderer = new marked.Renderer();
+  renderer.code = function ({ text, lang }) {
+    const rawLang = String(lang || 'text').toLowerCase().trim();
+    const cleanLang = rawLang.split(/\s+/)[0];
+    let highlighted = '';
+
+    const prismLang = cleanLang === 'c++' ? 'cpp' : (Prism.languages[cleanLang] ? cleanLang : null);
+    if (prismLang && Prism.languages[prismLang]) {
+      try {
+        highlighted = Prism.highlight(text, Prism.languages[prismLang], prismLang);
+      } catch (e) {
+        highlighted = escapeHtml(text);
+      }
+    } else {
+      highlighted = escapeHtml(text);
+    }
+
+    return `
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">${escapeHtml(cleanLang || 'code')}</span>
+          <div class="code-actions">
+            <span class="code-action-btn">
+              <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              复制
+            </span>
+            <span class="code-action-btn">
+              <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              下载
+            </span>
+          </div>
+        </div>
+        <pre class="language-${escapeHtml(cleanLang)}"><code class="language-${escapeHtml(cleanLang)}">${highlighted}</code></pre>
+      </div>
+    `;
+  };
+
+  marked.setOptions({ renderer, gfm: true, breaks: true });
+  let htmlBody = marked.parse(processed);
+
+  // 3. 把数学公式 HTML 替换回占位符
+  for (const item of mathPlaceholders) {
+    htmlBody = htmlBody.replace(item.key, item.html);
+  }
+
+  // 4. 读取 KaTeX CSS 嵌入页面（若找不到则降级引用 CDN）
+  let katexCss = '';
+  try {
+    const localCssPath = path.resolve('node_modules/katex/dist/katex.min.css');
+    if (fs.existsSync(localCssPath)) {
+      katexCss = fs.readFileSync(localCssPath, 'utf8');
+    }
+  } catch {}
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <title>${safeTitle || '解答'}</title>
-  <!-- KaTeX 数学公式渲染库与样式 -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-  <!-- Marked Markdown 解析 -->
-  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
-  <!-- Prism 代码高亮 -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-cpp.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-javascript.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-java.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
-
+  ${katexCss ? `<style>${katexCss}</style>` : `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">`}
   <style>
     * {
       box-sizing: border-box;
@@ -154,7 +223,7 @@ function buildDeepSeekHtml(markdown, title, width) {
     h3 { font-size: 15px; font-weight: 600; color: #0f172a; margin: 16px 0 8px 0; }
     p { margin: 10px 0; }
 
-    /* DeepSeek 网页端同款代码块卡片 */
+    /* ── DeepSeek 网页端同款代码卡片样式 ── */
     .code-card {
       margin: 16px 0;
       border-radius: 8px;
@@ -214,7 +283,39 @@ function buildDeepSeekHtml(markdown, title, width) {
       color: #0f172a;
     }
 
-    /* KaTeX 公式优化 */
+    /* ── DeepSeek 浅色代码专属语法高亮配色（100% 对齐例图） ── */
+    .token.comment, .token.prolog, .token.doctype, .token.cdata {
+      color: #6a737d !important;
+      font-style: italic !important;
+    }
+    .token.punctuation {
+      color: #24292e !important;
+    }
+    .token.property, .token.tag, .token.boolean, .token.constant, .token.symbol, .token.deleted {
+      color: #005cc5 !important;
+    }
+    .token.number {
+      color: #005cc5 !important;
+    }
+    .token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted {
+      color: #22863a !important;
+    }
+    .token.operator, .token.entity, .token.url {
+      color: #d73a49 !important;
+    }
+    .token.atrule, .token.attr-value, .token.keyword {
+      color: #af00db !important;
+      font-weight: 600 !important;
+    }
+    .token.function, .token.class-name {
+      color: #6f42c1 !important;
+      font-weight: 500 !important;
+    }
+    .token.regex, .token.important, .token.variable {
+      color: #e36209 !important;
+    }
+
+    /* ── KaTeX 公式居中与方框 ── */
     .katex-display {
       margin: 16px 0 !important;
       text-align: center;
@@ -222,7 +323,6 @@ function buildDeepSeekHtml(markdown, title, width) {
     .katex {
       font-size: 1.08em;
     }
-    /* 表格 */
     table {
       border-collapse: collapse;
       width: 100%;
@@ -241,7 +341,6 @@ function buildDeepSeekHtml(markdown, title, width) {
     tr:nth-child(even) {
       background-color: #fbfcfd;
     }
-    /* 引用块 */
     blockquote {
       margin: 14px 0;
       padding: 4px 0 4px 14px;
@@ -260,60 +359,8 @@ function buildDeepSeekHtml(markdown, title, width) {
 <body>
   <div id="container">
     ${title ? `<div class="main-title">${safeTitle}</div>` : ''}
-    <div id="content"></div>
+    <div id="content">${htmlBody}</div>
   </div>
-
-  <script>
-    const rawMarkdown = ${safeMarkdown};
-    const contentEl = document.getElementById('content');
-    
-    // 渲染 Markdown
-    contentEl.innerHTML = marked.parse(rawMarkdown);
-
-    // 包装代码块为 DeepSeek 风格卡片
-    contentEl.querySelectorAll('pre').forEach((pre) => {
-      const code = pre.querySelector('code');
-      let lang = 'code';
-      if (code) {
-        const cls = Array.from(code.classList).find(c => c.startsWith('language-'));
-        if (cls) lang = cls.replace('language-', '');
-      }
-      
-      const card = document.createElement('div');
-      card.className = 'code-card';
-      card.innerHTML = \`
-        <div class="code-header">
-          <span>\${lang}</span>
-          <div class="code-actions">
-            <span class="code-action-btn">
-              <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-              复制
-            </span>
-            <span class="code-action-btn">
-              <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-              下载
-            </span>
-          </div>
-        </div>
-      \`;
-      pre.parentNode.insertBefore(card, pre);
-      card.appendChild(pre);
-    });
-
-    // 语法高亮
-    if (window.Prism) Prism.highlightAll();
-
-    // KaTeX 数学公式自动渲染
-    renderMathInElement(contentEl, {
-      delimiters: [
-        { left: '$$', right: '$$', display: true },
-        { left: '$', right: '$', display: false },
-        { left: '\\\\[', right: '\\\\]', display: true },
-        { left: '\\\\(', right: '\\\\)', display: false }
-      ],
-      throwOnError: false
-    });
-  </script>
 </body>
 </html>`;
 }
