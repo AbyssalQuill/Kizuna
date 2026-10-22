@@ -17,12 +17,30 @@ import { STICKER_FILE } from '../lib/paths.js';
 import { writeStickerTmpFile } from './sticker.js';
 import { napcatImageFileArg } from '../lib/napcat-file.js';
 import { isDeliveredUnconfirmed, deliveredUnconfirmedResult, onebotErrText } from '../lib/onebot-delivery.js';
+import { noteMemeSent } from './send-dice.js';
 // 全语音发送模式（state/voice-config.json 的 send.allVoice）：回复正文改语音发出、失败退回文字。
 // 放在这里是因为本文件是模型回复正文的唯一出口（sendMessages → onebotSend）；
 // 开关关闭时 tryAllVoiceReply 是空转（不打日志、不发请求），老用户行为不变。
 import { tryAllVoiceReply } from './voice.js';
 
 export const SEND_TIMEOUT_MS = 15000;
+
+/** 每个会话最近发送过的表情包标识（文件路径或URL），用于防短时间重复刷屏（如连续发同张表情） */
+const recentSentMemesByKey = new Map();
+function recordRecentMeme(key, fileOrUrl) {
+  if (!key || !fileOrUrl) return;
+  const list = recentSentMemesByKey.get(key) || [];
+  list.unshift({ id: String(fileOrUrl), ts: Date.now() });
+  // 保留最近 8 个，且只保留 10 分钟内的
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  recentSentMemesByKey.set(key, list.filter((item) => item.ts > cutoff).slice(0, 8));
+}
+function getRecentMemes(key) {
+  if (!key) return [];
+  const list = recentSentMemesByKey.get(key) || [];
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  return list.filter((item) => item.ts > cutoff).map((item) => item.id);
+}
 
 let cfgRef = null;
 let botRef = null;
@@ -218,7 +236,10 @@ export async function onebotSend(kind, id, message, replyToMessageId, atUserId =
   let rawMessage = strippedText;
   let artifactFaceId = null;
   let artifactImageFile = null;
+  let memeRecordKey = null;
   if (swept.removed > 0) {
+    const sessionKey = `${kind}:${id}`;
+    const recentMemes = getRecentMemes(sessionKey);
     for (const token of swept.tokens) {
       // 1. QQ 原生黄脸表情 (如 (148))
       const faceIdGuess = resolveArtifactFaceId(token);
@@ -226,39 +247,45 @@ export async function onebotSend(kind, id, message, replyToMessageId, atUserId =
         artifactFaceId = faceIdGuess;
         break;
       }
-      // 2. 内置同人表情包 (whale-fanart-001)
-      const memeHit = resolveArtifactMeme(token);
+      // 2. 内置同人表情包 (whale-fanart-001) - 排除最近发过的表情
+      const memeHit = resolveArtifactMeme(token, '/root/whale-fanart-001', recentMemes);
       if (memeHit?.file) {
         try {
           const buf = fs.readFileSync(memeHit.file);
           const ext = String(path.extname(memeHit.file) || '').replace(/^\./, '') || 'img';
           artifactImageFile = napcatImageFileArg(writeStickerTmpFile(buf, ext), cfgRef);
+          memeRecordKey = memeHit.file;
           log(`[meme] 占位表情 ${token} 解析为同人表情包: ${memeHit.caption || ''} (${path.basename(memeHit.file)})`);
           break;
         } catch (e) {
           log(`[meme] 写入临时同人表情包文件失败: ${e?.message ?? e}`);
         }
       }
-      // 3. 收藏表情 (stickers.json)
-      const stickerHit = resolveArtifactCustomSticker(token, STICKER_FILE);
+      // 3. 收藏表情 (stickers.json) - 排除最近发过的表情
+      const stickerHit = resolveArtifactCustomSticker(token, STICKER_FILE, recentMemes);
       if (stickerHit?.url) {
         if (stickerHit.url.startsWith('local://')) {
           artifactImageFile = napcatImageFileArg(stickerHit.url.slice('local://'.length), cfgRef);
         } else {
           artifactImageFile = stickerHit.url;
         }
+        memeRecordKey = stickerHit.url || stickerHit.id;
         log(`[meme] 占位表情 ${token} 解析为收藏表情: ${stickerHit.name || stickerHit.desc || token}`);
         break;
       }
     }
     if (artifactFaceId == null && !artifactImageFile && strippedText === '') {
-      log(`占位表情未能翻译成 QQ face 或内置表情包，已跳过 (${kind}:${id}): ${rawMessage0.slice(0, 50)}`);
+      log(`占位表情未能翻译成 QQ face 或内置表情包（或最近已发过去重跳过），已跳过 (${kind}:${id}): ${rawMessage0.slice(0, 50)}`);
     }
   } else if (strippedText === '' && swept.removed === 0 && rawMessage0.trim() !== '') {
     rawMessage = redactKnownTokensOnly(rawMessage0);
   }
   if (artifactFaceId != null) segments.push({ type: 'face', data: { id: artifactFaceId } });
-  if (artifactImageFile != null) segments.push({ type: 'image', data: { file: artifactImageFile, sub_type: 1 } });
+  if (artifactImageFile != null) {
+    segments.push({ type: 'image', data: { file: artifactImageFile, sub_type: 1 } });
+    if (memeRecordKey) recordRecentMeme(`${kind}:${id}`, memeRecordKey);
+    try { noteMemeSent(`${kind}:${id}`); } catch {}
+  }
   // prefix 引用：把"被引用原文"当正文前缀一起发出去（纯文字气泡，不依赖 QQ 的 reply 段）
   if (quotePrefix) rawMessage = quotePrefix + rawMessage;
   if (imagePath) {
@@ -279,6 +306,8 @@ export async function onebotSend(kind, id, message, replyToMessageId, atUserId =
     // 服务器上 NapCat 在 Docker 里，读不到宿主路径 → 必须按配置换成容器路径或 base64。
     const napcatFile = napcatImageFileArg(writeStickerTmpFile(buf, ext), cfgRef);
     segments.push({ type: 'image', data: { file: napcatFile } });
+    recordRecentMeme(`${kind}:${id}`, imagePath);
+    try { noteMemeSent(`${kind}:${id}`); } catch {}
   }
   if (rawMessage) {
     // 解析 AI 手写的 [CQ:at,qq=xxx] 为真正的 at 消息段（纯文本 @ 不触发 QQ 提醒）；其余 [CQ: 仍转义防注入。

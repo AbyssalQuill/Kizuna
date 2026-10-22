@@ -34,8 +34,9 @@ export function resolveArtifactFaceId(content) {
 /**
  * 占位内容按语义/关键词解析内置表情包（whale-fanart-001/index.db）
  * 返回真实图片绝对路径 { file, caption } 或 null
+ * 支持 excludePaths 过滤最近已发表情，防止连续复读同一张图
  */
-export function resolveArtifactMeme(content, memeRoot = '/root/whale-fanart-001') {
+export function resolveArtifactMeme(content, memeRoot = '/root/whale-fanart-001', excludePaths = []) {
   if (!content) return null;
   const raw = String(content).replace(/^[^:：]*[:：]?\s*/, '').trim();
   if (!raw) return null;
@@ -44,19 +45,28 @@ export function resolveArtifactMeme(content, memeRoot = '/root/whale-fanart-001'
   try {
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
-      // 1. 全词匹配
-      let row = db.prepare('SELECT path, caption FROM memes WHERE caption LIKE ? OR keywords LIKE ? OR file_name LIKE ? LIMIT 1').get(`%${raw}%`, `%${raw}%`, `%${raw}%`);
-      if (row?.path) {
-        const full = path.join(memeRoot, row.path);
-        if (fs.existsSync(full)) return { file: full, caption: row.caption };
+      const excluded = new Set((excludePaths || []).map((p) => String(p).toLowerCase()));
+      // 1. 全词匹配（取前10条候选，跳过最近已发送的）
+      let rows = db.prepare('SELECT path, caption FROM memes WHERE caption LIKE ? OR keywords LIKE ? OR file_name LIKE ? LIMIT 10').all(`%${raw}%`, `%${raw}%`, `%${raw}%`);
+      for (const row of rows) {
+        if (row?.path) {
+          const full = path.join(memeRoot, row.path);
+          if (!excluded.has(full.toLowerCase()) && !excluded.has(String(row.path).toLowerCase()) && fs.existsSync(full)) {
+            return { file: full, caption: row.caption };
+          }
+        }
       }
       // 2. 分词匹配（去除助词后长于2字的核心词）
       const words = raw.split(/[\s,，、/]+/).map((w) => w.trim()).filter((w) => w.length >= 2);
       for (const w of words) {
-        row = db.prepare('SELECT path, caption FROM memes WHERE caption LIKE ? OR keywords LIKE ? OR file_name LIKE ? LIMIT 1').get(`%${w}%`, `%${w}%`, `%${w}%`);
-        if (row?.path) {
-          const full = path.join(memeRoot, row.path);
-          if (fs.existsSync(full)) return { file: full, caption: row.caption };
+        rows = db.prepare('SELECT path, caption FROM memes WHERE caption LIKE ? OR keywords LIKE ? OR file_name LIKE ? LIMIT 10').all(`%${w}%`, `%${w}%`, `%${w}%`);
+        for (const row of rows) {
+          if (row?.path) {
+            const full = path.join(memeRoot, row.path);
+            if (!excluded.has(full.toLowerCase()) && !excluded.has(String(row.path).toLowerCase()) && fs.existsSync(full)) {
+              return { file: full, caption: row.caption };
+            }
+          }
         }
       }
     } finally {
@@ -69,17 +79,21 @@ export function resolveArtifactMeme(content, memeRoot = '/root/whale-fanart-001'
 /**
  * 占位内容按语义/关键词解析 QQ 收藏表情（stickers.json）
  * 返回命中条目 { faceId, url, name, desc, localNote } 或 null
+ * 支持 excludeUrls 过滤最近已发表情
  */
-export function resolveArtifactCustomSticker(content, stickersJsonPath) {
+export function resolveArtifactCustomSticker(content, stickersJsonPath, excludeUrls = []) {
   if (!content || !stickersJsonPath || !fs.existsSync(stickersJsonPath)) return null;
   const raw = String(content).replace(/^[^:：]*[:：]?\s*/, '').trim();
   if (!raw) return null;
   try {
     const list = JSON.parse(fs.readFileSync(stickersJsonPath, 'utf8'));
     if (!Array.isArray(list)) return null;
+    const excluded = new Set((excludeUrls || []).map((u) => String(u).toLowerCase()));
     const words = [raw, ...raw.split(/[\s,，、/]+/).map((w) => w.trim()).filter((w) => w.length >= 2)];
     for (const w of words) {
       const hit = list.find((s) => {
+        const u = String(s.url || s.id || '').toLowerCase();
+        if (excluded.has(u)) return false;
         const text = `${s.localNote ?? ''} ${s.desc ?? ''} ${s.name ?? ''} ${(s.tags ?? []).join(' ')}`.toLowerCase();
         return text.includes(w.toLowerCase());
       });
