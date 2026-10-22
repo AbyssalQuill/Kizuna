@@ -264,7 +264,7 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
 //      （代价是上限内每轮多注入的 token；但规则文件是用户亲手写的、本就该生效，静默丢规则更贵）；
 //   ② 万一仍然超限：改成保头 + 保尾（尾段＝最新追加的规则，价值高于中段），
 //      并把"砍掉了第几到第几个字符"写进日志，让丢失可见，而不是继续静默砍尾。
-const RUNTIME_OVERRIDE_MAX = { 'persona.md': 16000, 'speech-rules.md': 12000 };
+const RUNTIME_OVERRIDE_MAX = { 'persona.md': 16000, 'speech-rules.md': 16000 };
 // 超限时保证末尾这么多字符一定注入：新规则都追加在文件尾部，绝不能再被整段砍掉。
 const RUNTIME_OVERRIDE_KEEP_TAIL = 2500;
 const runtimeOverrideCache = {}; // fileName -> { statKey, text }

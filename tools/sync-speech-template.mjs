@@ -19,7 +19,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MD = join(ROOT, 'qq-bridge', 'speech-rules.md');
 const JS = join(ROOT, 'server', 'index.js');
 const MARKER = 'const DEFAULT_SPEECH_RULES = `';
-const MAX = 12000; // 与 qq-bridge/src/core/wake-send.js 的 RUNTIME_OVERRIDE_MAX 对齐
+const MAX = 16000; // 与 qq-bridge/src/core/wake-send.js 的 RUNTIME_OVERRIDE_MAX 对齐
 
 const esc = (s) => s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 const unesc = (s) => s.replace(/\\([`\\])/g, '$1').replace(/\\\$\{/g, '${');
