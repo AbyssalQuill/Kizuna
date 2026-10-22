@@ -1,0 +1,33 @@
+{
+  "name": "dsh-temperature",
+  "version": "0.1.0",
+  "private": true,
+  "description": "给 DSH 的模型请求补上 temperature：配置面没有这个字段，插件挂在 agent/request 瀑布上把它写进请求头配置。",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "test",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/logic.test.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

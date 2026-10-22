@@ -615,6 +615,35 @@ export function patchProfileCordis(target) {
     }
     log('cordis.patch.yml: MCP block appended');
   }
+
+  const tempBegin = '# === qq-bridge temperature BEGIN ===';
+  const tempEnd = '# === qq-bridge temperature END ===';
+  const tempVal = Number(sideCfg?.dsh?.temperature ?? 1.3) || 1.3;
+  const tempBlock =
+    `${tempBegin}\n` +
+    `- id: temperature-knob\n` +
+    `  config:\n` +
+    `    withoutThinkingOnly: true\n` +
+    `    temperature: ${tempVal}\n` +
+    `    providers:\n` +
+    `      deepseek-official: ${tempVal}\n` +
+    `    models:\n` +
+    `      deepseek-flash: ${tempVal}\n` +
+    `${tempEnd}\n`;
+
+  if (text.includes(tempBegin) && text.includes(tempEnd)) {
+    text = text.replace(/[^\n]*# === qq-bridge temperature BEGIN ===[\s\S]*?# === qq-bridge temperature END ===[^\n]*/, tempBlock.trimEnd());
+    log('cordis.patch.yml: temperature block updated');
+  } else {
+    const mIdx = text.indexOf('# === qq-bridge agent preset');
+    if (mIdx >= 0) {
+      text = text.slice(0, mIdx) + tempBlock + '\n' + text.slice(mIdx);
+    } else {
+      text = text.trimEnd() + '\n\n' + tempBlock;
+    }
+    log('cordis.patch.yml: temperature block added');
+  }
+
   fs.writeFileSync(patchFile, text, 'utf8');
   log(`cordis.patch.yml written: ${patchFile}`);
 }
@@ -731,17 +760,10 @@ function ensureSymlink(link, repoDir, what) {
   }
 }
 
-/** 插件：<home>/plugins/qq-mode-console + <home>/profiles/node_modules/qq-mode-console（安装面，扁平共享） */
+/** 插件列表：<home>/plugins/<name> + <home>/profiles/node_modules/<name>（安装面，扁平共享） */
 export function ensurePluginBundles(target) {
   if (isDesktopDshHome(target.home)) throw new Error(`refuse: desktop home ${target.home}`);
-  const repoPlugin = path.join(REPO_ROOT, 'plugins', 'qq-mode-console');
-  if (!fs.existsSync(repoPlugin)) { log(`插件源码不存在，跳过: ${repoPlugin}`); return; }
-  const pluginLink = path.join(target.home, 'plugins', 'qq-mode-console');
-  ensureSymlink(pluginLink, repoPlugin, 'plugins/qq-mode-console');
-  // 扁平安装面（profiles/node_modules，各 profile 共享；不会进入桌面端 junction 的 profile node_modules）
-  const flatLink = path.join(target.home, 'profiles', 'node_modules', 'qq-mode-console');
-  ensureSymlink(flatLink, repoPlugin, 'profiles/node_modules/qq-mode-console');
-  // profile package.json 注册 link 依赖 + bundle（供 cordis 启动解析）
+  const pluginNames = ['qq-mode-console', 'dsh-qq-hold', 'dsh-temperature'];
   const pkgFile = path.join(target.profileDir, 'package.json');
   ensureDir(target.profileDir);
   let pkg = { name: `dsh-profile-${target.profile}`, private: true, dependencies: {}, dsh: { profile: { bundles: [] } } };
@@ -754,11 +776,29 @@ export function ensurePluginBundles(target) {
   pkg.dsh = pkg.dsh || {};
   pkg.dsh.profile = pkg.dsh.profile || {};
   if (!Array.isArray(pkg.dsh.profile.bundles)) pkg.dsh.profile.bundles = [];
-  const linkVal = `link:${pluginLink.replace(/\\/g, '/')}`;
-  if (pkg.dependencies['qq-mode-console'] !== linkVal) pkg.dependencies['qq-mode-console'] = linkVal;
-  if (!pkg.dsh.profile.bundles.includes('qq-mode-console')) pkg.dsh.profile.bundles.push('qq-mode-console');
-  fs.writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
-  log(`profile package.json ensured: ${pkgFile}`);
+
+  let changed = false;
+  for (const name of pluginNames) {
+    const repoPlugin = path.join(REPO_ROOT, 'plugins', name);
+    if (!fs.existsSync(repoPlugin)) continue;
+    const pluginLink = path.join(target.home, 'plugins', name);
+    ensureSymlink(pluginLink, repoPlugin, `plugins/${name}`);
+    const flatLink = path.join(target.home, 'profiles', 'node_modules', name);
+    ensureSymlink(flatLink, repoPlugin, `profiles/node_modules/${name}`);
+    const linkVal = `link:${pluginLink.replace(/\\/g, '/')}`;
+    if (pkg.dependencies[name] !== linkVal) {
+      pkg.dependencies[name] = linkVal;
+      changed = true;
+    }
+    if (!pkg.dsh.profile.bundles.includes(name)) {
+      pkg.dsh.profile.bundles.push(name);
+      changed = true;
+    }
+  }
+  if (changed) {
+    fs.writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+    log(`profile package.json ensured: ${pkgFile}`);
+  }
 }
 
 /* ── 内置长期记忆插件（@meomeo-dev/dsh-memory）────────────────────────────────────────

@@ -1,0 +1,11 @@
+# 由 profile 的 dsh.profile.bundles 自动应用：把插件挂进运行时树。
+#
+# 这里故意**不给 config**：没有 config 时插件全程 no-op。真正的取值写在
+# ~/.dsh/profiles/<profile>/cordis.patch.yml 里同 id 的条目上（补丁按 id 合并）：
+#
+#   - id: temperature-knob
+#     config:
+#       temperature: 0.3
+- insert:
+    - id: temperature-knob
+      name: dsh-temperature
