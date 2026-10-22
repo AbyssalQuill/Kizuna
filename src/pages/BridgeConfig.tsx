@@ -54,12 +54,12 @@ function modelListSource(provider: string) {
 /** 服务商下拉：内置三项 + DSH 里已经配好的其它服务商（别人自己加过 pi-ai 服务商也能直接选） */
 function providerChoices() {
   const known = [
-    { id: '', label: '自动探测（用隔离 DSH 里已配置的服务商）' },
-    { id: 'deepseek-official', label: 'DeepSeek 官方（deepseek-official）' },
-    { id: 'xiaomi-token-plan-cn', label: '小米 MiMo（MiMo Pro）' },
+    { id: '', label: '自动探测' },
+    { id: 'deepseek-official', label: 'DeepSeek 官方' },
+    { id: 'xiaomi-token-plan-cn', label: '小米 MiMo' },
   ];
   const extra = Object.keys(DSH_MODELS.providers || {}).filter((p) => !known.some((k) => k.id === p));
-  return known.concat(extra.map((p) => ({ id: p, label: `${p}（DSH 里已配置）` })));
+  return known.concat(extra.map((p) => ({ id: p, label: p })));
 }
 
 /* ---------- 界面文字：全中文，不带英文括号/版本前缀 ---------- */
@@ -82,6 +82,11 @@ const LABEL: Record<string, string> = {
   consolePort: '本机服务端口', consoleToken: '本机服务令牌', allowAllWhenEmpty: '名单为空时全部放行（两边都放）',
   allowAllPrivate: '私聊：名单为空时全部放行', allowAllGroups: '群聊：名单为空时全部放行',
   'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID，只用于按画师名字搜人）',
+  luogu: '洛谷算法题库与视奸',
+  'luogu.uid': '洛谷用户 UID',
+  'luogu.clientId': '洛谷 Client ID（__client_id）',
+  'luogu.cookie': '洛谷登录 Cookie',
+  'social.tools.luogu': '洛谷算法题库与视奸',
   // 名单
   private: '私聊', groups: '群聊',
   // 唤醒
@@ -225,6 +230,8 @@ const LABEL: Record<string, string> = {
   /* 2026-09-19：搜图的镜像站地址：反馈镜像站会换域名/镜像挂掉，所以要能自己改。
    * 这一项没登记的话 tools/audit-ui-labels.mjs 会报"未翻译键"（界面会裸奔一个英文键名）。 */
   pixiv: '搜/发 Pixiv 插画', 'pixiv.base': 'Pixiv 接口兜底站地址',
+  'luogu.uid': '洛谷用户 UID', 'luogu.clientId': '洛谷 Client ID（__client_id）', 'luogu.cookie': '洛谷登录 Cookie',
+  'social.tools.luogu': '洛谷算法题库与视奸',
   'pixiv.refreshToken': 'Pixiv 长期登录态（自动续期写入，一般不用手填）',
   /* 2026-09-21：本次新增的三处设置（[Style] 语感行 / /token 计价 / 工具压缩档）：
    * tools/audit-ui-labels.mjs 只认这张表，登记在这里界面上才不会裸奔英文键名。 */
@@ -255,6 +262,7 @@ const TOOL_LABEL: Record<string, string> = {
   historyDelete: '删聊天记录', historyClear: '清空记录', sendDocx: '发 Word 文档', sendRich: '发卡片消息',
   musicSearch: '搜歌', videoSearch: '看/搜视频', imageSearch: '联网找图发图', pixiv: '搜/发 Pixiv 插画', globalOverview: '全局总览', scheduleMessage: '定时发消息', withdrawMessage: '撤回消息',
   sendForward: '合并转发', like: '点赞', proactiveSend: '主动私聊',
+  luogu: '洛谷题库与视奸', renderMarkdownImage: 'Markdown 白底排版生图', sendExcel: '发送 Excel 表格',
   adminSet: '管理设置', whitelist: '白名单',
   qzone: '空间互动（看/评/赞/发）', qzoneView: '看空间',
   activityHours: '活跃时段',
@@ -308,6 +316,9 @@ const TOOL_MCP: Record<string, string> = {
   sendRich: 'qq_send_rich', musicSearch: 'qq_music_search', videoSearch: 'qq_video_parse / qq_video_search', imageSearch: 'qq_image_search / qq_send_image', pixiv: 'qq_pixiv_search / qq_send_pixiv', globalOverview: 'qq_global_overview',
   scheduleMessage: 'qq_schedule_message / qq_schedule_list / qq_schedule_cancel',
   withdrawMessage: 'qq_withdraw_message', sendForward: 'qq_send_forward',
+  luogu: 'qq_luogu_problem / qq_luogu_user / qq_luogu_daily / qq_luogu_solution',
+  renderMarkdownImage: 'qq_render_markdown_image',
+  sendExcel: 'qq_send_excel',
   qzone: 'qq_qzone_view / qq_qzone_comment / qq_qzone_like / qq_qzone_reply_comment / qq_send_qzone',
   // 以下 key 当前线上 config 没有（保留映射，切到含它们的配置时也能显示）
   activityHours: 'qq_get_activity_hours / qq_set_activity_hours', adminSet: 'qq_admin_set',
@@ -351,6 +362,7 @@ const TOOLS_NO_SWITCH: string[] = [
   // 2026-09-19：原来挂在六个废开关下面的工具（开关已删，工具照旧无条件注册）：
   // 表情包两个、档案读写两个、拉黑与删好友两个。
   'qq_meme_search', 'qq_send_meme', 'qq_profile_get', 'qq_profile_set', 'qq_blacklist', 'qq_remove_friend',
+  'qq_group_history', 'qq_publish_qzone',
   // 2026-09-24：注册表里新增/原先漏登记的两条。get_time 是桥自己实现的取时工具（裸名，不带 qq_ 前缀，
   // 由提示词 [TOOLS] 1d 指定为唯一时钟来源）；qq_character_switch 只在会话里切角色卡，没有独立开关。
   // 漏登记的表现是页面上整行看不到它们（既开不了也关不了），tools/audit-ui-tool-names.mjs 会报出来。
@@ -415,6 +427,9 @@ const MCP_LABEL: Record<string, string> = {
   get_time: '查看当前时间', qq_memory_remember: '记住这件事', qq_character_switch: '切换角色卡',
   // 2026-09-26：配置读写三件（读桥配置/改一个配置字段/管音色库）。
   qq_config_get: '读桥配置（含语音页）', qq_config_set: '改桥配置（一个字段）', qq_voice_manage: '管音色库',
+  qq_luogu_problem: '洛谷查题面', qq_luogu_user: '洛谷用户视奸', qq_luogu_daily: '洛谷每日一题', qq_luogu_solution: '洛谷查题解',
+  qq_render_markdown_image: 'Markdown白底排版生图', qq_send_excel: '发送Excel表格',
+  qq_publish_qzone: '发布说说', qq_group_history: '群历史记录',
 };
 
 /** 精简名单里某一行该显示的中文名；未登记时回落到「未登记」占位（绝不显示英文原名） */
@@ -777,6 +792,11 @@ function mcpLabel(fullName: string) {
   // ── Pixiv ──
   'pixiv.base': 'Pixiv 的**接口兜底站**地址：只有「官方 app-api 与 www.pixiv.net/ajax 两条线都失败」时才会用到它（走 {这个地址}/api/search.php 与 /api/detail.php）。**取图完全不经过这个字段**：取图是内置的「直联 i.pximg.net（带 referer）→ i.muxmus.com → pximg.cocomi.eu.org → i.pixiv.re」，首推 i.muxmus.com（2026-09-28 本机实测 0.28~1.29 秒、还带 Content-Length）。所以别把纯图床反代（i.muxmus.com / cocomi / i.pixiv.re 这类）填到这里 —— 它们对 /api/* 一律 404，填了这条兜底线就废了。留空即用内置默认 https://pixigraph.online（2026-09-28 起）。优先级：config.json 的 pixiv.base > 环境变量 QQBRIDGE_PIXIV_BASE > 内置默认，改完不用重启。',
   'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID）：仅用于按画师名字搜人（官网用户搜索接口对匿名请求一律返回 400）。免费账号即可；**贴进这一项就是全部动作**（2026-09-28 起）：桥下次启动时若发现有 cookie 却没有长期令牌，会自己拿它换一次，成功即落盘 state/pixiv-token.json 并每 50 分钟自动轮换（此后这一项可以清空；失败只记一行日志、不重试）。填一次即可长期使用：每解出一个画师号都会落盘缓存（state/pixiv-artists.json），cookie 此后过期，已查询过的名字仍可用；真正过期时桥会自检并主动在 QQ 中提醒。不填也可使用 authorId（画师号，如 1554775）或作品链接。安全说明：只发送给 pixiv 自身域名，绝不发送给镜像站。**写入方式（2026-09-28 起）**：直接在「常用设置 → Pixiv（镜像站与登录 cookie）」卡的「登录 cookie」一项里填（保存即写回配置；服务端目标保存时管理端会顺手换一次长期令牌，结果见保存回执的步骤列表）。',
+  luogu: '洛谷算法题库与公开信息视奸插件。配置你的 UID 和 Cookie 凭据后，机器人可进行题面查询、题解分析、每日一题推荐与用户视奸。',
+  'luogu.uid': '你的洛谷账号 UID（纯数字，如 123456）。配置后小鲸鱼可以一键查你的做题进度、估值排名与主页状态。',
+  'luogu.clientId': '洛谷的 __client_id Cookie 值。可用于提高查题请求的稳定性并绕过基础防爬限制。',
+  'luogu.cookie': '洛谷完整登录 Cookie。配置后可直接获取官方精选题解（未登录时洛谷题解接口返回 401）。',
+  'social.tools.luogu': '洛谷工具套件：支持查题面（qq_luogu_problem）、用户公开档案与做题视奸（qq_luogu_user）、每日一题推荐（qq_luogu_daily）、解题思路与题解（qq_luogu_solution）。',
 
   // ── 工具开关（逐个写明开启后模型可做什么）──
   'social.tools.getPrompt': '读提示词（qq_get_prompt）：模型主动重新读取当前生效的人设、发言规则与工具说明。一般无需调用，但可让模型自查「我现在的人设是什么」。',
@@ -2062,6 +2082,7 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
   return (
     <div className="cfg-grid">
       <GroupCard title="模型与推理" path="dsh" cfg={cfg} ch={ch} onHelp={onHelp}
+        filter={(k: string) => k !== 'visionBaseUrl' && k !== 'visionApiKey'}
         desc="指定连接的隔离 DSH 与回话所用的模型。用法：「模型服务商」留空即自动探测（使用隔离 DSH 中已配置的官方 DeepSeek），也可显式指定；模型留空即用 DSH 默认。注意：修改本卡会在保存后重启隔离 DSH 才生效；「推理档位」是单次调用耗时与思考 token 的最大变量（实测同一次调用出现过 37 秒），嫌慢或嫌贵应先调整本项与「工具与规则」页的精简名单。">
         {/* 语言模型密钥不再是"保存了但不生效"的空字段：
             保存时写进隔离 DSH 的凭据文件（600），这里显示其配置状态。 */}
@@ -2084,7 +2105,7 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       </GroupCard>
       {/* 令牌字段只保留下面那张卡：这里改白名单，仅列地址与运行路径等连接项。 */}
       <GroupCard title="NapCat 连接（地址与路径）"
-        blocks={[{ path: 'napcat', only: ['wsUrl', 'httpUrl', 'launcherPath', 'homeDir', 'imageFileMode', 'tmpDir', 'dockerPathMap', 'allowProcessControl'] }]}
+        blocks={[{ path: 'napcat', only: ['wsUrl', 'httpUrl', 'imageFileMode', 'tmpDir', 'dockerPathMap'] }]}
         cfg={cfg} ch={ch} onHelp={onHelp}
         desc="机器人与 NapCat 通信所用的地址与运行路径，本地一键启动时一般无需修改。注意：WebUI、HTTP、WS 三个令牌均不在本卡，统一在下方「NapCat 鉴权令牌」卡配置；该卡会同时写入 NapCat 自身配置与桥的配置，并重启 NapCat 生效。" />
       {/* 令牌要真正写进 NapCat 才生效：见 NapcatTokensCard 的注释 */}
@@ -2092,6 +2113,7 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       {/* 2026-09-28 新增：Pixiv 卡。此前这三个键只登记了中文名与说明、没有任何卡片渲染它们，
           界面上根本填不了登录 cookie（详见 PixivCard 的注释）。 */}
       <PixivCard cfg={cfg} ch={ch} onHelp={onHelp} />
+      <LuoguCard cfg={cfg} ch={ch} onHelp={onHelp} />
       {/* 2026-09-30 变更要求：整张「基础与会话」卡已去除（人设预设、owner QQ、工作区与发送节奏
 /**  等基础项不再在管理端出现）。这些键仍会被读进桥：需要时可在「JSON 进阶」里改，
        *  或按下面 renderAgentPreset 那段注释把键删掉。 */}
@@ -2256,6 +2278,54 @@ function PixivCard({ cfg, ch, onHelp }: {
           </button>
           <span style={{ fontSize: 12, opacity: 0.85 }}>
             cookie 三种写法都认：整条 cookie 串、<code>PHPSESSID=xxxx</code>、或只贴会话值本身。
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function LuoguCard({ cfg, ch, onHelp }: {
+  cfg: any; ch: (p: string) => (v: any) => void; onHelp: (h: any) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  const l = (cfg && isObj(cfg.luogu)) ? cfg.luogu : {};
+  const s = (k: string) => (typeof l[k] === 'string' ? l[k] : (typeof l[k] === 'number' ? String(l[k]) : ''));
+  const hasUid = s('uid').trim().length > 0;
+  const hasCookie = s('cookie').trim().length > 0;
+  const hasClient = s('clientId').trim().length > 0;
+
+  return (
+    <div className="cfg-card">
+      <div className="cfg-card-title">洛谷（Luogu 算法题库与视奸）</div>
+      <div className="cfg-card-desc">
+        支持发题面、发题解/思路分析、每日一题推荐，以及视奸查询洛谷公开用户档案（UID、咕值、排名、勋章、打卡记录）。查题解与防反爬建议配置完整 Cookie 或 <code>__client_id</code>。
+      </div>
+      <div className="cfg-fields">
+        <Field path="luogu.uid" val={s('uid')} label="洛谷用户 UID" ch={ch} onHelp={onHelp} cfg={cfg} />
+        <Field path="luogu.clientId" val={s('clientId')} label="洛谷 Client ID（__client_id）" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
+        <Field path="luogu.cookie" val={s('cookie')} label="洛谷完整登录 Cookie" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
+      </div>
+      <ul className="cfg-card-desc" style={{ display: 'block', margin: '8px 0 4px', paddingLeft: 18, lineHeight: 1.75 }}>
+        <li><b>发题面与每日一题</b>：输入题号（如 <code>P1001</code>、<code>B2002</code>、<code>CF4A</code>）即可调取时空限制、输入输出样例与说明；亦可搭配 Markdown 白底卡片精美排版发送。</li>
+        <li><b>视奸用户主页</b>：输入任意用户的 UID（如 <code>1</code>），即可视奸其公开咕值、主页签名、CCF 认证等级、全站排名与打卡概况。</li>
+        <li><b>解题思路与题解</b>：若配置了洛谷登录 Cookie 可获取官方精选题解；若未登录，小鲸鱼将自动根据题面为你编写高水准思路分析并附带标准 C++ 模板代码。</li>
+      </ul>
+      <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.75 }}>
+        <div>
+          {!hasUid && !hasCookie && !hasClient
+            ? '当前未绑定洛谷 UID：公开查题面与每日一题照常可用；绑定后可实现专属自查与完整视奸。'
+            : hasUid
+              ? `已绑定洛谷 UID: ${s('uid')} ${hasCookie || hasClient ? '· 已配置防爬凭据' : '· 未填凭据（仅公开访问）'}`
+              : '已配置凭据。'}
+        </div>
+        <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-tb-soft" onClick={() => setReveal((v) => !v)}>
+            {reveal ? '隐藏凭证' : '显示凭证'}
+          </button>
+          <span style={{ fontSize: 12, opacity: 0.85 }}>
+            Cookie 可从浏览器开发者工具中洛谷请求的请求头直接复制。
           </span>
         </div>
       </div>
@@ -2849,11 +2919,15 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
       {/* ---------- ② 上传 ---------- */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
         <input className="input" style={{ maxWidth: 190 }} placeholder="包名（留空自动取名）" value={packIdInput} onChange={(e) => setPackIdInput(e.target.value)} />
-        <Dropdown className="input" style={{ maxWidth: 380 }} value={toCharacter} onChange={setToCharacter}
-          options={[
+        {renderLockedOrSelect(
+          [
             { value: '', label: '谁都能用（公共包）' },
             ...roleRows.map((r) => ({ value: r, label: `只给 ${r} 用` })),
-          ]} />
+          ],
+          toCharacter,
+          setToCharacter,
+          { className: 'input', lockedClassName: 'input', style: { maxWidth: 380 } }
+        )}
         <input ref={zipRef} type="file" hidden accept=".zip,application/zip,application/x-zip-compressed"
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void upload('zip', [f]); }} />
         <input ref={dirRef} type="file" hidden multiple {...({ webkitdirectory: '' } as Record<string, string>)}
@@ -3849,7 +3923,7 @@ const FIELD_WIDTH: Record<string, string> = {
   'napcat.launcherPath': 'is-mid', 'napcat.homeDir': 'is-mid', 'napcat.tmpDir': 'is-mid',
   /* 2026-09-28：只给镜像站地址（URL）收窄；cookie 与长期令牌是上百字符的长串、且各占一整行，
      不设宽度上限，让输入框铺满一行更好用（见 Field 的 wide 开关）。 */
-  'pixiv.base': 'is-mid',
+  'pixiv.base': 'is-mid', 'luogu.uid': 'is-short',
 };
 
 function Field({ path, val, label, ch, onHelp, cfg, secret, wide }: {
@@ -3926,22 +4000,25 @@ function Field({ path, val, label, ch, onHelp, cfg, secret, wide }: {
         <label className="field-row">
           {renderLabel()}
           <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
-            <Dropdown className="select" value={val} onChange={(v) => {
-              const next = v;
-              ch(path)(next);
-              const modelPath = path.replace(/\.provider$/, '.model');
-              const cur = String(get(cfg ?? {}, modelPath) ?? '');
-              const nextList = modelListFor(next);
-              const ids = nextList.map((m) => m.id);
-              if (cur && !ids.includes(cur)) {
-                const pick = ids.length ? ids[0] : '';
-                ch(modelPath)(pick);
-                setAutoMsg(`已切到「${next || '自动探测'}」的模型列表，主模型 ${cur} → ${pick || '(留空，跟随 DSH 默认)'}`);
-              } else {
-                setAutoMsg(`已切到「${next || '自动探测'}」的模型列表（${ids.length} 个模型），当前主模型仍在列表里，保持不变`);
-              }
-              }}
-              options={providerChoices().map((p) => ({ value: p.id, label: p.label }))} />
+            {renderLockedOrSelect(
+              providerChoices().map((p) => ({ value: p.id, label: p.label })),
+              val,
+              (next) => {
+                ch(path)(next);
+                const modelPath = path.replace(/\.provider$/, '.model');
+                const cur = String(get(cfg ?? {}, modelPath) ?? '');
+                const nextList = modelListFor(next);
+                const ids = nextList.map((m) => m.id);
+                if (cur && !ids.includes(cur)) {
+                  const pick = ids.length ? ids[0] : '';
+                  ch(modelPath)(pick);
+                  setAutoMsg(`已切到「${next || '自动探测'}」的模型列表，主模型 ${cur} → ${pick || '(留空，跟随 DSH 默认)'}`);
+                } else {
+                  setAutoMsg(`已切到「${next || '自动探测'}」的模型列表（${ids.length} 个模型），当前主模型仍在列表里，保持不变`);
+                }
+              },
+              { className: 'select' }
+            )}
             <em style={{ fontStyle: 'normal', fontSize: 11.5, opacity: .75 }}>
               {autoMsg || (list.length
                 ? `该服务商有 ${list.length} 个可用模型 · 列表来自 ${modelListSource(String(val ?? ''))}`

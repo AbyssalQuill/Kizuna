@@ -98,6 +98,9 @@ import { postRandomQzone, publishCustomQzone, initQzoneCore } from './qzone.js';
 import { sendExcel } from './excel.js';
 import { renderMarkdownToImage } from '../lib/render-markdown.js';
 import {
+  getLuoguProblem, getLuoguUser, getLuoguDaily, getLuoguSolution, initLuoguCore
+} from './luogu.js';
+import {
   cancelPendingEntry, handlePendingAnswer, handlePokeNotice, handleInputStatusNotice,
   registerPending, initEventsAuxCore, setEventsAuxApi,
 } from './events-aux.js';
@@ -227,7 +230,7 @@ let sendRich = null;
 let musicSearch = null;
 let buildMusicCard = null;   // media 域提供：音乐卡片字段由桥解析拼好（含封面归一化 + 降级梯子）
 let writeLastMode = null;
-export function initConsoleCore(cfg) { cfgRef = cfg; }
+export function initConsoleCore(cfg) { cfgRef = cfg; try { initLuoguCore(cfg); } catch {} }
 export function setConsoleApi(api) { apiRef = api; }
 export function setConsoleBot(bot) { botRef = bot; }
 export function setConsoleMedia(rich, music, card) { sendRich = rich; musicSearch = music; if (typeof card === 'function') buildMusicCard = card; }
@@ -3937,6 +3940,65 @@ export function startConsoleServer() {
         } catch (error) {
           log(`[render-md] 渲染 Markdown 图片失败: ${error?.message ?? error}`);
           sendJson({ ok: false, error: `渲染图片失败：${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+
+      // ── 洛谷 (Luogu) 插件端点：题面、题解、每日一题、公开视奸 ──────
+      if (req.method === 'POST' && url.pathname === '/api/social/luogu/problem') {
+        const body = await readBody();
+        const key = String(body.key ?? '').trim();
+        const pid = String(body.pid ?? '').trim();
+        if (!pid) { sendJson({ ok: false, error: 'pid 不能为空' }, 400); return; }
+        if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
+        try {
+          const prob = await getLuoguProblem(pid);
+          sendJson(prob);
+        } catch (error) {
+          sendJson({ ok: false, error: `获取洛谷题面失败: ${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/social/luogu/user') {
+        const body = await readBody();
+        const key = String(body.key ?? '').trim();
+        const uid = String(body.uid ?? '').trim();
+        if (!uid) { sendJson({ ok: false, error: 'uid 不能为空' }, 400); return; }
+        if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
+        try {
+          const user = await getLuoguUser(uid);
+          sendJson(user);
+        } catch (error) {
+          sendJson({ ok: false, error: `获取洛谷用户信息失败: ${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/social/luogu/daily') {
+        const body = await readBody();
+        const key = String(body.key ?? '').trim();
+        if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
+        try {
+          const daily = await getLuoguDaily(body.date);
+          sendJson(daily);
+        } catch (error) {
+          sendJson({ ok: false, error: `获取洛谷每日一题失败: ${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/social/luogu/solution') {
+        const body = await readBody();
+        const key = String(body.key ?? '').trim();
+        const pid = String(body.pid ?? '').trim();
+        if (!pid) { sendJson({ ok: false, error: 'pid 不能为空' }, 400); return; }
+        if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
+        try {
+          const sol = await getLuoguSolution(pid);
+          sendJson(sol);
+        } catch (error) {
+          sendJson({ ok: false, error: `获取洛谷题解失败: ${error?.message ?? error}` }, 500);
         }
         return;
       }

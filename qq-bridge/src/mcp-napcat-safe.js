@@ -3281,6 +3281,100 @@ if (cfg.social?.tools?.renderMarkdownImage !== false) {
   );
 }
 
+// ── 洛谷 (Luogu) 工具套件：题面、题解、每日一题、公开视奸 ──
+if (cfg.social?.tools?.luogu !== false) {
+  registerTool(
+    'qq_luogu_problem',
+    'Query problem statement and details from Luogu (洛谷). Input problem ID (pid, e.g. "P1001", "B2002", "CF4A"). Returns difficulty, limits, acceptance rate, problem description, input/output formats, and samples. You can display it directly in chat or render it with qq_render_markdown_image for beautiful formatting.',
+    {
+      key: z.string().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token'),
+      pid: z.string().describe('Problem ID, e.g. P1001, B2002, CF4A')
+    },
+    async ({ key, token, pid }) => {
+      try {
+        const data = await agentApi('/api/social/luogu/problem', {
+          method: 'POST',
+          body: JSON.stringify({ key, pid }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 30000
+        });
+        return { content: [{ type: 'text', text: typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `获取洛谷题面失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  registerTool(
+    'qq_luogu_user',
+    'Inspect Luogu (洛谷) user public profile ("视奸" / 洛谷个人公开档案). Input user UID (e.g. 1, 12345). Returns nickname, color/rank (红名/橙名/绿名/紫名), CCF level, slogan, following/follower count, and guzhi breakdown if public.',
+    {
+      key: z.string().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token'),
+      uid: z.union([z.number(), z.string()]).describe('Luogu User UID, e.g. 1 or 12345')
+    },
+    async ({ key, token, uid }) => {
+      try {
+        const data = await agentApi('/api/social/luogu/user', {
+          method: 'POST',
+          body: JSON.stringify({ key, uid: String(uid) }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 30000
+        });
+        return { content: [{ type: 'text', text: typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `查询洛谷用户失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  registerTool(
+    'qq_luogu_daily',
+    'Fetch today\'s Luogu (洛谷) Daily Problem recommendation ("每日一题"). Returns today\'s selected problem with tags, difficulty, and full problem description.',
+    {
+      key: z.string().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token')
+    },
+    async ({ key, token }) => {
+      try {
+        const data = await agentApi('/api/social/luogu/daily', {
+          method: 'POST',
+          body: JSON.stringify({ key }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 30000
+        });
+        return { content: [{ type: 'text', text: typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `获取每日一题失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  registerTool(
+    'qq_luogu_solution',
+    'Query solution approaches or editorials for a Luogu (洛谷) problem (pid, e.g. "P1001"). If Luogu requires login and cookie is missing, returns info so you can provide your own well-structured solution and C++ code.',
+    {
+      key: z.string().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token'),
+      pid: z.string().describe('Problem ID, e.g. P1001')
+    },
+    async ({ key, token, pid }) => {
+      try {
+        const data = await agentApi('/api/social/luogu/solution', {
+          method: 'POST',
+          body: JSON.stringify({ key, pid }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 30000
+        });
+        return { content: [{ type: 'text', text: typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `获取题解失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
 // ── QQ 空间说说自主发布 ──
 if (cfg.social?.tools?.qzone !== false) {
   registerTool(
