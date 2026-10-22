@@ -14,6 +14,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { stickerDefinitions } from './sticker-catalog.js';
+
+const catalogByMd5 = new Map((stickerDefinitions || []).map((d) => [d.md5.toUpperCase(), d]));
 
 export function nowIso() {
   return new Date().toISOString();
@@ -23,18 +26,20 @@ export function normalizeStickerEntry(raw) {
   const entry = raw && typeof raw === 'object' ? raw : {};
   const id = String(entry.id || entry.emoji_id || entry.resId || '').trim();
   if (!id) return null;
-  const tags = Array.isArray(entry.tags)
+  const md5 = String(entry.md5 || '').trim().toUpperCase();
+  const cat = md5 ? catalogByMd5.get(md5) : null;
+  const tags = Array.isArray(entry.tags) && entry.tags.length
     ? entry.tags.map((t) => String(t ?? '').trim()).filter(Boolean).slice(0, 20)
-    : [];
+    : (cat?.tags || []);
   return {
     id,
     resId: String(entry.resId || entry.emoji_id || id).trim(),
     url: String(entry.url || '').trim(),
-    md5: String(entry.md5 || '').trim().toUpperCase(),
-    desc: String(entry.desc ?? '').trim(),
-    localNote: String(entry.localNote ?? '').trim(),
+    md5,
+    desc: String(entry.desc || cat?.desc || '').trim(),
+    localNote: String(entry.localNote || cat?.localNote || '').trim(),
     tags,
-    usage: String(entry.usage ?? '').trim(),
+    usage: String(entry.usage || cat?.usage || '').trim(),
     source: entry.source === 'manual' ? 'manual' : (entry.source === 'ai' ? 'ai' : 'qq'),
     useCount: Math.max(0, Number(entry.useCount) || 0),
     lastUsedAt: Number(entry.lastUsedAt) || 0,
@@ -83,16 +88,17 @@ export function mergeStickerLibrary(existing, fetched) {
     if (!id) continue;
     const itemMd5 = String(item.md5 || '').trim().toUpperCase();
     const old = byId.get(id) || (itemMd5 ? byMd5.get(itemMd5) : null);
+    const cat = itemMd5 ? catalogByMd5.get(itemMd5) : null;
     const merged = normalizeStickerEntry({
       ...(old || {}),
       id,
       resId: String(item.resId || item.emoji_id || id).trim(),
       url: String(item.url || old?.url || '').trim(),
       md5: itemMd5 || String(old?.md5 || '').trim().toUpperCase(),
-      desc: String((item.desc && String(item.desc).trim()) ? item.desc : (old?.desc ?? '')).trim(),
-      localNote: old?.localNote || item.localNote || '',
-      tags: (old?.tags && old.tags.length) ? old.tags : (item.tags || []),
-      usage: old?.usage || '',
+      desc: String((item.desc && String(item.desc).trim()) ? item.desc : (old?.desc || cat?.desc || '')).trim(),
+      localNote: old?.localNote || cat?.localNote || item.localNote || '',
+      tags: (old?.tags && old.tags.length) ? old.tags : (cat?.tags || item.tags || []),
+      usage: old?.usage || cat?.usage || item.usage || '',
       source: old?.source || 'qq',
       useCount: old?.useCount || 0,
       lastUsedAt: old?.lastUsedAt || 0,

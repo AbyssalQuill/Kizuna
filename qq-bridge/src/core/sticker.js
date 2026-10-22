@@ -471,19 +471,38 @@ export async function setStickerRemark2(stickerId, remark) {
   const entry = findSticker(synced?.entries ?? stickerEntries, stickerId);
   if (!entry) throw new Error(`找不到表情 ${stickerId}，请先用 qq_list_stickers 获取有效 id`);
   const cleanRemark = String(remark ?? '').trim().slice(0, 50);
-  const response = await botRef.request('modify_custom_face', { emoji_id: entry.id, desc: cleanRemark });
-  if (!response || response.status !== 'ok' || response.retcode !== 0) {
-    throw new Error(`modify_custom_face 失败: ${response?.wording || response?.retcode || 'unknown'}`);
+
+  // 1. QQ 侧 desc（尽力尝试）：NapCat 的动作是 set_custom_face_desc（若不支持或失败不阻断本地保存）
+  if (botRef && typeof botRef.request === 'function') {
+    try {
+      const resp = await botRef.request('set_custom_face_desc', {
+        emoji_id: entry.id,
+        res_id: entry.resId || entry.id,
+        md5: entry.md5 || '',
+        desc: cleanRemark
+      });
+      if (resp && resp.status !== 'ok') {
+        log(`[sticker] set_custom_face_desc 响应未成功（将保留本地认知）: ${resp?.wording || resp?.retcode}`);
+      }
+    } catch (e) {
+      log(`[sticker] set_custom_face_desc 调用异常（将保留本地认知）: ${e?.message ?? e}`);
+    }
   }
-  const updated = applyStickerNote(stickerEntries, entry.id, {});
-  // 直接改 desc（保留本地认知）
-  const idx = (updated.entries || []).findIndex((e) => e.id === entry.id);
+
+  // 2. 本地认知（desc 与 localNote 均同步更新）：确保 AI 以后能记住并用对
+  const updated = applyStickerNote(stickerEntries, entry.id, { note: cleanRemark });
+  const idx = (updated.entries || []).findIndex((e) => e.id === entry.id || (entry.md5 && e.md5 === entry.md5));
   if (idx >= 0) {
-    updated.entries[idx] = { ...updated.entries[idx], desc: cleanRemark, updatedAt: new Date().toISOString() };
+    updated.entries[idx] = {
+      ...updated.entries[idx],
+      desc: cleanRemark,
+      localNote: cleanRemark,
+      updatedAt: new Date().toISOString()
+    };
   }
   updateStickerEntries(updated.entries);
   saveStickerStoreSafe();
-  return stickerEntries.find((e) => e.id === entry.id) || null;
+  return stickerEntries.find((e) => e.id === entry.id || (entry.md5 && e.md5 === entry.md5)) || null;
 }
 
 export async function collectSticker2(key, messageRef, remark) {
@@ -495,7 +514,7 @@ export async function collectSticker2(key, messageRef, remark) {
   const st = getSocialState(key);
   const found = (st.recentMessages || []).find((m) => m && (String(m.seq) === String(messageRef) || (m.messageId && String(m.messageId) === String(messageRef))));
   if (!found) throw new Error('找不到这条消息，请确认 messageId/seq 有效且属于当前会话');
-  if (found.isSelf) throw new Error('不能收藏自己发的表情，只能收藏群友发的');
+  // 允许收藏自己发出的图片/表情，以及群友发出的图片/表情
   const mediaList = Array.isArray(found.media) ? found.media : [];
   if (!mediaList.length) throw new Error('这条消息没有可收藏的图片/表情');
   const media = mediaList[0];

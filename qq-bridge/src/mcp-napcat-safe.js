@@ -1877,7 +1877,7 @@ if (cfg.social?.sticker?.enabled !== false && cfg.social?.tools?.sendSticker !==
 if (cfg.social?.sticker?.enabled !== false && cfg.social?.tools?.collectSticker !== false) {
   registerTool(
     'qq_collect_sticker',
-    'Collect a sticker/image someone sent in this session into your QQ sticker collection, optionally with a short note; messageId = the messageId or seq from qq_get_unread_messages / qq_get_recent_messages. Do not collect often - only what genuinely amuses or fits you; collected items appear in qq_list_stickers. If the result says this NapCat build does not support auto-collect (add_custom_face unavailable), stop trying, tell the other person collecting is currently unavailable, and never retry.',
+    'Collect a sticker/image from this session (sent by others or by yourself) into your QQ sticker collection, optionally with a short note; messageId = the messageId or seq from qq_get_unread_messages / qq_get_recent_messages. Do not collect often - only what genuinely amuses or fits you; collected items appear in qq_list_stickers. If the result says this NapCat build does not support auto-collect (add_custom_face unavailable), stop trying, tell the other person collecting is currently unavailable, and never retry.',
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token (from the wake prompt)'),
