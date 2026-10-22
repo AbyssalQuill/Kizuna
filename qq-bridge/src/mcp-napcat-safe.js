@@ -958,9 +958,21 @@ registerTool(
 registerTool(
   'qq_get_group_history',
   'Get recent message history of a group (read-only); optional messageSeq fetches messages before that seq. Needs NapCat get_group_msg_history.',
-  { groupId: z.union([z.number(), z.string()]).describe('Group id'), messageSeq: z.number().optional().describe('Starting message seq (optional)') },
-  async ({ groupId, messageSeq }) => {
-    const g = String(groupId);
+  {
+    groupId: z.union([z.number(), z.string()]).optional().describe('Group id (or pass group_id or key)'),
+    group_id: z.union([z.number(), z.string()]).optional().describe('Group id alias'),
+    key: z.string().optional().describe('Session key: group:ID'),
+    count: z.number().optional().describe('Message count (optional)'),
+    user_id: z.union([z.number(), z.string()]).optional().describe('Filter by user_id (optional)'),
+    userId: z.union([z.number(), z.string()]).optional().describe('Filter by userId (optional)'),
+    messageSeq: z.number().optional().describe('Starting message seq (optional)')
+  },
+  async ({ groupId, group_id, key, count, user_id, userId, messageSeq }) => {
+    const rawG = groupId ?? group_id ?? (key ? String(key).replace(/^group:/, '') : null);
+    if (!rawG) {
+      return { content: [{ type: 'text', text: '错误：缺少 groupId 或 group_id 参数' }], isError: true };
+    }
+    const g = String(rawG);
     const a = getAccess();
     if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllGroups || a.allowAllWhenEmpty)) {
       return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中。白名单：${a.allowGroups.join(', ') || '（空）'}` }], isError: true };
@@ -971,8 +983,52 @@ registerTool(
     try {
       const params = { group_id: Number(g) };
       if (messageSeq !== undefined) params.message_seq = messageSeq;
+      if (count !== undefined) params.count = count;
       const data = await onebot('get_group_msg_history', params);
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      let list = Array.isArray(data?.messages) ? data.messages : (Array.isArray(data) ? data : []);
+      const filterUid = user_id ?? userId;
+      if (filterUid && list.length > 0) {
+        list = list.filter((m) => String(m.user_id ?? m.sender?.user_id) === String(filterUid));
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(list.length ? list : data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `查询失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// 别名支持：模型经常直接调 qq_group_history
+registerTool(
+  'qq_group_history',
+  'Alias for qq_get_group_history. Get recent message history of a group.',
+  {
+    groupId: z.union([z.number(), z.string()]).optional().describe('Group id (or pass group_id or key)'),
+    group_id: z.union([z.number(), z.string()]).optional().describe('Group id alias'),
+    key: z.string().optional().describe('Session key: group:ID'),
+    count: z.number().optional().describe('Message count (optional)'),
+    user_id: z.union([z.number(), z.string()]).optional().describe('Filter by user_id (optional)'),
+    userId: z.union([z.number(), z.string()]).optional().describe('Filter by userId (optional)'),
+    messageSeq: z.number().optional().describe('Starting message seq (optional)')
+  },
+  async (args) => {
+    const rawG = args.groupId ?? args.group_id ?? (args.key ? String(args.key).replace(/^group:/, '') : null);
+    if (!rawG) return { content: [{ type: 'text', text: '错误：缺少 groupId 或 group_id 参数' }], isError: true };
+    const g = String(rawG);
+    const a = getAccess();
+    if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllGroups || a.allowAllWhenEmpty)) {
+      return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中。` }], isError: true };
+    }
+    try {
+      const params = { group_id: Number(g) };
+      if (args.messageSeq !== undefined) params.message_seq = args.messageSeq;
+      if (args.count !== undefined) params.count = args.count;
+      const data = await onebot('get_group_msg_history', params);
+      let list = Array.isArray(data?.messages) ? data.messages : (Array.isArray(data) ? data : []);
+      const filterUid = args.user_id ?? args.userId;
+      if (filterUid && list.length > 0) {
+        list = list.filter((m) => String(m.user_id ?? m.sender?.user_id) === String(filterUid));
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(list.length ? list : data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `查询失败：${error?.message ?? error}` }], isError: true };
     }
@@ -983,17 +1039,24 @@ registerTool(
   'qq_send_group_message',
   'Send one plain-text message to a group. Quote via replyToMessageId (non-zero int, may be negative; from qq_get_recent_messages / qq_get_message_detail). Default mode works but prefer qq_send_message; token required or the call is rejected. Do not output sent reports. Group must be whitelisted (config.json allow.groups) or rejected.',
   {
-    groupId: z.union([z.number(), z.string()]).describe('Group id (must be whitelisted)'),
+    groupId: z.union([z.number(), z.string()]).optional().describe('Group id (must be whitelisted)'),
+    group_id: z.union([z.number(), z.string()]).optional().describe('Group id alias'),
+    key: z.string().optional().describe('Session key: group:ID'),
     message: z.string().describe('Plain-text message; no Markdown or CQ codes'),
     replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, may be negative, optional)'),
     token: z.string().optional().describe('Session token (required in default mode)')
   },
-  async ({ groupId, message, replyToMessageId, token }) => {
+  async ({ groupId, group_id, key, message, replyToMessageId, token }) => {
+    const rawG = groupId ?? group_id ?? (key ? String(key).replace(/^group:/, '') : null);
+    if (!rawG) {
+      return { content: [{ type: 'text', text: '错误：缺少 groupId 或 group_id 参数' }], isError: true };
+    }
+    const g = String(rawG);
     try {
       const cleanMessage = unquoteJsonString(message);
       const data = await agentApi('/api/send/group', {
         method: 'POST',
-        body: JSON.stringify({ groupId: String(groupId), message: cleanMessage, replyToMessageId, token: token || undefined })
+        body: JSON.stringify({ groupId: g, message: cleanMessage, replyToMessageId, token: token || undefined })
       });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -2434,12 +2497,14 @@ registerTool(
   {
     key: z.string().describe('Session key (group:ID or private:QQ). Must be the owner\'s private chat, or a session where the owner/admin just spoke.'),
     token: z.string().describe('Session token (from the wake prompt)'),
-    groupId: z.union([z.number(), z.string()]).describe('Group id'),
+    groupId: z.union([z.number(), z.string()]).optional().describe('Group id'),
+    group_id: z.union([z.number(), z.string()]).optional().describe('Group id alias'),
     action: z.enum(['add', 'remove']).describe('add=add to whitelist, remove=remove from whitelist')
   },
-  async ({ key, token, groupId, action }) => {
+  async ({ key, token, groupId, group_id, action }) => {
     try {
-      const data = await agentApi('/api/social/whitelist', { method: 'POST', body: JSON.stringify({ key, token, groupId: String(groupId), action }) });
+      const gid = String(groupId ?? group_id ?? '').trim();
+      const data = await agentApi('/api/social/whitelist', { method: 'POST', body: JSON.stringify({ key, token, groupId: gid, action }) });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `操作失败：${error.message}` }], isError: true };
@@ -3282,7 +3347,7 @@ if (cfg.social?.tools?.sendRich !== false) {
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token'),
-      type: z.enum(['music', 'video', 'contact', 'location', 'dice', 'rps']).describe('Card type: music (NetEase real card / QQ Music real card built by the bridge), video (bilibili/weibo = a REAL mini-program card the bridge asks QQ to sign; douyin/YouTube/X = cover + share link), contact=contact card, location=share a place (needs lat+lon, locTitle/locContent optional) - sent as an AMap rich-text card (the same com.tencent.tuwen.lua card a human gets when sharing a place from 高德地图) plus a text line with the place name and a 高德 map link, dice, rps=rock-paper-scissors'),
+      type: z.enum(['music', 'video', 'contact', 'location', 'dice', 'rps']).optional().describe('Card type (optional, auto-inferred if omitted): music, video, contact, location, dice, rps'),
       musicType: z.enum(['qq', '163', 'kugou', 'migu', 'kuwo', 'custom']).optional().describe('musicType: 163=NetEase (real music card, built by the bridge), qq=QQ Music (also built by the bridge; needs title, falls back to the official share link), kugou/kuwo/migu/custom=other platforms (custom needs musicUrl+image, last resort)'),
     // 2026-09-19 定稿·硬规则：封面必须由调用方传进来 —— 实测同一个 musicId，传了 image 封面就正常、
     // 不传就空白（手机端尤其明显）。所以音乐卡一律要带 image（用 qq_music_search 返回的 cover 原样传）。
@@ -3301,7 +3366,16 @@ if (cfg.social?.tools?.sendRich !== false) {
     },
     async ({ key, token, type, musicType, musicId, musicUrl, musicStyle, audio, title, image, content, videoUrl, contactType, contactId, lat, lon, locTitle, locContent, data, result, replyToMessageId, atUserId }) => {
       try {
-        const body = { key, type };
+        let cardType = type;
+        if (!cardType) {
+          if (videoUrl) cardType = 'video';
+          else if (musicId !== undefined || musicType || musicUrl) cardType = 'music';
+          else if (contactId !== undefined || contactType) cardType = 'contact';
+          else if (lat !== undefined && lon !== undefined) cardType = 'location';
+          else if (result !== undefined) cardType = 'dice';
+          else cardType = 'music';
+        }
+        const body = { key, type: cardType };
         if (musicType) body.musicType = musicType;
         if (musicId !== undefined && musicId !== null) body.musicId = musicId;
         if (musicUrl) body.musicUrl = musicUrl;
