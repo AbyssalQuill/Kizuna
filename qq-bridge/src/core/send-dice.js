@@ -72,8 +72,7 @@ export function memeTurnHint(key) {
   if (hit) {
     return `[Meme] dice HIT (p=${p}): SEND ONE sticker or meme this turn (qq_send_sticker for QQ favorites; qq_meme_search + qq_send_meme for the meme packs, which already include the owner's own packs and the pack bound to the current character). At most one, never as a substitute for answering, and skip it only if nothing in the library fits what you are saying.\n`;
   }
-  const why = cooling ? 'cooldown' : 'dice MISS';
-  return `[Meme] ${why} (p=${p})${p <= 0 ? ' stickers off' : ''}: no stickers this turn unless someone explicitly asks for one.\n`;
+  return '';
 }
 
 /** 供诊断/日志：当前生效的表情包参数 */

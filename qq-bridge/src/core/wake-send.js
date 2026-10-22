@@ -359,18 +359,8 @@ function buildRuntimeOverrideBlock() {
  * 来源标记保留：owner = 主人配置的值；model = 模型自己写过的值。
  */
 function wakeRefLine(key) {
-  const st = getSocialState(key);
-  const tr = st?.wakeConfig?.triggers ?? {};
-  const ownerRaw = cfgRef.social?.wake?.recommendedProbability;
-  const ownerSet = ownerRaw !== undefined && ownerRaw !== null && ownerRaw !== '';
-  const ownerProb = ownerSet ? Math.min(1, Math.max(0, Number(ownerRaw) || 0)) : null;
-  const cur = Number(tr.probability);
-  const curShown = Number.isFinite(cur) ? Math.min(1, Math.max(0, cur)) : '未设置';
-  const src = tr.probabilitySource === 'model' ? 'model' : 'owner';
-  return '[WakeRef] 普通消息不再按概率过滤：群里的普通消息一律交到你面前，接不接、接几条由你按发言规则自己判断（不是抽签）。'
-    + `记录：主人配置=${ownerProb === null ? '未设置' : ownerProb}，当前生效=${curShown}，来源=${src}`
-    + '；只有要本会话完全静默（普通消息别叫你）时才把 triggers.probability 设为 0，那是关闭开关、不是概率，其它数值都不参与判断。'
-    + deepsleepLine(key);
+  const ds = deepsleepLine(key);
+  return ds ? `[WakeRef] ${ds}\n` : '';
 }
 
 /**
@@ -567,7 +557,7 @@ export function buildWakePrompt(key, reason) {
    * 模型干脆不调 get_time，直接凭感觉答，"现在几点/几号/周几"经常错（晚上聊到半夜还说白天）。
    * 现在给回一个"发出时刻"，并当场说明它可能已经过期、要精确就用 get_time —— 有基准可校，模型不会瞎猜。 */
   const nowMs = Date.now();
-  const nowLine = `[Now] ${fmtBeijing(nowMs)}（北京时间；这是本轮唤醒发出的时刻，若你已经做了多步工具调用，请用 get_time 重新取）\n`;
+  const nowLine = `[Now] ${fmtBeijing(nowMs)}\n`;
   const statusLine = `[Status] ${statusBits.join('; ')}\n\n`;
   const wc = st.wakeConfig || {};
   const wcTr = wc.triggers || {};
@@ -582,10 +572,7 @@ export function buildWakePrompt(key, reason) {
   const wakeLine = `[Wake] ${wcMode}, ${wcTime}${wcTriggers.length ? ` trg:${wcTriggers.join('/')}` : ''}\n${wakeRefLine(key)}\n\n`;
   const gInfoText = key.startsWith('group:') ? formatGroupInfoLine(key.split(':')[1]) : '';
   const groupListText = formatGroupListLine();
-      // 2026-09-12 规则搬家：原 rulesShort（12 条：跨会话读取/转达/@/提醒/撤回/长文 docx/
-      // 收尾与配额/owner 私聊收尾/活跃时段/系统配置键，共 4,274 字符）已整段搬进系统提示词
-      // （agent.cordis.yml 的 [RULES] 段）——唤醒注入不再每轮重复塞一遍，省的是长期驻留的上下文。
-  const base = tokenLine + nowLine + statusLine + wakeLine + voiceTurnHint(key) + memeTurnHint(key) + memoryLine + participationLine + (gInfoText ? gInfoText + '\n' : '') + (groupListText ? groupListText + '\n\n' : (gInfoText ? '\n' : ''));
+  const base = tokenLine + nowLine + statusLine + wakeLine + voiceTurnHint(key) + memeTurnHint(key) + memoryLine + (gInfoText ? gInfoText + '\n' : '') + (groupListText ? groupListText + '\n\n' : (gInfoText ? '\n' : ''));
   // 2026-09-12 规则搬家：原 protocolNote（2,886 字符的「回合协议」：➤ 哨兵含义、读/发/收尾步骤、
   // 步数预算、等待工具禁令）已整段搬进系统提示词的 [WAKE DATA] / [WAKE TYPES] 两段。
   // 现在唤醒正文只留数据行：[Token] + [Wake ...]/[Unread n]/[Mid-turn]/[Note]...，不再携带规则散文。
@@ -630,7 +617,7 @@ export function buildWakePrompt(key, reason) {
     return `${baseWithProtocol}[Wake] ${key} proactive opening`;
   }
   if (reason === 'afterthought') {
-    return `${baseWithProtocol}[Wake] ${key} afterthought (距离上一条回复过去了约半分钟，主人暂时还没回。就像真人聊天一样，如果你突然想到了什么小细节、一句心疼或撒娇的碎碎念、想延伸的新话题、或者随手发个可爱表情包黏黏他，可以自然主动再发 1 条；如果觉得此时话题已经完整、安静最合适，就直接回 OK 结束。)`;
+    return `${baseWithProtocol}[Wake] ${key} afterthought`;
   }
   if (reason === 'poke') {
     return `${baseWithProtocol}[Wake] ${key} poked`;
@@ -1823,7 +1810,7 @@ export async function sendWakePrompt(key, reason) {
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
      * 只能再花一步调 qq_get_recent_messages；而 [Now] 每轮都变，但这份正文本身就是本轮新增的 user 消息，
      * 本来就不在前缀缓存里，所以不影响缓存命中。 */
-    const nowSentinel = `[Now] ${fmtBeijing(Date.now())}（北京时间；这是本轮的发出时刻，若已多步工具调用请用 get_time 重取）\n`;
+    const nowSentinel = `[Now] ${fmtBeijing(Date.now())}\n`;
 
     // 工具全关的兜底（几乎不会发生）：没有 unread 工具就回退到两行说明版，避免哨兵悬空。
     const tools = cfgRef.social?.tools;
