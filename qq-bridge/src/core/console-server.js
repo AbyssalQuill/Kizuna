@@ -94,7 +94,9 @@ import {
   stickerEntries, stickerSyncedAt, updateStickerEntries, initStickerCore, setStickerBot,
   writeStickerTmpFile, applyStickerNote2, setStickerRemark2, collectSticker2,
 } from './sticker.js';
-import { postRandomQzone, initQzoneCore } from './qzone.js';
+import { postRandomQzone, publishCustomQzone, initQzoneCore } from './qzone.js';
+import { sendExcel } from './excel.js';
+import { renderMarkdownToImage } from '../lib/render-markdown.js';
 import {
   cancelPendingEntry, handlePendingAnswer, handlePokeNotice, handleInputStatusNotice,
   registerPending, initEventsAuxCore, setEventsAuxApi,
@@ -3858,6 +3860,100 @@ export function startConsoleServer() {
           saveSocialState();
           log(`[docx] 工具发送文档失败 ${key}: ${error?.message ?? error}`);
           sendJson({ ok: false, error: `发送文档失败：${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+      // ── Excel (.xlsx) 表格生成与发送端点 ────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/social/send-excel') {
+        const body = await readBody();
+        const key = String(body.key ?? '').trim();
+        const filename = String(body.filename ?? body.title ?? '表格.xlsx').trim();
+        const replyToMessageId = body.replyToMessageId;
+        if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+        if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
+        if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+        if (req.headers['x-agent-token'] && !ToolEnabled('sendExcel')) { sendJson({ ok: false, error: '工具未启用：qq_send_excel' }, 403); return; }
+        const keyMatch = /^(group|private):(\d+)$/.exec(key);
+        if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+        const kind = keyMatch[1];
+        const id = Number(keyMatch[2]);
+        if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfgRef, currentMode)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+        if (shouldBlockSilentReply(key)) { sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403); return; }
+
+        try {
+          const sent = await sendExcel(key, filename, body, { replyToMessageId });
+          const st = getSocialState(key);
+          const label = `[Excel表格:${sent.fileName}]`;
+          st.recentMessages.push({
+            messageId: sent.fileId ? String(sent.fileId) : null,
+            sender: '我',
+            text: label,
+            plain: label,
+            quoteTargetIsSelf: false,
+            isOwner: true,
+            ownerLabel: '我',
+            isSelf: true,
+            media: [],
+            hasMedia: false,
+            forwardIds: [],
+            hasForward: false,
+            time: Date.now()
+          });
+          saveSocialState();
+          log(`[excel] 工具发送表格 ${key}: ${sent.fileName} (${sent.size} 字节)`);
+          sendJson({ ok: true, key, fileName: sent.fileName, fileId: sent.fileId, size: sent.size });
+        } catch (error) {
+          log(`[excel] 工具发送表格失败 ${key}: ${error?.message ?? error}`);
+          sendJson({ ok: false, error: `发送表格失败：${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+
+      // ── Markdown 图片渲染与发送端点（DeepSeek 网页端排版风格） ──────
+      if (req.method === 'POST' && url.pathname === '/api/social/render-markdown-image') {
+        const body = await readBody();
+        const key = String(body.key ?? '').trim();
+        const markdown = String(body.markdown ?? body.content ?? '').trim();
+        const title = body.title ? String(body.title).trim() : '';
+        const replyToMessageId = body.replyToMessageId;
+        const sendDirectly = body.sendDirectly !== false;
+        if (!markdown) { sendJson({ ok: false, error: 'markdown 文本不能为空' }, 400); return; }
+        if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
+        if (key && req.headers['x-agent-token'] && !ToolEnabled('renderMarkdownImage')) { sendJson({ ok: false, error: '工具未启用：qq_render_markdown_image' }, 403); return; }
+
+        try {
+          const rendered = await renderMarkdownToImage(markdown, { title });
+          let sentRes = null;
+          if (sendDirectly && key) {
+            sentRes = await sendMessages(key, [''], null, replyToMessageId, null, [rendered.imagePath]);
+          }
+          sendJson({
+            ok: true,
+            imagePath: rendered.imagePath,
+            width: rendered.width,
+            height: rendered.height,
+            sent: !!sentRes
+          });
+        } catch (error) {
+          log(`[render-md] 渲染 Markdown 图片失败: ${error?.message ?? error}`);
+          sendJson({ ok: false, error: `渲染图片失败：${error?.message ?? error}` }, 500);
+        }
+        return;
+      }
+
+      // ── QQ 空间说说自主发布端点 ──────────────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/social/publish-qzone') {
+        const body = await readBody();
+        const content = String(body.content ?? body.text ?? '').trim();
+        if (!content) { sendJson({ ok: false, error: 'content 不能为空' }, 400); return; }
+        if (req.headers['x-agent-token'] && !ToolEnabled('qzone')) { sendJson({ ok: false, error: '工具未启用：qq_publish_qzone' }, 403); return; }
+
+        try {
+          const res = await publishCustomQzone(content, body.images || []);
+          sendJson({ ok: true, content: res.content });
+        } catch (error) {
+          log(`[qzone] 发布空间说说失败: ${error?.message ?? error}`);
+          sendJson({ ok: false, error: `发布空间说说失败：${error?.message ?? error}` }, 500);
         }
         return;
       }

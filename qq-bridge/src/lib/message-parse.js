@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { execFile, execFileSync } from 'node:child_process';
 import { forwardIdFromData } from '../forward.js';
 import { safeFetchBuffer } from '../safe-fetch.js';
 // 2026-09-21 表情包理解：原生表情渲染成 `[表情:名字(id)]`，让模型读到情绪而不是一个数字
@@ -480,8 +481,28 @@ export async function parseFileBuffer(buf, name) {
     const text = buf.toString('utf8', 0, Math.min(buf.length, 200000)).replace(/[^\x20-\x7e\u4e00-\u9fff\uff00-\uffef\r\n\t]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     return { text: text.slice(0, 20000) || '（未能提取出可读文本，旧版 .doc 为二进制格式）', truncated: text.length > 20000, note: '旧版 .doc 为二进制格式，提取的文本可能不完整' };
   }
-  if (['.pdf'].includes(ext)) {
-    return { text: '', note: 'PDF 暂不支持直接读取，可另存为 txt/md 后发送' };
+  if (['.pdf', '.xlsx', '.xls', '.pptx'].includes(ext)) {
+    const tmp = path.join(os.tmpdir(), `file-parse-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+    try {
+      fs.writeFileSync(tmp, buf);
+      let helperPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'doc-helper.py');
+      if (!fs.existsSync(helperPath)) {
+        helperPath = path.resolve('qq-bridge/src/lib/doc-helper.py');
+      }
+      const out = execFileSync('python3', [helperPath, 'parse', tmp], { encoding: 'utf8', timeout: 30000 });
+      const parsedJson = JSON.parse(out.trim());
+      const rawText = parsedJson.text || '';
+      const truncated = rawText.length > 20000;
+      return {
+        text: truncated ? rawText.slice(0, 20000) + `\n…（内容过长已截断，共 ${rawText.length} 字符）` : rawText,
+        truncated,
+        note: parsedJson.note || null
+      };
+    } catch (e) {
+      return { text: '', note: `解析「${ext}」文件失败: ${e?.message ?? e}` };
+    } finally {
+      try { fs.unlinkSync(tmp); } catch {}
+    }
   }
   // 文本类：md/txt/json/log/csv/js/py/ts/html 等
   let text = decodeTextBuffer(buf);

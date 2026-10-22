@@ -3149,6 +3149,98 @@ if (cfg.social?.tools?.sendDocx !== false) {
   );
 }
 
+// ── Excel (.xlsx) 表格编辑与发送 ──
+if (cfg.social?.tools?.sendExcel !== false) {
+  registerTool(
+    'qq_send_excel',
+    'Generate an Excel (.xlsx) spreadsheet and send it as a file. filename = file name ending with .xlsx; headers = array of column names; rows = 2D array of row data; sheets = optional multi-sheet spec [{ name, headers, rows }]. Use this when asked to make a spreadsheet, data table, roster, or financial table.',
+    {
+      key: z.string().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token'),
+      filename: z.string().describe('Filename, e.g. 成绩统计表.xlsx'),
+      headers: z.array(z.string()).optional().describe('Column headers for single sheet'),
+      rows: z.array(z.array(z.any())).optional().describe('Rows of data for single sheet'),
+      sheets: z.array(z.object({
+        name: z.string(),
+        headers: z.array(z.string()).optional(),
+        rows: z.array(z.array(z.any())).optional()
+      })).optional().describe('Multiple sheets specification'),
+      replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote (optional)')
+    },
+    async ({ key, token, filename, headers, rows, sheets, replyToMessageId }) => {
+      try {
+        const body = { key, filename, headers, rows, sheets };
+        if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') body.replyToMessageId = replyToMessageId;
+        const data = await agentApi('/api/social/send-excel', {
+          method: 'POST',
+          body: JSON.stringify(body),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 60000
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `发送表格失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── Markdown 图片渲染与发送（DeepSeek 网页端浅色白底样式） ──
+if (cfg.social?.tools?.renderMarkdownImage !== false) {
+  registerTool(
+    'qq_render_markdown_image',
+    'Render Markdown text into an elegant white-background image in DeepSeek Web style with centered LaTeX math formulas, syntax-highlighted code blocks, and send it to chat. Use this whenever solving math/physics problems, deriving complex formulas, or explaining long code algorithms to ensure perfect typographic presentation.',
+    {
+      key: z.string().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token'),
+      markdown: z.string().describe('Markdown text to render. Supports inline $math$ and display $$math$$ KaTeX, code blocks, tables, and lists.'),
+      title: z.string().optional().describe('Optional title displayed at the top of the card'),
+      replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote (optional)'),
+      sendDirectly: z.boolean().optional().describe('Whether to send directly to current chat bubble (default: true)')
+    },
+    async ({ key, token, markdown, title, replyToMessageId, sendDirectly }) => {
+      try {
+        const body = { key, markdown, title, sendDirectly: sendDirectly !== false };
+        if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') body.replyToMessageId = replyToMessageId;
+        const data = await agentApi('/api/social/render-markdown-image', {
+          method: 'POST',
+          body: JSON.stringify(body),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 60000
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `渲染并发送图片失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── QQ 空间说说自主发布 ──
+if (cfg.social?.tools?.qzone !== false) {
+  registerTool(
+    'qq_publish_qzone',
+    'Publish a real QQ Zone (QQ空间) post. Write it spontaneously in your authentic persona voice based on recent chat experiences, thoughts, or events. Keep it vivid, genuine, and natural.',
+    {
+      token: z.string().describe('Agent token'),
+      content: z.string().describe('Post body content (15-120 chars, vivid and heartfelt personal thoughts)')
+    },
+    async ({ token, content }) => {
+      try {
+        const data = await agentApi('/api/social/publish-qzone', {
+          method: 'POST',
+          body: JSON.stringify({ content }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 30000
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `发表说说失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
 // ── 智能合并转发：把多条消息合并成一条转发卡片发送 ──
 if (cfg.social?.tools?.sendForward !== false) {
   registerTool(

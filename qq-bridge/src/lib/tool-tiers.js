@@ -98,6 +98,9 @@ const GROUP_AWARENESS = [
 const PROMPT_NAMED = [
   'qq_memory_remember',
   'qq_get_file_content',
+  'qq_send_excel',
+  'qq_render_markdown_image',
+  'qq_publish_qzone',
 ];
 
 /** 远程救援通道（2026-09-26 加）：全是"主人不在电脑前也能让机器人自救"的那几件小工具。
