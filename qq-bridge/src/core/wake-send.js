@@ -185,18 +185,7 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
   const senderId = String(event?.user_id ?? event?.sender?.user_id ?? '');
   const isOwner = !!(cfgRef?.ownerQQ && String(cfgRef.ownerQQ) === senderId);
 
-  // 1. 群聊中群友叫闭嘴/别回我的强抑制（防被群友烦到吐槽）
-  if (kind === 'group') {
-    const stopRe = /(?:别(?:再)?(?:回|理|跟|找)我|闭嘴|安静点|退下|闭麦|别叫了)/i;
-    if (stopRe.test(String(plainContent ?? ''))) {
-      return null;
-    }
-  }
-
-  // 2. 群聊中主人的纪律：主人在群里说话时，小鲸鱼保持安静聆听！
-  // 只有当明确 @ 机器人、引用机器人或明确呼叫名字时，才唤醒！绝不抢话打断主人！
   const atSelf = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(event?.self_id ?? ''));
-  // 这条话是冲着别人说的（@ 了别人 / 引用了别人的消息）→ 不能按"在问 AI"处理。
   const atSomeoneElse = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) !== String(event?.self_id ?? '') && String(seg.data?.qq) !== 'all');
   const repliesToSomeoneElse = !quoteTargetIsSelf && Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'reply');
   const calledName = selfNickname && (
@@ -204,57 +193,52 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
     String(textContent ?? '').toLowerCase().includes(selfNickname.toLowerCase())
   );
   const tr = st.wakeConfig?.triggers ?? {};
-  // 关键词命中（主人在群里点"小鲸鱼/鲸鱼/DeepSeek"也算明确叫到，不能因为"主人静默律"漏接）
-  const lowerPlain = String(plainContent ?? '').toLowerCase();
-  let matchedKeyword = '';
-  if (Array.isArray(tr.keywords) && tr.keywords.length) {
-    for (const kw of tr.keywords) {
-      const kwStr = String(kw ?? '').toLowerCase();
-      if (!kwStr) continue;
-      // 短英文/数字关键词（如 DS/R1）用词边界匹配，避免 ADS/BDSM/DSL 误触发。
-      if (/^[a-z0-9]+$/.test(kwStr) && kwStr.length <= 4) {
-        if (new RegExp(`\\b${kwStr}\\b`, 'i').test(lowerPlain)) { matchedKeyword = String(kw); break; }
-      } else if (lowerPlain.includes(kwStr)) { matchedKeyword = String(kw); break; }
-    }
-  }
-
-  if (kind === 'group' && isOwner) {
-    if (atSelf || quoteTargetIsSelf || calledName || matchedKeyword) {
-      return 'owner';
-    }
-    return null; // 主人在群里与他人交流，小鲸鱼静默聆听，绝不擅自抢嘴打断！
-  }
 
   // 睡眠窗口过滤（群聊专属，省 token）：窗口内只响应 @，probability/keyword/question/speaker 等一律不投递。
   if (isInSleepWindow() && kind === 'group') {
     if (atSelf || quoteTargetIsSelf) return 'atMention';
     return null;
   }
-  /* 2026-09-19：修「被 @ 却按 anyMessage 处理 → 免打扰时段把它跳过」。 */
+
+  // @ 或引用回复机器人
   if ((atSelf || quoteTargetIsSelf) && (tr.atMention || tr.anyMessage)) return 'atMention';
+  // 活跃模式全放行：交由模型结合完整上下文自由判断是否开口（沉默是合法选项）
   if (tr.anyMessage) return 'anyMessage';
   if (tr.atMention && (atSelf || quoteTargetIsSelf)) return 'atMention';
   if (tr.nameMention && calledName) return 'nameMention';
-  if (matchedKeyword) return `keyword:${matchedKeyword}`;
-  /* 现场（2026-10-22 21:05 / 21:09）：坐忘道问神鲸「你不本来就是吗？」「你忘了你的深海魔鲸王封号吗？」
-   * 都被"你…吗"启发式判成问 AI，小鲸鱼两次插进别人的对话（"猫娘味儿挺冲的"就是这么来的）。
-   * 现在群里要算"在问 AI"，句子里必须真的出现 AI / 鲸鱼的名字；光有"你…吗"不算。 */
-  const aiNamed = /deepseek|小鲸鱼|鲸鱼|大肥鱼|小肥鱼|d指导|d老师|d师傅|深度求索|人工智障|机器人|模型|\bai\b|\bds\b|claude|chatgpt|gpt/i.test(String(plainContent ?? ''));
-  if (tr.question && aiNamed && !atSomeoneElse && !repliesToSomeoneElse && isDirectedAtAi(plainContent)) return 'question';
-  // 智能接话：聊到 AI/技术相关话题，不再无脑 100% 抢话！
-  // 抽中较低概率（15%）才参与；没抽中继续往下走 speakerIds / 概率门控，绝不在这里把消息吞掉。
-  if (TOPIC_WAKE_RE.test(String(plainContent ?? '')) && Math.random() < 0.15) return 'topic';
+
+  // 关键词命中
+  const lowerPlain = String(plainContent ?? '').toLowerCase();
+  if (Array.isArray(tr.keywords) && tr.keywords.length) {
+    for (const kw of tr.keywords) {
+      const kwStr = String(kw ?? '').toLowerCase();
+      if (!kwStr) continue;
+      if (/^[a-z0-9]+$/.test(kwStr) && kwStr.length <= 4) {
+        if (new RegExp(`\\b${kwStr}\\b`, 'i').test(lowerPlain)) return `keyword:${kw}`;
+      } else if (lowerPlain.includes(kwStr)) {
+        return `keyword:${kw}`;
+      }
+    }
+  }
+
+  // 主人发言直通：由模型结合上下文自由接话，不写死拦截
+  if (isOwner) {
+    return 'owner';
+  }
+
+  // 提问触发
+  if (tr.question && !atSomeoneElse && !repliesToSomeoneElse && isDirectedAtAi(plainContent)) return 'question';
+
+  // AI 话题触发
+  if (TOPIC_WAKE_RE.test(String(plainContent ?? ''))) return 'topic';
+
   if (Array.isArray(tr.speakerIds) && tr.speakerIds.length) {
     if (senderId && tr.speakerIds.some((id) => String(id) === senderId)) {
       const senderLabel = event?.sender?.card || event?.sender?.nickname || senderId;
       return `speaker:${senderLabel}`;
     }
   }
-  /* 智能感知门控 (Fast Path Gating) 优化：
-   * 背景群消息依然 100% 写入 chat.db 供记忆检索与上下文连贯；
-   * 但非关联的纯路人群聊不再无脑 100% 唤醒昂贵的 DSH（实测消除 47.5% 的 qq_mark_read 浪费）。
-   * 按照触发器概率 tr.probability（或系统推荐概率，缺省 0.15）进行自然插话抽样。
-   * 抽中才唤醒 DSH 决策；未抽中静默归档。显式设为 0 则完全静默。 */
+
   const rawProb = tr.probability ?? cfgRef?.social?.wake?.recommendedProbability ?? 0.15;
   if (rawProb !== undefined && rawProb !== null && rawProb !== '' && Number(rawProb) === 0) return null;
   const probNum = Number(rawProb);
