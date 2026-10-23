@@ -618,7 +618,7 @@ export function patchProfileCordis(target) {
 
   const tempBegin = '# === qq-bridge temperature BEGIN ===';
   const tempEnd = '# === qq-bridge temperature END ===';
-  const tempVal = Number(sideCfg?.dsh?.temperature ?? 1.25) || 1.25;
+  const tempVal = Number(sideCfg?.dsh?.temperature ?? 1.1) || 1.1;
   const tempBlock =
     `${tempBegin}\n` +
     `- id: temperature-knob\n` +

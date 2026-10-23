@@ -230,8 +230,6 @@ const LABEL: Record<string, string> = {
   /* 2026-09-19：搜图的镜像站地址：反馈镜像站会换域名/镜像挂掉，所以要能自己改。
    * 这一项没登记的话 tools/audit-ui-labels.mjs 会报"未翻译键"（界面会裸奔一个英文键名）。 */
   pixiv: '搜/发 Pixiv 插画', 'pixiv.base': 'Pixiv 接口兜底站地址',
-  'luogu.uid': '洛谷用户 UID', 'luogu.clientId': '洛谷 Client ID（__client_id）', 'luogu.cookie': '洛谷登录 Cookie',
-  'social.tools.luogu': '洛谷算法题库与视奸',
   'pixiv.refreshToken': 'Pixiv 长期登录态（自动续期写入，一般不用手填）',
   /* 2026-09-21：本次新增的三处设置（[Style] 语感行 / /token 计价 / 工具压缩档）：
    * tools/audit-ui-labels.mjs 只认这张表，登记在这里界面上才不会裸奔英文键名。 */
