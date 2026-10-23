@@ -2,6 +2,36 @@
 
 本文件按主题归纳 Kizuna 的用户可见变化，不逐条罗列提交标题。版本号遵循语义化版本规范；分组约定为「新增能力 / 修复 / 变更与不兼容 / 内部与工程」四类。每个版本节下的条目均为 `- **短标题**：正文` 形式，正文只陈述事实、现象与判据，不作评价性描述。
 
+## 3.0.0 — 2026-10-24
+
+### 新增能力
+
+- **应用内就地更新（不用再下整包）**：新增 `server/updater.js` 与 `/api/update/*` 一组接口，从 GitHub 仓库拉取 `main` 的源码包，只覆盖受管目录（`server/`、`qq-bridge/`），改完按需重启后端与桥。解包用纯 JS 实现（不依赖系统 tar），避免 Windows 上 GNU tar 把 `C:` 当远端主机名（`tar (child): Cannot connect to C: resolve failed`）以及 MSYS tar 与 bsdtar 参数不一致这两类环境差异。冲突文件不覆盖原文件，落到 `.new-<sha>` 旁边；每次更新前把将被覆盖的文件备份进 `~/.qq-bridge-manager/update-backups`。用户数据（`config.json`、`state/`、`roles/`、`persona.md`、`speech-rules.md`、`assets/`、测试脚本）在排除名单里，升级不会冲掉人设与记忆。
+- **首次更新按「覆盖」建基线，不做三方差分**：第一次运行时安装包里的文件与远端同名，逐字节比较即可判定「没被用户改过」，因此首次一律以远端为准落盘、只在本地确有改动时才留 `.new-<sha>`，避免首更在每个人的机器上都留下一堆待人工合并的副本。
+- **装包/部署时会一并处理语音链路**：`server/deploy.js` 新增 `opts.voice` 通道 `deployVoiceEngine()`（预检 ≥3500MB 内存、≥2048MB 磁盘、python3.11/3.12，引擎与模型上传到 `/opt/kizuna-voice`，装 `kizuna-voice.service`，只监听 `127.0.0.1:4610`），部署流程新增「6.5 语音依赖」步骤跑 `tools/fix-voice-ffmpeg.sh`。
+- **桥发语音的底层依赖可以一条命令修好**：`qq-bridge/tools/fix-voice-ffmpeg.sh` 幂等安装 NTSilk 版 ffmpeg（`/usr/local/bin/ffmpeg-ntsilk`），并给 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe` 套一层转发脚本（原文件保留为 `.real`）；`ffprobe` 那层按 silk 体积估时长（`size/3466`），因为 NapCat 拿到的 silk 文件没有 duration 元数据。`--check` 只检查不动手。
+- **记忆图谱按连接作用域取库**：`/api/learning/graph` 读的不是本机那份可能早已停更的 `chat.db`，而是按当前连接的服务器经 SFTP 拉取 `chat.db` / `memory.db`（含 `-wal`）到 `<配置目录>/remote-db/<serverId>/`（TTL 180 秒）后再读。修前实测显示 `24 人 · 0 关系`（本地库停在 2026-09-26），修后同一台服务器读到 `116 nodes / 693 links`，页面上是 `36 人 · 33 关系`。
+
+### 修复
+
+- **带空格的 Windows 路径会让 tar 走 ssh**：`--force-local` 统一加到所有 tar 调用点（14 处），并用 `runTar()` 包一层，顺带把 `--version` 探测也走同一条路径。
+- **更新包里中文文件名解出来是乱码**：`角色库说明.md` 曾被写成 `è§è²åºè¯´ææ.md`。tar 头里的名字是 UTF-8 字节，按 latin1 读进来再转 UTF-8 即可（`updater.js` 的 `cstr()`）；已落过的错误暂存在新版本里作废重取。
+- **配置页里那些不知道该填什么、也不该手改的项**：`pixiv.refreshToken`、`social.meme.activePersona`、`dsh.temperature` 进自动管理名单，界面上不再出现无标签输入框；下拉框只有一个选项时改为锁定展示（`.is-locked`），不再让人以为能选；温度输入框整块移除（由自动管理名单接管）。
+- **「识图模型请求地址 / 密钥」被误过滤掉了**：这两个字段是有标签的正常配置项，之前按「视觉相关」一刀切隐藏，已恢复。
+- **更新状态行会把页面挤跳**：改成固定高度的状态行，提示改为挂在会话根节点上的 toast，出现与消失都不再引起布局回流。
+- **语音发送报 `spawn ENOMEM`、随后变成 `Requested output format 'ntsilk_s16le' is not known`**：前者是 NapCat 升级后 CLI 侧 ffmpeg 的进程/内存限制，后者是系统 ffmpeg 没有 NTSilk 编码器。装上 NTSilk ffmpeg 与转发层后实测发送返回 `{"status":"ok","retcode":0}`，并拿到 `message_id`。
+
+### 变更与不兼容
+
+- **斜杠指令与正则英文指令的回复统一成「收到」**：`qq-bridge/src/core/mux.js` 里 `CMD_ACK` 与 32 处指令回执一起改，`/status`、`/token`、`/role` 这三个以列表/数据为主体、需要看内容的除外。
+- **「更新」从独立页面变成配置页工具栏上的弹窗**：去掉了回滚按钮（回滚在服务端没有可靠的事务语义，留着会让人以为能一键退回），版本行压缩成一行。
+- **人设与发言规则的调整**：日常用词（睡觉不说沉底/潜水这类比方）、不造词、群聊活跃度、按库回忆（`qq_memory_search`）、标点规则（句末不加句号，问号感叹号保留）都写进 `persona.md` / `speech-rules.md`，并在合成 DSH 预设时注入系统提示词（不在压缩区）。
+
+### 内部与工程
+
+- **版本号从 1.0.0 提到 3.0.0**（根 `package.json` 与 `QQ-Bridge-packaging/kizuna-app/package.json` 同步），安装包与 `Kizuna.exe` 的文件版本随之变成 3.0.0。
+- **构建与打包**：`npm run build`（`tsc -b` + `vite build`）后由 `QQ-Bridge-packaging/tools/build-kizuna-app.mjs full` 打 `win-unpacked`，再经 `tools/make-sfx-payload.ps1` 压成 7z SFX 单文件安装器。
+
 ## 2.0.5 — 2026-09-28
 
 ### 新增能力

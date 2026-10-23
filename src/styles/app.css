@@ -366,6 +366,51 @@ input[type="number"]:not(.is-mid):not(.full) { max-width: 148px; }
   white-space: pre-wrap; overflow-y: auto; flex: 1; }
 .help-foot { padding: 10px 16px; border-top: 1px solid var(--nc-border); display: flex; justify-content: flex-end; }
 
+/* 更新弹窗（2026-10-24 主人要求：入口挪到功能配置顶栏「请作者喝奶茶」后面，点开是小弹窗，
+   不再新建整页）。结构是 .help-overlay（遮罩）> .kz-upd-dialog > Update 组件（modal 形态）。 */
+.kz-upd-overlay { z-index: 200; }
+.kz-upd-dialog {
+  background: #fff; border: 1px solid var(--nc-primary-200); border-radius: var(--nc-radius-l);
+  box-shadow: var(--nc-shadow-l); width: min(1000px, 94vw); max-height: 86vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+/* .page 默认 height:100%，放进弹窗会顶出屏幕：这里让高度跟着对话框走，滚动交给 page-body */
+.kz-upd-dialog .kz-upd-in-modal { height: auto; min-height: 0; flex: 1 1 auto; overflow: hidden; }
+.kz-upd-dialog .kz-upd-in-modal > .page-body { overflow-y: auto; padding: 16px 18px 18px; }
+
+/* 更新弹窗内部（2026-10-24 精简版）：版本条一行、操作区一行状态、提示改成浮层 toast。
+   目的有二：① 同一件事只说一遍（原来两张版本卡 + 一条「发现新版本」横幅说三遍）；
+   ② 出现/消失的东西不再参与排版，界面不会一弹一缩。 */
+.kz-upd-ver { padding: 12px 14px; }
+.kz-upd-ver-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kz-upd-ver-key { font-size: 12px; color: var(--nc-foreground-500); }
+.kz-upd-ver-sub { margin-top: 6px; font-size: 12.5px; color: var(--nc-foreground-500);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kz-upd-ops { padding: 12px 14px; }
+.kz-upd-status { min-height: 20px; margin-top: 10px; font-size: 12.5px; color: var(--nc-foreground-500);
+  display: flex; align-items: center; gap: 6px; }
+.kz-upd-note { margin-top: 4px; font-size: 12px; color: var(--nc-foreground-400); }
+.kz-upd-toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 300;
+  display: flex; align-items: center; gap: 10px; max-width: min(720px, 92vw);
+  padding: 9px 14px; font-size: 13px; background: #fff; color: var(--nc-foreground-800);
+  border: 1px solid var(--nc-primary-200); border-radius: 999px; box-shadow: var(--nc-shadow-l); }
+.kz-upd-toast-warn { border-color: var(--nc-danger-400); color: var(--nc-danger-600); }
+.kz-upd-toast-x { border: none; background: transparent; color: inherit; opacity: .55; cursor: pointer;
+  display: inline-flex; padding: 0; }
+.kz-upd-toast-x:hover { opacity: 1; }
+/* 2026-10-24 主人要求：更新弹窗里的文字统一用 AaCute 圆体。
+   版本条里的 sha / 未记录 / 未检查 是 <code>，全局规则 `body code { font-family: monospace !important }`
+   会把它们变成等宽字体，跟旁边中文不是一套字。这里只覆盖弹窗内部；日志仍然保留等宽（那是技术输出，
+   等宽才好对齐），所以日志规则在下面显式写回来。 */
+.kz-upd-dialog code, .kz-upd-dialog .kz-upd-ver-key, .kz-upd-dialog .kz-upd-ver-sub,
+.kz-upd-dialog .kz-upd-status, .kz-upd-dialog .kz-upd-note {
+  font-family: 'AaCute', 'AaCute-full', sans-serif !important;
+  letter-spacing: .2px;
+}
+.kz-upd-dialog .log-viewer, .kz-upd-dialog .log-viewer * {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
 /* 新手教程按钮（与一键启动同款但更窄）与教程弹窗 */
 .tutorial-btn { padding: 6px 18px; font-size: 13px; border-radius: 999px; }
 .tutorial-panel { max-width: 620px; }
@@ -1715,6 +1760,14 @@ select::-webkit-scrollbar-corner { background: transparent; }
   align-self: flex-start;
 }
 .mb-dd:disabled { cursor: not-allowed; }
+/* 只有一个选项时组件会退化成静态标签（Dropdown.tsx 里的 options.length <= 1 分支）：
+   不再是可点的控件，所以指针与悬停高亮都要收掉，观感上就是"这里没得选"。 */
+.mb-dd.is-locked {
+  cursor: default;
+  opacity: .85;
+  background-image: none;
+}
+.mb-dd.is-locked:hover { background-image: none; }
 .mb-dd-label {
   flex: 1 1 auto;
   min-width: 0;

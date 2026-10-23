@@ -411,6 +411,10 @@ export async function handleIncoming(kind, id, event, cfgRef) {
   // 英文规范写法；中文说法(如「画像学习」)与历史简写(如 /slanglearn)都不再拦截。
   // 自然语言说法(转活跃/潜水吧/别理群了…)一律放给模型自然调用——由 AI 自己决定并走
   // qq_set_wake_config / qq_set_activity_hours 等工具完成, 桥不硬性截胡、不回模板话。
+  /* 2026-10-24 主人要求：所有 / 与正则英文指令只用「收到」应答，不再回一长句寒暄。
+   * 例外只有三类查数据的指令：/status、/token、/role（不带参数时列角色库）——
+   * 它们回的本来就是数据，换成「收到」等于把功能删了。 */
+  const CMD_ACK = '收到';
   if (plainContent.startsWith('/')) {
     if (/^\/slang(\s|$)/.test(plainContent)) {
       // /slang learn / /slang stop：立即学习黑话并打标记 / 停止在跑学习任务（handler 内部判定管理员并拦截非 owner）
@@ -418,7 +422,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         const sr = await handleSlangSlashCommand(plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
         if (sr?.handled) {
           const slangReply = Array.isArray(sr.reply) ? sr.reply.join('\n') : '';
-          if (slangReply.trim()) await sendToQQ(key, slangReply);
+          if (slangReply.trim()) await sendToQQ(key, CMD_ACK);
           return;
         }
       } catch (error) {
@@ -426,7 +430,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       }
     }
     if (!isOwner) {
-      await sendToQQ(key, '管理命令仅管理员可用。');
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     // 2026-09-13 需求：删掉 /help（原来是发《小鲸鱼能力概览》docx）：
@@ -475,7 +479,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         seenForwardIds.delete(key);
         saveSocialState();
         saveState();
-        await sendToQQ(key, '已重置会话，下次消息将开新上下文');
+        await sendToQQ(key, CMD_ACK);
       }
       return;
     }
@@ -507,29 +511,29 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       const rest = plainContent.slice(3).trim();
       if (!rest) {
         const curL = Array.isArray(cfgRef.adminQQ) && cfgRef.adminQQ.length ? cfgRef.adminQQ.map(String).join('、') : '（无）';
-        await sendToQQ(key, `当前管理员：${curL}。用法：/op <QQ号或昵称> 设为管理员；/op del <QQ号或昵称> 取消管理员`);
+        await sendToQQ(key, CMD_ACK);
         return;
       }
       const m = rest.match(/^(del|remove)\s+([^\s]+)$/i) || rest.match(/^([^\s]+)$/);
-      if (!m) { await sendToQQ(key, '用法：/op <QQ号或昵称>；/op del <QQ号或昵称>'); return; }
+      if (!m) { await sendToQQ(key, CMD_ACK); return; }
       const isDel = /^(del|remove)$/i.test(m[1]);
       const targetTok = isDel ? m[2] : m[1];
       const target = /^\d{5,11}$/.test(targetTok) ? targetTok : resolveNameToUid(targetTok);
-      if (!target) { await sendToQQ(key, `通讯录里没找到「${targetTok}」，直接给我 QQ 号吧~`); return; }
-      if (target === String(cfgRef.ownerQQ)) { await sendToQQ(key, '主人就是最高权限，不用设置~'); return; }
+      if (!target) { await sendToQQ(key, CMD_ACK); return; }
+      if (target === String(cfgRef.ownerQQ)) { await sendToQQ(key, CMD_ACK); return; }
       const cur = Array.isArray(cfgRef.adminQQ) ? cfgRef.adminQQ.map(String) : [];
       if (isDel) {
-        if (!cur.includes(target)) { await sendToQQ(key, `${target} 本来就不是管理员~`); return; }
+        if (!cur.includes(target)) { await sendToQQ(key, CMD_ACK); return; }
         cfgRef.adminQQ = cur.filter((x) => x !== target).map(Number);
         fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(cfgRef, null, 2));
-        await sendToQQ(key, `已取消 ${target} 的管理员权限~`);
+        await sendToQQ(key, CMD_ACK);
         log(`[command] ${key} /op del ${target}`);
       } else {
-        if (cur.includes(target)) { await sendToQQ(key, `${target} 已经是管理员了~`); return; }
+        if (cur.includes(target)) { await sendToQQ(key, CMD_ACK); return; }
         cur.push(target);
         cfgRef.adminQQ = cur.map(Number);
         fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(cfgRef, null, 2));
-        await sendToQQ(key, `✅ 已把 ${target} 设为管理员~`);
+        await sendToQQ(key, CMD_ACK);
         log(`[command] ${key} /op ${target}`);
       }
       return;
@@ -556,11 +560,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       }
       const switched = switchPersona({ cfg: cfgRef, character: isClear ? '' : want, clear: isClear });
       log(`[command] ${key} /role ${want} → ${JSON.stringify(switched)}`);
-      await sendToQQ(key, switched.ok
-        ? (switched.action === 'clear'
-          ? '好，角色收起来了，回到我自己说话。'
-          : `已换成「${switched.pack}」（读进 ${switched.files.length} 个文件${switched.truncated ? '；卡片超长，按顺序截断了一部分' : ''}）。下一句开始就是 ta 了。`)
-        : `换不了：${switched.error}`);
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     if (plainContent === '/silent' || plainContent === '/quiet') {
@@ -569,13 +569,13 @@ export async function handleIncoming(kind, id, event, cfgRef) {
        * 现在只写**本会话**的静默表（state/silent-sessions.json）；别的群/私聊照常。 */
       const sr = setSessionSilent(key, true, { by: String(event.user_id ?? '') });
       log(`[command] ${key} /silent：只静默本会话（当前共 ${sr.sessions.length} 个会话被静默）`);
-      await sendToQQ(key, '好，我只在这个会话里安静待着：这里的消息我悄悄看、不再回应（被 @ 也不回啦）。其他群和私聊不受影响。想让我在这个会话恢复开麦，发 /active 就行。');
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     if (/^\/(?:silent|quiet)\s+(?:off|close|stop)$/i.test(plainContent)) {
       const sr = setSessionSilent(key, false);
       log(`[command] ${key} /silent off：本会话恢复（当前共 ${sr.sessions.length} 个会话被静默）`);
-      await sendToQQ(key, '好啦，这个会话恢复开麦：正常回应，有事随时喊我。');
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     if (plainContent === '/active' || plainContent === '/speak') {
@@ -585,16 +585,14 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       setSessionSilent(key, false);
       if (wasGlobalSilent) writeRoleState(roleState.role, 'active');
       log(`[command] ${key} /active：本会话恢复${wasGlobalSilent ? '，并关闭历史遗留的全局静默' : ''}`);
-      await sendToQQ(key, wasGlobalSilent
-        ? '好啦，恢复开麦：本会话解除静默，之前那个「全局静默」（旧指令或管理端开关留下的）也一并关掉了，所有会话都恢复正常回应。'
-        : '好啦，恢复开麦：本会话正常回应，有事随时喊我。');
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     if (plainContent === '/sleep') {
       // 全程静默：不调用 DSH API，不回复，但不终结进程
       social.paused = true;
       saveSocialState();
-      await sendToQQ(key, '💤 好的，我先睡了，有事叫我~');
+      await sendToQQ(key, CMD_ACK);
       log(`[command] ${key} 执行 /sleep，AI 已暂停`);
       return;
     }
@@ -606,7 +604,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       // 本分支取不到 → ReferenceError: st is not defined，整条 /wake 抛错、既不回话也不清定时器）
       const stWk = getSocialState(key);
       if (stWk._sleepTimer) { clearTimeout(stWk._sleepTimer); stWk._sleepTimer = null; }
-      await sendToQQ(key, '醒了~ 有什么事找我？');
+      await sendToQQ(key, CMD_ACK);
       log(`[command] ${key} 执行 /wake，AI 已恢复`);
       return;
     }
@@ -616,7 +614,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       if (!cfgRef.social) cfgRef.social = {};
       cfgRef.social.deepsleep = true;
       fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(cfgRef, null, 2));
-      await sendToQQ(key, '好，我先全体休眠：所有群的聊天我先不醒、不回、不收集，省点力气；私聊随叫随到。要整体唤醒，发 /start 就行。');
+      await sendToQQ(key, CMD_ACK);
       log('[command] ' + key + ' 执行 /deepsleep（静默所有群聊）');
       return;
     }
@@ -625,7 +623,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       if (!cfgRef.social) cfgRef.social = {};
       cfgRef.social.deepsleep = false;
       fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(cfgRef, null, 2));
-      await sendToQQ(key, '醒啦，群聊恢复正常：消息我会看也会回，有事随时喊我。');
+      await sendToQQ(key, CMD_ACK);
       log('[command] ' + key + ' 执行 /start（解除群静默）');
       return;
     }
@@ -637,7 +635,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     const setMode = parseSetModeCommand(plainContent);
     if (setMode) {
       if (setMode.invalid) {
-        await sendToQQ(key, `时间格式：HH:MM-HH:MM，如 /set ${setMode.mode} 00:00-21:00；不带时段就是全天。`);
+        await sendToQQ(key, CMD_ACK);
         return;
       }
       const stm = getSocialState(key);
@@ -664,13 +662,9 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       saveSocialState();
       const rng = win ? `${fmtClockMin(win.start)}-${fmtClockMin(win.end)}` : '';
       if (setMode.mode === 'active') {
-        await sendToQQ(key, win
-          ? `好呀，${rng} 我全程在线：这段时间群里说啥我都接；其它时间潜水，只回 @ 和点名。`
-          : '好呀，我转成全天在线啦：群里说啥我都接，随时都在。');
+        await sendToQQ(key, CMD_ACK);
       } else {
-        await sendToQQ(key, win
-          ? `好，${rng} 我先潜水：这段时间只回 @、被点名和私聊，其余时间照常活跃。`
-          : '好，我先潜水啦：平时群里不打扰大家，被 @、被点名或有人问我时会出来；私聊随叫随到。要我全程在线，发 /set active 就行。');
+        await sendToQQ(key, CMD_ACK);
       }
       log(`[command] ${key} /set ${setMode.mode}${win ? ' ' + rng : ''}（会话模式=${wantMode}，活跃时段=${(activityWindows[key] ?? []).map((w) => `${fmtClockMin(w.start)}-${fmtClockMin(w.end)}`).join(',') || '无'}）`);
       return;
@@ -683,17 +677,17 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         const sH = parseInt(windowMatch[1], 10), sM = parseInt(windowMatch[2], 10);
         const eH = parseInt(windowMatch[3], 10), eM = parseInt(windowMatch[4], 10);
         if (sH > 23 || eH > 23 || sM > 59 || eM > 59) {
-          await sendToQQ(key, '时间格式：HH:MM-HH:MM，如 /set sleep 01:00-06:00'); return;
+          await sendToQQ(key, CMD_ACK); return;
         }
         social.sleepWindow = { start: `${String(sH).padStart(2, '0')}:${String(sM).padStart(2, '0')}`, end: `${String(eH).padStart(2, '0')}:${String(eM).padStart(2, '0')}` };
         saveSocialState();
-        await sendToQQ(key, `💤 好的，我每天 ${social.sleepWindow.start}~${social.sleepWindow.end} 睡觉（群里只回 @，其余不读省电；私聊随叫随到）。晚安~`);
+        await sendToQQ(key, CMD_ACK);
         log(`[command] ${key} 执行 /set sleep 时间段 ${social.sleepWindow.start}-${social.sleepWindow.end}`);
         return;
       }
       // 相对定时休息：/set sleep 30m 或 /set sleep 2h
       const match = plainContent.match(/^\/set sleep (\d+)([mh])$/);
-      if (!match) { await sendToQQ(key, '格式：/set sleep 01:00-06:00（时间段） 或 /set sleep 30m / 2h（定时）'); return; }
+      if (!match) { await sendToQQ(key, CMD_ACK); return; }
       const val = parseInt(match[1]);
       const unit = match[2] === 'h' ? 3600000 : 60000;
       const duration = val * unit;
@@ -709,7 +703,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         log(`[sleep] ${key} 定时休息 ${val}${match[2]} 结束`);
       }, duration);
       const timeStr = match[2] === 'h' ? `${val}小时` : `${val}分钟`;
-      await sendToQQ(key, `💤 好的，${timeStr}后叫我~ 先睡咯，晚安~`);
+      await sendToQQ(key, CMD_ACK);
       log(`[command] ${key} 执行 /set sleep ${val}${match[2]}`);
       return;
     }
@@ -720,20 +714,20 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       const st2 = getSocialState(key);
       if (st2._sleepTimer) { clearTimeout(st2._sleepTimer); st2._sleepTimer = null; }
       saveSocialState();
-      await sendToQQ(key, '好了，已经醒来，不休息了~');
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     if (plainContent.startsWith('/like')) {
       // 手动点赞：/like 123456 或 /like 123456 5
       const match = plainContent.match(/^\/like (\d+)(?:\s+(\d+))?$/);
-      if (!match) { await sendToQQ(key, '格式：/like QQ号 或 /like QQ号 次数'); return; }
+      if (!match) { await sendToQQ(key, CMD_ACK); return; }
       const target = Number(match[1]);
       const times = Math.min(10, Math.max(1, Number(match[2]) || 1));
       try {
         await botRef.raw('send_like', { user_id: target, times });
-        await sendToQQ(key, `已给 ${target} 点赞 ${times} 次`);
+        await sendToQQ(key, CMD_ACK);
       } catch (error) {
-        await sendToQQ(key, `点赞失败：${error?.message ?? String(error)}`);
+        await sendToQQ(key, CMD_ACK);
       }
       return;
     }

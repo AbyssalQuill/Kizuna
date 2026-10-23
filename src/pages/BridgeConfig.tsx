@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { sshServiceAction } from '../api';
 import { api, getBridgeConfig, saveBridgeConfig, saveActivityHours, getActivityTargets, resetSpeechRules, listCharacters, importCharacter, instanceAction, listProfiles, saveProfile, deleteProfile, getRemoteBridgeConfig, saveRemoteBridgeConfig, memePacks, memePackUpload, memePackDelete, memePackBind, getToolSchemaStats, type CharacterEntry, type ConfigProfile, type ActivityTarget, type MemePackEntry, type MemePackUploadReport, type ToolSchemaStats } from '../api';
 import { TOOL_SCHEMA_CHARS, SLIM_PREFIX } from '../tool-schema-chars';
-import { ArrowLeft, Save, Upload, FileText, X, HelpCircle, Loader2, Coffee, Activity, Users, MessageSquare, MessagesSquare, RotateCcw, Library, BookOpen, Terminal, Layers, Trash2, Check, Server, AlertTriangle, Mic, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Save, Upload, FileText, X, HelpCircle, Loader2, Coffee, DownloadCloud, Activity, Users, MessageSquare, MessagesSquare, RotateCcw, Library, BookOpen, Terminal, Layers, Trash2, Check, Server, AlertTriangle, Mic, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
 import NapcatTokensCard from '../components/NapcatTokensCard';
 import { warmNapcatTokens } from '../components/NapcatTokensCard';
 import NumInput from '../components/NumInput';
@@ -22,6 +22,8 @@ import { warmVoicePage } from './VoiceConfig';
 import { warmLearningPage } from './Learning';
 import { warmPortraitPage } from './GroupPortrait';
 import { warmChatPage } from './ChatHistory';
+/* 更新面板：从顶栏「更新」按钮打开的小弹窗（2026-10-24 起不再走独立页面） */
+import Update from './Update';
 
 /** remote：连上服务器时把「服务端」那套传进来（配置读写服务端 /root/qq-bridge），null = 编辑本机 */
 interface Props { onBack: () => void; onRefresh: () => void; onOpenLearning: () => void; onOpenPortrait: () => void; onOpenChat: () => void; onOpenVoice: () => void; remote?: { id: string; name: string; host: string } | null; }
@@ -791,7 +793,7 @@ function mcpLabel(fullName: string) {
   'pixiv.base': 'Pixiv 的**接口兜底站**地址：只有「官方 app-api 与 www.pixiv.net/ajax 两条线都失败」时才会用到它（走 {这个地址}/api/search.php 与 /api/detail.php）。**取图完全不经过这个字段**：取图是内置的「直联 i.pximg.net（带 referer）→ i.muxmus.com → pximg.cocomi.eu.org → i.pixiv.re」，首推 i.muxmus.com（2026-09-28 本机实测 0.28~1.29 秒、还带 Content-Length）。所以别把纯图床反代（i.muxmus.com / cocomi / i.pixiv.re 这类）填到这里 —— 它们对 /api/* 一律 404，填了这条兜底线就废了。留空即用内置默认 https://pixigraph.online（2026-09-28 起）。优先级：config.json 的 pixiv.base > 环境变量 QQBRIDGE_PIXIV_BASE > 内置默认，改完不用重启。',
   'pixiv.cookie': 'Pixiv 登录 cookie（PHPSESSID）：仅用于按画师名字搜人（官网用户搜索接口对匿名请求一律返回 400）。免费账号即可；**贴进这一项就是全部动作**（2026-09-28 起）：桥下次启动时若发现有 cookie 却没有长期令牌，会自己拿它换一次，成功即落盘 state/pixiv-token.json 并每 50 分钟自动轮换（此后这一项可以清空；失败只记一行日志、不重试）。填一次即可长期使用：每解出一个画师号都会落盘缓存（state/pixiv-artists.json），cookie 此后过期，已查询过的名字仍可用；真正过期时桥会自检并主动在 QQ 中提醒。不填也可使用 authorId（画师号，如 1554775）或作品链接。安全说明：只发送给 pixiv 自身域名，绝不发送给镜像站。**写入方式（2026-09-28 起）**：直接在「常用设置 → Pixiv（镜像站与登录 cookie）」卡的「登录 cookie」一项里填（保存即写回配置；服务端目标保存时管理端会顺手换一次长期令牌，结果见保存回执的步骤列表）。',
   luogu: '洛谷算法题库与公开信息视奸插件。配置你的 UID 和 Cookie 凭据后，机器人可进行题面查询、题解分析、每日一题推荐与用户视奸。',
-  'luogu.uid': '你的洛谷账号 UID（纯数字，如 123456）。配置后小鲸鱼可以一键查你的做题进度、估值排名与主页状态。',
+  'luogu.uid': '你的洛谷账号 UID（纯数字，如 123456）。配置后机器人可以一键查你的做题进度、估值排名与主页状态。',
   'luogu.clientId': '洛谷的 __client_id Cookie 值。可用于提高查题请求的稳定性并绕过基础防爬限制。',
   'luogu.cookie': '洛谷完整登录 Cookie。配置后可直接获取官方精选题解（未登录时洛谷题解接口返回 401）。',
   'social.tools.luogu': '洛谷工具套件：支持查题面（qq_luogu_problem）、用户公开档案与做题视奸（qq_luogu_user）、每日一题推荐（qq_luogu_daily）、解题思路与题解（qq_luogu_solution）。',
@@ -1042,6 +1044,8 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
   const [msg, setMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
+  /* 更新小弹窗（2026-10-24）：入口在顶栏「请作者喝奶茶」后面 */
+  const [updateOpen, setUpdateOpen] = useState(false);
   const [docOpen, setDocOpen] = useState(false);
   // 「指令速查」：弹窗（与说明文档同款弹窗/小节样式）
   const [cmdsOpen, setCmdsOpen] = useState(false);
@@ -1456,6 +1460,13 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
 
   return (
     <div className="page cute-ui">
+      {updateOpen && (
+        <div className="help-overlay kz-upd-overlay" onClick={() => setUpdateOpen(false)}>
+          <div className="kz-upd-dialog" onClick={(e) => e.stopPropagation()}>
+            <Update modal onBack={() => setUpdateOpen(false)} />
+          </div>
+        </div>
+      )}
       <div className="page-header">
         <div className="page-header-left">
           <button className="btn btn-sm" onClick={onBack}><ArrowLeft size={15} /> 返回</button>
@@ -1476,6 +1487,9 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
           <button className="btn btn-soft btn-tip" onClick={() => setTipOpen(true)}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d' }}>
             <Coffee size={14} /> 请作者喝奶茶
+          </button>
+          <button className="btn btn-soft" onClick={() => setUpdateOpen(true)} title="从上游仓库获取新版本，原地合并进安装目录">
+            <DownloadCloud size={14} /> 更新
           </button>
           <button className="btn btn-soft" onClick={onOpenPortrait} {...hoverWarm(warmPortraitPage)}>
             <Users size={14} /> 群友画像
@@ -2080,7 +2094,8 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
   return (
     <div className="cfg-grid">
       <GroupCard title="模型与推理" path="dsh" cfg={cfg} ch={ch} onHelp={onHelp}
-        filter={(k: string) => k !== 'visionBaseUrl' && k !== 'visionApiKey'}
+        /* 2026-10-24：识图模型请求地址 / 密钥加回来。之前这两个键被 filter 挡住（当时的设想是另开一张识图卡，
+         * 但那张卡从没做出来），结果是本机自建识图服务连地址和密钥都填不了 —— 主人说的「加回来并修复」。 */
         desc="指定连接的隔离 DSH 与回话所用的模型。用法：「模型服务商」留空即自动探测（使用隔离 DSH 中已配置的官方 DeepSeek），也可显式指定；模型留空即用 DSH 默认。注意：修改本卡会在保存后重启隔离 DSH 才生效；「推理档位」是单次调用耗时与思考 token 的最大变量（实测同一次调用出现过 37 秒），嫌慢或嫌贵应先调整本项与「工具与规则」页的精简名单。">
         {/* 语言模型密钥不再是"保存了但不生效"的空字段：
             保存时写进隔离 DSH 的凭据文件（600），这里显示其配置状态。 */}
@@ -2251,7 +2266,6 @@ function PixivCard({ cfg, ch, onHelp }: {
       <div className="cfg-fields">
         <Field path="pixiv.base" val={s('base')} label={pretty('base')} ch={ch} onHelp={onHelp} cfg={cfg} />
         <Field path="pixiv.cookie" val={s('cookie')} label={pretty('cookie')} ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
-        <Field path="pixiv.refreshToken" val={s('refreshToken')} label={pretty('refreshToken')} ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
       </div>
       {/* 【2026-09-28 二次返工：说明精简重排】上一版把说明塞进 .lrn-inline-note（inline-flex，
           会被压成竖条，已改 display:block 救回来），但两段连续长文仍是"一堵墙"。
@@ -2308,7 +2322,7 @@ function LuoguCard({ cfg, ch, onHelp }: {
       <ul className="cfg-card-desc" style={{ display: 'block', margin: '8px 0 4px', paddingLeft: 18, lineHeight: 1.75 }}>
         <li><b>发题面与每日一题</b>：输入题号（如 <code>P1001</code>、<code>B2002</code>、<code>CF4A</code>）即可调取时空限制、输入输出样例与说明；亦可搭配 Markdown 白底卡片精美排版发送。</li>
         <li><b>视奸用户主页</b>：输入任意用户的 UID（如 <code>1</code>），即可视奸其公开咕值、主页签名、CCF 认证等级、全站排名与打卡概况。</li>
-        <li><b>解题思路与题解</b>：若配置了洛谷登录 Cookie 可获取官方精选题解；若未登录，小鲸鱼将自动根据题面为你编写高水准思路分析并附带标准 C++ 模板代码。</li>
+        <li><b>解题思路与题解</b>：若配置了洛谷登录 Cookie 可获取官方精选题解；若未登录，机器人将自动根据题面为你编写高水准思路分析并附带标准 C++ 模板代码。</li>
       </ul>
       <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.75 }}>
         <div>
@@ -2336,10 +2350,28 @@ function at(o: any, p: string) { return p ? get(o, p) : o; }
  *  2026-09-18：以前它会被通用卡片当成普通设置项渲染成一个输入框 —— 字段名是 `_linearNote`
  *  这种英文键名，值是一整段说明，又长又不能改。现在按约定不渲染（说明照样留在 config.json 里）。 */
 function isCommentKey(k: string, v: any) { return k.startsWith('_') && typeof v === 'string'; }
+/** 由程序自动写入、不需要（也不应该）手工填的键：界面上一律不渲染。
+ *  2026-10-24 主人要求：像「Pixiv 长期登录态（自动续期写入，一般不用手填）」这种框框全都去掉。
+ *  值仍留在 config.json 里照常生效，只是不再占界面一行、不再让人以为"这里要我填点什么"。
+ *  新增这类键时往这里加一条即可（比在每个卡片里挨个 filter 可靠）。 */
+const AUTO_MANAGED_KEYS = new Set<string>([
+  'pixiv.refreshToken',        // 引导流程用一次性 PHPSESSID 换来的长期令牌，桥每 50 分钟自己轮换
+  'social.meme.activePersona', // 从角色库导入角色卡时由管理端写入
+  'dsh.temperature',           // 温度旋钮：管理端按需写进 config.json 并同步 cordis 补丁，不是给人手填的框
+]);
+const isAutoManaged = (fullPath: string) => AUTO_MANAGED_KEYS.has(fullPath);
 function keysOf(cfg: any, path: string, only?: string[], filter?: (k: string) => boolean) {
   const v = at(cfg, path);
   if (v === undefined || !isObj(v)) return [];
-  return Object.keys(v).filter((k) => !isCommentKey(k, v[k]) && (!only || only.includes(k)) && (!filter || filter(k)));
+  /* 2026-10-24②：没有登记名字的键一律不渲染。原来它们会退化成一个「未登记名称的配置项」输入框
+   * （主人截图里 dsh.temperature 那个 1.1 就是它），既没有名字也不知道该填什么，纯属噪音。
+   * 判定同时看「短键名」和「完整路径」：像 social.typing.enabled 这种同名键只登记了完整路径，
+   * 只查短键名会把它误伤掉。 */
+  const hasLabel = (k: string) => Boolean(LABEL[path ? path + '.' + k : k] || LABEL[k]);
+  return Object.keys(v).filter((k) => !isCommentKey(k, v[k])
+    && !isAutoManaged(path ? path + '.' + k : k)
+    && hasLabel(k)
+    && (!only || only.includes(k)) && (!filter || filter(k)));
 }
 
 function GroupCard({ title, path, blocks, cfg, ch, onHelp, filter, only, desc, children }: {
@@ -4071,7 +4103,7 @@ function Field({ path, val, label, ch, onHelp, cfg, secret, wide }: {
       <div className="field-row full nested">
         {renderLabel()}
         <div className="cfg-fields">
-          {Object.keys(val).filter((k) => !isCommentKey(k, val[k])).map((k) => <Field key={path + '.' + k} path={path + '.' + k} val={val[k]} label={pretty(k)} ch={ch} onHelp={onHelp} cfg={cfg} />)}
+          {Object.keys(val).filter((k) => !isCommentKey(k, val[k]) && !isAutoManaged(path + '.' + k) && Boolean(LABEL[path + '.' + k] || LABEL[k])).map((k) => <Field key={path + '.' + k} path={path + '.' + k} val={val[k]} label={pretty(k)} ch={ch} onHelp={onHelp} cfg={cfg} />)}
         </div>
       </div>
     );

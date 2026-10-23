@@ -502,6 +502,7 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
             <span>{sshConn ? '远程已连接' : sshReconnecting ? '服务端重连中…' : (probe ?? '未连接远程')}</span>
           </div>
         </div>
+
       </div>
 
       <div className="launcher-footer">© 2026 AbyssalQuill · Kizuna · 一键配置本地与服务器的拟人 QQ Bot</div>

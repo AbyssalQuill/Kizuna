@@ -16,7 +16,7 @@
  * ========================================================================== */
 import { Client } from 'ssh2';
 import crypto from 'crypto';
-import { readFileSync, statSync, mkdirSync, rmSync } from 'fs';
+import { readFileSync, statSync, mkdirSync, rmSync, writeFileSync, readdirSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { dirname, basename, join } from 'path';
 import os from 'os';
@@ -1573,6 +1573,17 @@ export async function runDeploy(taskId, source, target, opts = {}) {
       }
     }
 
+    /* 6.5 语音依赖：目标机装 ntsilk ffmpeg（NapCat 发语音必需；幂等脚本，随 qq-bridge/tools 一起部署）
+     * 2026-10-24：不加这一步，新机器上语音一律发不出去 —— NapCat 会用系统 ffmpeg 转 silk，
+     * 而发行版的 ffmpeg 没有 'ntsilk_s16le' 这个封装，报 "Requested output format ... is not known"。 */
+    await step('语音依赖（ntsilk ffmpeg）', async () => {
+      const has = await runCmd(dstConn, 'test -f /root/qq-bridge/tools/fix-voice-ffmpeg.sh && echo HAS || echo NO', 20000);
+      if (!String(has.out || '').includes('HAS')) { taskLine(task, '  跳过：目标机没有 tools/fix-voice-ffmpeg.sh（旧代码包）'); return; }
+      const r = await runCmd(dstConn, 'sh /root/qq-bridge/tools/fix-voice-ffmpeg.sh 2>&1 | tail -6', 300000);
+      for (const line of String(r.out || r.err || '').split('\n')) if (line.trim()) taskLine(task, '  ' + line.trim());
+      if (!r.ok) throw new Error('ntsilk ffmpeg 安装失败：' + String(r.err || r.out || '').slice(-160));
+    });
+
     /* 7. 清理打包残留 */
     if (isLocal) {
       await safely('清理本机打包临时目录', async () => {
@@ -1593,6 +1604,12 @@ export async function runDeploy(taskId, source, target, opts = {}) {
       taskLine(task, `  已清理目标机 ${stageDir}`);
     });
 
+    /* 2026-10-24：勾了「同时部署语音引擎」时，整套起来之后再单独装一次。
+     * 失败只写日志，不改本次部署的成败 —— 语音是附加项，不该把已经跑起来的机器人判成失败。 */
+    if (opts.voice) {
+      try { await deployVoiceEngine(task, dstConn, opts.voiceSrc); }
+      catch (e) { taskLine(task, '  语音引擎部署异常（已忽略，其余服务不受影响）：' + (e?.message || e)); }
+    }
     task.status = 'done';
     taskLine(task, '===== 克隆部署完成 =====');
     taskLine(task, '下一步: 回管理端「SSH 配置」点该服务器的「连接」建立隧道即可使用;');
@@ -1623,6 +1640,136 @@ export async function runDeploy(taskId, source, target, opts = {}) {
     setTimeout(() => { if (deployTasks.get(taskId)?.finishedAt) deployTasks.delete(taskId); }, 3600000).unref?.();
   }
 }
+
+/* ---------------- 语音引擎（Genie TTS）单独部署 ---------------- */
+/**
+ * 2026-10-24 主人要求：部署时可选「同时部署语音引擎」。
+ * 把本机 <runtime>/qq-bridge/python 下的引擎文件与角色模型传到目标机 /opt/kizuna-voice，
+ * 建 venv 装 genie-tts，写 systemd 单元常驻 127.0.0.1:4610（桥侧只探这个地址，不需要改桥）。
+ *
+ * 为什么先探测再动手：引擎需要 ≈2 GB 磁盘 + ≥3.5 GB 可用内存 + Python 3.11/3.12。
+ * 目标机不满足时**只跳过这一步**并把数字写清楚 —— 硬装会把磁盘塞满，把整套部署一起搞坏。
+ */
+async function deployVoiceEngine(task, conn, srcDir) {
+  taskLine(task, '----- 附加：单独部署语音引擎（Genie TTS） -----');
+  if (!srcDir || !statSyncSafe(srcDir)) {
+    taskLine(task, '  跳过：本机找不到引擎源码目录（qq-bridge/python）');
+    return;
+  }
+  const probe = await runCmd(conn, [
+    'echo MEM=$(free -m | awk \'/Mem:/{print $7}\')',
+    'echo DISK=$(df -m / | awk \'NR==2{print $4}\')',
+    'echo PY12=$(python3.12 -V 2>/dev/null || true)',
+    'echo PY11=$(python3.11 -V 2>/dev/null || true)',
+    'echo PY3=$(python3 -V 2>&1)',
+  ].join('; '));
+  const get = (k) => String((probe.out || '').split('\n').find((l) => l.startsWith(k + '=')) || '').slice(k.length + 1).trim();
+  const memMb = Number(get('MEM')) || 0;
+  const diskMb = Number(get('DISK')) || 0;
+  const py = /^python3\.12/.test(get('PY12')) ? 'python3.12' : (/^python3\.11/.test(get('PY11')) ? 'python3.11' : '');
+  taskLine(task, `  目标机：可用内存 ${memMb} MB / 根分区空闲 ${diskMb} MB / ${get('PY3') || '无 python3'}${py ? '（可用 ' + py + '）' : ''}`);
+  const reasons = [];
+  if (memMb < 3500) reasons.push(`可用内存 ${memMb} MB < 3500 MB（引擎加载一个角色后峰值约 4.4 GB）`);
+  if (diskMb < 2048) reasons.push(`磁盘空闲 ${diskMb} MB < 2048 MB（模型 964 MB + 公共数据 390 MB + venv 约 600 MB）`);
+  if (!py) reasons.push('没有 Python 3.11/3.12（3.13+ 的 onnxruntime 轮子还不齐）');
+  if (reasons.length) {
+    taskLine(task, '  跳过语音引擎：' + reasons.join('；'));
+    taskLine(task, '  （其余部署不受影响；机器升级后重新勾选部署即可）');
+    return;
+  }
+  const DIR = '/opt/kizuna-voice';
+  const r0 = await runCmd(conn, `mkdir -p ${DIR} && echo ok`, 30000);
+  if (!r0.ok) { taskLine(task, '  跳过：目标机无法创建 ' + DIR + '：' + (r0.err || '').slice(0, 120)); return; }
+
+  /* 1) 上传引擎文件 + 模型（跳过运行时/venv/缓存：目标机会自己建） */
+  const skipDir = new Set(['runtime', '.venv', '__pycache__', 'models']);
+  let uploaded = 0;
+  const sftp = await new Promise((resolve, reject) => conn.sftp((err, s) => (err ? reject(err) : resolve(s))));
+  const put = (localPath, remotePath) => new Promise((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, (err) => (err ? reject(err) : resolve()));
+  });
+  const mkdirp = (remoteDir) => new Promise((resolve) => {
+    const parts = remoteDir.split('/').filter(Boolean);
+    let cur = '';
+    const next = (i) => {
+      if (i >= parts.length) return resolve();
+      cur += '/' + parts[i];
+      sftp.mkdir(cur, () => next(i + 1));
+    };
+    next(0);
+  });
+  const walk = (dir, rel = '') => {
+    let out = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? rel + '/' + e.name : e.name;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (skipDir.has(e.name) || e.name.startsWith('.')) continue;
+        out = out.concat(walk(full, r));
+      } else if (!/\.bak|__pycache__|\.pyc$/.test(e.name)) {
+        out.push({ full, rel: r });
+      }
+    }
+    return out;
+  };
+  const files = walk(srcDir);
+  /* 模型目录单独走：它不在 skipDir 里被跳过？—— 上面 skipDir 包含 models 是为了不重复遍历，
+   * 这里显式把 models 与 GenieData 都补进来（两者都是引擎必需的数据目录）。 */
+  for (const extra of ['models', 'GenieData']) {
+    const d = join(srcDir, extra);
+    if (statSyncSafe(d)) files.push(...walk(d, extra));
+  }
+  taskLine(task, `  上传引擎文件：${files.length} 个（模型与公共数据可能较慢）`);
+  let done = 0;
+  for (const f of files) {
+    const remote = DIR + '/' + f.rel;
+    await mkdirp(remote.slice(0, remote.lastIndexOf('/')));
+    await put(f.full, remote);
+    done++;
+    if (done % 5 === 0 || done === files.length) taskLine(task, `   已上传 ${done}/${files.length}`);
+    uploaded++;
+  }
+  if (!uploaded) { taskLine(task, '  跳过：本机引擎目录里没有可上传的文件'); return; }
+
+  /* 2) venv + 依赖（onnxruntime 路线，没有 torch，装起来不重） */
+  taskLine(task, `  建 venv 并安装 genie-tts（${py}）…`);
+  const pipCmd = [`${py} -m venv ${DIR}/.venv`, `${DIR}/.venv/bin/pip install -q -U pip`, `${DIR}/.venv/bin/pip install -q genie-tts==2.0.2 fastapi uvicorn`].join(' && ');
+  const r1 = await runCmd(conn, pipCmd, 900000);
+  taskLine(task, r1.ok ? '  venv 与依赖安装完成' : `  venv 安装失败（跳过启动）：${(r1.err || r1.out || '').slice(-200)}`);
+  if (!r1.ok) return;
+
+  /* 3) systemd 单元 + 启动 + 自检 */
+  const unit = [
+    '[Unit]',
+    'Description=Kizuna Genie TTS engine',
+    'After=network.target',
+    '',
+    '[Service]',
+    'Type=simple',
+    `WorkingDirectory=${DIR}`,
+    `ExecStart=${DIR}/.venv/bin/python ${DIR}/genie_server.py --host 127.0.0.1 --port 4610 --data-dir ${DIR}/GenieData --models-dir ${DIR}/models`,
+
+    'Restart=always',
+    'RestartSec=3',
+    'Environment=PYTHONUNBUFFERED=1',
+    '',
+    '[Install]',
+    'WantedBy=multi-user.target',
+    '',
+  ].join('\n');
+  const tmpUnit = join(os.tmpdir(), 'kizuna-voice.service');
+  writeFileSync(tmpUnit, unit, 'utf8');
+  await put(tmpUnit, '/etc/systemd/system/kizuna-voice.service');
+  const r2 = await runCmd(conn, 'systemctl daemon-reload && systemctl enable --now kizuna-voice.service && sleep 8 && (curl -fsS -m 3 http://127.0.0.1:4610/characters | head -c 200 || echo NOT_READY)', 120000);
+  if (r2.ok && !String(r2.out).includes('NOT_READY')) {
+    taskLine(task, '  ✓ 语音引擎已启动：http://127.0.0.1:4610 ' + String(r2.out).slice(0, 120));
+    taskLine(task, '  桥侧下次要发语音时会自己探到这个引擎，不用重启桥。');
+  } else {
+    taskLine(task, '  引擎已安装但没起来：journalctl -u kizuna-voice -n 80 查看；不影响其余服务。');
+  }
+}
+
+function statSyncSafe(p) { try { return statSync(p).isDirectory(); } catch { return false; } }
 
 /* ---------------- 对外接口 ---------------- */
 export function deployApi() {

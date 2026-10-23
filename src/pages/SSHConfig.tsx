@@ -99,6 +99,9 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
   const [deployFor, setDeployFor] = useState<SSHServer | null>(null); // 目标服务器（本台将安装整套服务）
   const [deploySrc, setDeploySrc] = useState<string>('');              // 复刻源标识
   const [deployQQ, setDeployQQ] = useState(true);                      // 是否一并复刻 QQ 登录态
+  /* 2026-10-24 主人要求：部署时可选「单独部署语音引擎」——引擎装在 /opt/kizuna-voice，
+     桥侧只探 127.0.0.1:4610 就会复用，不需要改桥代码。 */
+  const [deployVoice, setDeployVoice] = useState(false);
   const [deployTask, setDeployTask] = useState<string | null>(null);
   const [deployLog, setDeployLog] = useState<string[]>([]);
   const [deployBusy, setDeployBusy] = useState(false);
@@ -153,7 +156,7 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
         if (!source) { setMsg('复刻源不存在，请重新选择'); setDeployBusy(false); return; }
         if (source.host === deployFor.host && (source.port || 22) === (deployFor.port || 22)) { setMsg('复刻源与目标为同一台机器'); setDeployBusy(false); return; }
       }
-      const r = await deployStart(useLocal ? { local: true, name: '本机（这台电脑）' } : plain(servers.find((x) => x.id === deploySrc)!), plain(deployFor), deployQQ);
+      const r = await deployStart(useLocal ? { local: true, name: '本机（这台电脑）' } : plain(servers.find((x) => x.id === deploySrc)!), plain(deployFor), deployQQ, deployVoice);
       if (!r.success || !r.taskId) { setMsg(r.message || '发起失败'); setDeployBusy(false); return; }
       setDeployTask(r.taskId);
       setMsg(useLocal ? '已开始从本机复刻（本机不会停机，详见下方日志）' : '部署已开始，详见下方日志（过程中复刻源服务器会短暂停机以完成打包）');
@@ -524,6 +527,10 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                     <label className="checkbox-label" style={{ marginBottom: 10 }}>
                       <input type="checkbox" checked={deployQQ} onChange={(e) => setDeployQQ(e.target.checked)} disabled={deployBusy || !!deployTask} />
                       连同 QQ 登录令牌一并复刻（免重新扫码）
+                    </label>
+                    <label className="checkbox-label" style={{ marginBottom: 10 }} title="把 Genie TTS 引擎单独装到目标机 /opt/kizuna-voice（systemd 常驻 127.0.0.1:4610）。需要目标机 ≈2GB 空闲磁盘、≥3.5GB 可用内存、Python 3.11/3.12；不满足会自动跳过并写清原因，不影响本次部署。">
+                      <input type="checkbox" checked={deployVoice} onChange={(e) => setDeployVoice(e.target.checked)} disabled={deployBusy || !!deployTask} />
+                      同时部署语音引擎（TTS · 约 2 GB）
                     </label>
                   </div>
                 </div>

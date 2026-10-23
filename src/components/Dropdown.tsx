@@ -277,6 +277,29 @@ export function Dropdown({
   const widthStyle: React.CSSProperties =
     autoWidth === undefined || (style && style.width !== undefined) ? {} : { width: autoWidth };
 
+  /* 只有一个选项（或一项都没有）= 根本没有可选的余地：直接封死成一个静态标签。
+   * 2026-10-23 主人要求："只有一个选项的下拉框也封死或者直接去掉" —— 点开一个只有一项的
+   * 浮层纯属噪音，而且在多出来的那次点击里还会让人误以为有别的东西可选。
+   * 这里放在所有 hooks 之后，所以选项数量从 N 变 1（或反过来）也不会打乱 hook 顺序。 */
+  if (options.length <= 1) {
+    const only = options[0];
+    const text = only ? only.label : (placeholder || '');
+    return (
+      <div
+        id={id}
+        className={triggerClass + ' is-locked'}
+        style={{ ...style, ...widthStyle }}
+        role="textbox"
+        aria-readonly="true"
+        aria-label={ariaLabel}
+        data-single="1"
+        title={title || (only ? '只有一个选项，无需选择' : '暂无可选项')}
+      >
+        <span className="mb-dd-label">{text === '' ? '\u00a0' : text}</span>
+      </div>
+    );
+  }
+
   return (
     <>
       {/* 隐藏测量盒：与控件同字体，逐项量文字宽度（不是估算）；面板未打开时也要在，所以放在外面 */}

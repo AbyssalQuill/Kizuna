@@ -11,7 +11,18 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot  = Split-Path $PSScriptRoot -Parent
-$pkgRoot   = Join-Path (Split-Path $repoRoot -Parent) 'QQ-Bridge-packaging'
+# 2026-10-24: the packaging project used to live NEXT TO the repo; it now lives INSIDE it
+# (<repo>\QQ-Bridge-packaging). Try both and take the one that actually has kizuna-app -- while
+# this pointed at the dead sibling path, every sync silently no-opped and the payload went
+# stale (found on a repack attempt: runtime-full still carried files from 2026-09-30).
+$pkgCandidates = @(
+  (Join-Path $repoRoot 'QQ-Bridge-packaging'),
+  (Join-Path (Split-Path $repoRoot -Parent) 'QQ-Bridge-packaging')
+)
+$pkgRoot = $null
+foreach ($cand in $pkgCandidates) { if (Test-Path (Join-Path $cand 'kizuna-app')) { $pkgRoot = $cand; break } }
+if (-not $pkgRoot) { $pkgRoot = $pkgCandidates[0] }
+Write-Host ('packaging root = ' + $pkgRoot)
 $liveRoot  = [string]$env:QBM_LIVE_RUNTIME
 $srcBridge = Join-Path $repoRoot 'qq-bridge'
 $srcMgr    = $repoRoot

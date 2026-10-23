@@ -14,6 +14,8 @@ import { deployApi } from './deploy.js';
 import { mergeCredentialText, credentialStatusFromText, validateCredentialDocument } from './iso-credential.js';
 // NapCat 运行时完整性自检/自修（payload 分片不同源、杀软误删、更新复制不完整都会启动即崩）
 import { ensureNapcatApps } from './napcat-repair.js';
+// 原地更新：从 GitHub 仓库拉最新代码，按"合并补丁"的语义落盘（详见 server/updater.js 头注释）
+import { createUpdater } from './updater.js';
 // NapCat WebUI 登录自查的唯一入口（预算 + 缓存 + 限流冷却）。为什么必须收口见该文件头注释：
 // 把登录接口当状态探针会跟 WebUI 页面自己抢 NapCat 的按 IP 限流额度，页面就永远登不进去。
 /* 2026-09-23：去除探针与状态检测。原来这里 import 了 napcat-webui-auth —— 那个模块
@@ -21,6 +23,24 @@ import { ensureNapcatApps } from './napcat-repair.js';
 // 连接服务端的状态机（纯逻辑可单测）：让界面能看到"SSH → 隧道 → 服务端组件逐个就绪 → 预鉴权 → 就绪"
 import { createConnectMachine, describeRemoteStatus } from './connect-machine.js';
 const deploy = deployApi();
+
+/* ------------------------------------------------------------------ */
+/* tar 包装（2026-10-24）                                              */
+/*                                                                     */
+/* Windows 上 tar 有两种流派：System32 的 bsdtar（认 C:\ 盘符）和      */
+/* MSYS/Git 的 GNU tar —— 后者把 `主机:路径` 当远程地址，于是           */
+/* `tar xzf C:\Users\...\x.tar.gz` 直接报                          */
+/*   tar (child): Cannot connect to C: resolve failed                  */
+/* 实测同步步骤「远端 state 覆盖本地」就死在这里。两种流派都能用的写法：*/
+/* 探测到 GNU tar 就补 --force-local（强制把冒号当本地路径），否则原样。*/
+/* 只改参数、不改语义：所有既有 tar 调用统一走 runTar()。               */
+const TAR_EXTRA_FLAGS = (() => {
+  try {
+    const r = runTar(['--force-local', '--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+    return r.status === 0 ? ['--force-local'] : [];
+  } catch { return []; }
+})();
+function runTar(args, opts) { return spawnSync('tar', TAR_EXTRA_FLAGS.concat(args), opts); }
 
 /* 2026-09-12：需求"确保这个应用安装在哪个盘都可以找到"。
  * 运行时根目录一律以本文件所在位置为准：<runtime>/server/index.js → <runtime>。
@@ -3620,7 +3640,7 @@ app.post('/api/ssh/disconnect', (req, res) => {
 /** Windows 打包/解包前确认 tar 在 PATH(bsdtar/GNU tar 均可), 否则给出提示 */
 function checkTarAvailable() {
   try {
-    const r = spawnSync('tar', ['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    const r = runTar(['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
     return r.status === 0 && !r.error;
   } catch { return false; }
 }
@@ -3653,7 +3673,7 @@ function packLocalBridge(includeState) {
   ];
   if (!includeState) ex.push(`${name}/state`);
   const args = ['-czf', tmp, ...ex.map((p) => `--exclude=${p}`), '-C', parent, name];
-  const r = spawnSync('tar', args, { encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+  const r = runTar(args, { encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
   if (r.error || r.status !== 0) {
     try { unlinkSync(tmp); } catch {}
     return { ok: false, error: String(r.stderr || r.error?.message || 'tar 打包失败') };
@@ -3906,7 +3926,7 @@ function backupDirBestEffort(src, dst) {
     const detail = String((rc.stdout || '') + (rc.stderr || '')).trim().slice(-300) || `rc=${code}`;
     // tar 兜底：同一套代码在别处已经在用 tar，退出码语义干净
     const tarDst = `${dst}.tar`;
-    const tc = spawnSync('tar', ['-cf', tarDst, '-C', dirname(src), basename(src)], { encoding: 'utf8', timeout: 600000, windowsHide: true });
+    const tc = runTar(['-cf', tarDst, '-C', dirname(src), basename(src)], { encoding: 'utf8', timeout: 600000, windowsHide: true });
     if (tc.status === 0) return { ok: true, how: 'tar', msg: `robocopy 失败(${detail}) → 已用 tar 备份到 ${tarDst}` };
     return { ok: false, how: 'none', msg: `robocopy rc=${code} ${detail}; tar rc=${tc.status} ${String(tc.stderr || '').slice(-200)}` };
   } catch (e) {
@@ -4005,7 +4025,7 @@ app.post('/api/ssh/sync', async (req, res) => {
           if (!existsSync(localState)) { steps.push({ step: '本地 state', ok: false, msg: '本地无 state 目录' }); }
           else {
             const sTar = join(tmpdir(), `qqbridge-state-${Date.now()}.tar.gz`);
-            const pS = spawnSync('tar', ['-czf', sTar, '-C', bridgeDir, 'state'], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+            const pS = runTar(['-czf', sTar, '-C', bridgeDir, 'state'], { encoding: 'utf8', timeout: 300000, windowsHide: true });
             steps.push({ step: '打包本地 state', ok: pS.status === 0, msg: pS.status === 0 ? '已打包' : String(pS.stderr || '打包失败') });
             if (pS.status === 0) {
               await uploadFileVerified(conn, sTar, '/root/qq-bridge-state-sync.tar.gz');
@@ -4026,7 +4046,7 @@ app.post('/api/ssh/sync', async (req, res) => {
             const args = ['-czf', sTar];
             const parent = bridgeDir;
             for (const p of inc) args.push('-C', parent, p.endsWith('stickers.json') ? 'state/stickers.json' : basename(p));
-            const pSt = spawnSync('tar', args, { encoding: 'utf8', timeout: 300000, windowsHide: true });
+            const pSt = runTar(args, { encoding: 'utf8', timeout: 300000, windowsHide: true });
             steps.push({ step: '打包本地表情包', ok: pSt.status === 0, msg: pSt.status === 0 ? '已打包' : String(pSt.stderr || '打包失败') });
             if (pSt.status === 0) {
               await uploadFileVerified(conn, sTar, '/root/qq-bridge-stickers.tar.gz');
@@ -4075,7 +4095,7 @@ app.post('/api/ssh/sync', async (req, res) => {
             steps.push({ step: '备份本地 config.json', ok: true, msg: '本地无 config.json, 跳过' });
           }
           mkdirSync(localDir, { recursive: true });
-          const ex = spawnSync('tar', ['xzf', tmpLocal, '-C', localDir], { encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+          const ex = runTar(['xzf', tmpLocal, '-C', localDir], { encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
           steps.push({ step: '解压覆盖本地 qq-bridge', ok: ex.status === 0 && !ex.error, msg: ex.status === 0 ? `已解压到 ${localDir}` : String(ex.stderr || ex.error?.message || '解压失败') });
         } finally {
           try { unlinkSync(tmpLocal); } catch {}
@@ -4113,7 +4133,7 @@ app.post('/api/ssh/sync', async (req, res) => {
             await pipeRemoteFileToLocal(conn, 'cat /root/qq-bridge-state-sync.tar.gz', tSt);
             mkdirSync(join(localDir, 'state'), { recursive: true });
             const rmOld = spawnSync('cmd', ['/c', `rmdir /s /q "${join(localDir, 'state')}"`], { stdio: 'ignore', timeout: 120000, windowsHide: true });
-            const exSt = spawnSync('tar', ['xzf', tSt, '-C', localDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+            const exSt = runTar(['xzf', tSt, '-C', localDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
             steps.push({ step: '远端 state 覆盖本地', ok: exSt.status === 0, msg: exSt.status === 0 ? '已覆盖' : String(exSt.stderr || '解压失败') });
           } finally { try { unlinkSync(tSt); } catch {} }
           await sshExecCapture(conn, 'rm -f /root/qq-bridge-state-sync.tar.gz', 15000);
@@ -4127,7 +4147,7 @@ app.post('/api/ssh/sync', async (req, res) => {
             await pipeRemoteFileToLocal(conn, 'cat /root/qq-bridge-stickers.tar.gz', tSk);
             mkdirSync(join(localDir, 'stickers-upload'), { recursive: true });
             const rmSk = spawnSync('cmd', ['/c', `rmdir /s /q "${join(localDir, 'stickers-upload')}"`], { stdio: 'ignore', timeout: 60000, windowsHide: true });
-            const exSk = spawnSync('tar', ['xzf', tSk, '-C', localDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+            const exSk = runTar(['xzf', tSk, '-C', localDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
             steps.push({ step: '远端表情包覆盖本地', ok: exSk.status === 0, msg: exSk.status === 0 ? '已覆盖' : String(exSk.stderr || '解压失败') });
           } finally { try { unlinkSync(tSk); } catch {} }
           await sshExecCapture(conn, 'rm -f /root/qq-bridge-stickers.tar.gz', 15000);
@@ -4159,7 +4179,7 @@ app.post('/api/ssh/sync', async (req, res) => {
         mkdirSync(remoteStateDir, { recursive: true });
         await pipeRemoteFileToLocal(conn, 'cat /root/qq-bridge-state-merge.tar.gz', remoteTar);
         steps.push({ step: '下载远端 state', ok: true, msg: remoteTar });
-        const exR = spawnSync('tar', ['xzf', remoteTar, '-C', remoteStateDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+        const exR = runTar(['xzf', remoteTar, '-C', remoteStateDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
         if (exR.status !== 0) return res.json({ success: false, steps: [...steps, { step: '解包远端 state', ok: false, msg: String(exR.stderr || '解包失败') }] });
         steps.push({ step: '解包远端 state', ok: true, msg: '已解包' });
         // 暂停本地桥: memory.db 是桥进程常开单例, 合并期间避免写冲突/句柄占用
@@ -4204,7 +4224,7 @@ app.post('/api/ssh/sync', async (req, res) => {
         steps.push({ step: '替换本地 state(旧目录已备份)', ok: true, msg: oldState });
         // 打包合并结果上传远端覆盖(远端先备份再换, 失败自动回滚)
         const upTar = join(tmpdir(), `qqbridge-merge-upload-${Date.now()}.tar.gz`);
-        const pM = spawnSync('tar', ['-czf', upTar, '-C', bridgeDir, 'state'], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+        const pM = runTar(['-czf', upTar, '-C', bridgeDir, 'state'], { encoding: 'utf8', timeout: 300000, windowsHide: true });
         steps.push({ step: '打包合并结果', ok: pM.status === 0, msg: upTar });
         if (pM.status === 0) {
           await uploadFileVerified(conn, upTar, '/root/qq-bridge-merged.tar.gz');
@@ -4225,7 +4245,7 @@ app.post('/api/ssh/sync', async (req, res) => {
                 await pipeRemoteFileToLocal(conn, 'cat /root/qq-bridge-stickers-merge.tar.gz', tStk);
                 remoteStkDir = join(tmpdir(), `qqbridge-remote-stickers-${Date.now()}`);
                 mkdirSync(remoteStkDir, { recursive: true });
-                const exStk = spawnSync('tar', ['xzf', tStk, '-C', remoteStkDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+                const exStk = runTar(['xzf', tStk, '-C', remoteStkDir], { encoding: 'utf8', timeout: 300000, windowsHide: true });
                 steps.push({ step: '下载远端表情包', ok: exStk.status === 0, msg: exStk.status === 0 ? '已下载解包' : String(exStk.stderr || '解包失败') });
                 if (exStk.status === 0) {
                   const localUp = join(bridgeDir, 'stickers-upload');
@@ -4249,7 +4269,7 @@ app.post('/api/ssh/sync', async (req, res) => {
                   if (rn2.status !== 0) return res.json({ success: false, steps, message: '本地表情包替换失败(旧目录已改名备份)' });
                   const upStk = join(tmpdir(), `qqbridge-stickers-merged-${Date.now()}.tar.gz`);
                   try {
-                    const pStk = spawnSync('tar', ['-czf', upStk, '-C', bridgeDir, 'stickers-upload'], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+                    const pStk = runTar(['-czf', upStk, '-C', bridgeDir, 'stickers-upload'], { encoding: 'utf8', timeout: 300000, windowsHide: true });
                     steps.push({ step: '打包合并后表情包', ok: pStk.status === 0, msg: upStk });
                     if (pStk.status === 0) {
                       await uploadFileVerified(conn, upStk, '/root/qq-bridge-stickers-merged.tar.gz');
@@ -9336,10 +9356,70 @@ const DAY_MS = 86400000;
  *  反过来（主库 = memory.db）不行：老 memory.db 里可能还留着迁移前的 chat_messages 残留表，
  *  未限定的表名会先命中那张过期的表，静默读出错数据。
  *  老安装（还没跑过新版桥、chat.db 尚未生成）原样退回 memory.db。 */
+/* 2026-10-24：画像 / 聊天数据必须跟着「当前目标」走。
+ * 现场：机器人搬去服务器之后，本机 state/chat.db 停在 09-26 —— 「群友画像」页的连线全没了
+ * （节点还在，因为档案来自另一张表）。根因就是这个函数一直只读本机桥的库。
+ * 现在：连着服务器时，把远端 chat.db / memory.db（连同 -wal，否则最近的写入看不到）拉到
+ * <config>/remote-db/<serverId>/ 再按同一套只读方式打开；180 秒 TTL，避免每次开页都传 22MB。
+ * 任何一步失败就退回本机库 —— 页面顶多显示旧数据，不会整页报错。 */
+const REMOTE_DB_TTL_MS = 180 * 1000;
+const remoteDbCache = new Map();
+
+function sftpGetFile(conn, remote, local) {
+  return new Promise((resolve, reject) => {
+    conn.sftp((err, sftp) => {
+      if (err) return reject(err);
+      sftp.fastGet(remote, local, (e) => (e ? reject(e) : resolve(true)));
+    });
+  });
+}
+
+async function syncRemoteBridgeDb(serverId, conn) {
+  const dir = join(CONFIG_DIR, 'remote-db', String(serverId));
+  mkdirSync(dir, { recursive: true });
+  const hit = remoteDbCache.get(serverId);
+  const chatPath = join(dir, 'chat.db');
+  const memPath = join(dir, 'memory.db');
+  if (hit && Date.now() - hit.at < REMOTE_DB_TTL_MS && existsSync(chatPath)) return hit;
+  if (!existsSync(chatPath)) {
+    // 首次：必须拿到主库，否则这次调用没有意义
+    await sftpGetFile(conn, '/root/qq-bridge/state/chat.db', chatPath);
+  } else {
+    await sftpGetFile(conn, '/root/qq-bridge/state/chat.db', chatPath + '.tmp');
+    renameSync(chatPath + '.tmp', chatPath);
+  }
+  // -wal / -shm 与 memory.db 都是「有就拿、没有就清掉旧的」，缺一个不能把整页搞崩
+  for (const [remote, local] of [
+    ['/root/qq-bridge/state/chat.db-wal', chatPath + '-wal'],
+    ['/root/qq-bridge/state/memory.db', memPath],
+    ['/root/qq-bridge/state/memory.db-wal', memPath + '-wal'],
+  ]) {
+    try {
+      await sftpGetFile(conn, remote, local + '.tmp');
+      renameSync(local + '.tmp', local);
+    } catch {
+      try { rmSync(local, { force: true }); } catch { /* 远端没有这份就算了 */ }
+    }
+  }
+  const entry = { at: Date.now(), chatPath, memPath };
+  remoteDbCache.set(serverId, entry);
+  return entry;
+}
 async function openBridgeMemoryDbRo() {
-  const dir = findBridgeDir();
-  const chatPath = join(dir, 'state', 'chat.db');
-  const memPath = join(dir, 'state', 'memory.db');
+  let dir = findBridgeDir();
+  let chatPath = join(dir, 'state', 'chat.db');
+  let memPath = join(dir, 'state', 'memory.db');
+  /* 2026-10-24：连着服务器就读远端那份（见上面 syncRemoteBridgeDb 的说明），
+   * 读不到就沿用本机库 —— 老行为一点没变，只是多了一条更准确的路。 */
+  try {
+    const cfgNow = loadConfig();
+    const sid = cfgNow?.activeServerId;
+    const conn = sid ? sshConnections.get(sid) : null;
+    if (conn) {
+      const r = await syncRemoteBridgeDb(sid, conn);
+      if (r && existsSync(r.chatPath)) { chatPath = r.chatPath; memPath = r.memPath; }
+    }
+  } catch (e) { console.warn('[db] 远端聊天库同步失败，退回本机库：' + (e?.message || e)); }
   const { DatabaseSync } = await import('node:sqlite');
   if (existsSync(chatPath)) {
     const db = new DatabaseSync(chatPath, { readOnly: true, timeout: 800 });
@@ -10336,7 +10416,8 @@ app.post('/api/ssh/deploy/start', (req, res) => {
   const target = resolveServer(req.body?.target, cfg);
   if (!target) return res.status(400).json({ success: false, message: '缺少有效的目标服务器(请在 SSH 配置页先添加)' });
   let source = null;
-  let opts = { qqData: req.body?.qqData };
+  /* voice：勾选「同时部署语音引擎」时，deploy.js 会在整套部署完成后把 TTS 引擎单独装到目标机 */
+  let opts = { qqData: req.body?.qqData, voice: req.body?.voice === true, voiceSrc: join(RUNTIME_ROOT, 'qq-bridge', 'python') };
   if (useLocal) {
     const local = localCloneSource();
     source = { local: true, name: local.name };
@@ -10977,6 +11058,57 @@ app.post('/api/shutdown', async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------ */
+/* 更新（2026-10-23）：从 GitHub 拉最新版本 → 合并进安装目录             */
+/*                                                                     */
+/* 为什么要"合并"而不是整包覆盖：安装目录里有手改过的东西（洛谷卡片、   */
+/* 温度、语音），整包覆盖会把它们冲掉。基线取自 update-state.json 里    */
+/* 每个文件的 sha256，据此分辨"上游改的"与"本地改的"；两边都改 → 保留  */
+/* 本地并把上游版另存 .new-<短sha>。细节见 server/updater.js。          */
+/* ------------------------------------------------------------------ */
+const updater = createUpdater({ runtimeRoot: RUNTIME_ROOT, dataDir: CONFIG_DIR, log: (s) => mlog(s) });
+
+app.get('/api/update/status', (_req, res) => {
+  try { res.json(updater.status()); }
+  catch (e) { res.json({ ok: false, error: '读取更新状态失败：' + (e?.message || e) }); }
+});
+
+app.post('/api/update/check', async (_req, res) => {
+  try { res.json(await updater.check()); }
+  catch (e) { res.json({ ok: false, error: '检查更新失败：' + (e?.message || e) }); }
+});
+
+/* 预览：先下载源码包（约 8MB）再逐文件比对，慢一点但不动任何东西 */
+app.post('/api/update/plan', async (req, res) => {
+  try {
+    const sha = String(req.body?.sha || '').trim() || (await updater.check()).latest.sha;
+    const tree = await updater.prepare(sha);
+    const plan = updater.computePlan(tree);
+    res.json({ ok: true, sha, entries: plan.entries, counts: plan.counts });
+  } catch (e) {
+    res.json({ ok: false, error: '生成更新预览失败：' + (e?.message || e) });
+  }
+});
+
+/* 执行：异步跑，立刻返回；前端靠 /api/update/status 看 job 进度 */
+app.post('/api/update/apply', (req, res) => {
+  if (updater.status().job.phase !== 'idle' && !['done', 'error'].includes(updater.status().job.phase)) {
+    res.json({ ok: false, error: '上一次更新还在进行中' });
+    return;
+  }
+  const opts = {
+    sha: req.body?.sha ? String(req.body.sha) : undefined,
+    overwriteAll: req.body?.overwriteAll === true,
+    build: req.body?.build !== false,
+  };
+  void updater.apply(opts).catch(() => { /* 失败原因已写进 job.message 与日志 */ });
+  res.json({ ok: true, started: true });
+});
+
+app.post('/api/update/rollback', (_req, res) => {
+  try { res.json(Object.assign({ ok: true }, updater.rollback())); }
+  catch (e) { res.json({ ok: false, error: '回滚失败：' + (e?.message || e) }); }
+});
 /**
  * 开机/开关窗口后自动恢复上次启动过的实例（`instances.<k>.enabled === true`）。
  * 顺序仍是 NapCat → DSH → 桥（依赖关系），但不等就绪：状态机自己在后台推进，界面照常可用。

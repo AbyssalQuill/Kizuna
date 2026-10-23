@@ -89,7 +89,7 @@ export interface DeployTaskBrief {
 }
 /** 发起克隆。`source` 与 `target` 可传服务器对象（尚未保存的新条目亦可）或已保存的 id；
  *  `source` 传 `{ local: true, name }` 表示从本机复刻，不需要模板服务器。 */
-export const deployStart = (source: Record<string, unknown> | string, target: Record<string, unknown> | string, qqData: boolean) =>
+export const deployStart = (source: Record<string, unknown> | string, target: Record<string, unknown> | string, qqData: boolean, voice = false) =>
   api<DeployTaskStatus>('/ssh/deploy/start', {
     method: 'POST',
     body: JSON.stringify({
@@ -97,6 +97,8 @@ export const deployStart = (source: Record<string, unknown> | string, target: Re
       sourceKind: (source as { local?: boolean })?.local === true ? 'local' : undefined,
       target,
       qqData,
+      /* 2026-10-24：勾选后，克隆部署结束时再把 TTS 语音引擎单独装到目标机（/opt/kizuna-voice + systemd） */
+      voice,
     }),
   });
 export const deployStatus = (taskId: string) =>
@@ -1034,3 +1036,122 @@ export const deleteChatHistory = (body: {
   key?: string; ids?: string[]; beforeMs?: number; all?: boolean;
 }) =>
   apiSoft<ChatDeleteResp>('/bridge/chat-delete', { method: 'POST', body: JSON.stringify({ ...body, confirm: true }) });
+
+/* ================= 程序更新（server/updater.js） =================
+ * 契约要点：
+ *   · status / check / plan / apply / rollback 五个接口都返回 JSON；
+ *   · 失败同样是 HTTP 200 + { ok:false, error:'中文原因' }，调用方必须按 ok 判断，
+ *     不能只看 HTTP 状态（见 server/index.js 的更新路由）；
+ *   · apply 是异步的：POST 只回 { ok:true, started:true }，进度靠轮询 status.job。
+ * 字段大多声明为可选：老版本后端没有这些接口（404），新版后端在不同阶段也可能少给字段，
+ * 页面按缺省值兜底，避免整页崩掉。 */
+
+export type UpdatePhase = 'idle' | 'checking' | 'preparing' | 'planning' | 'applying' | 'building' | 'done' | 'error';
+
+export interface UpdateCommit {
+  sha: string;
+  short?: string;
+  /** 提交首行（current 在部分版本里没有这个字段） */
+  message?: string;
+  /** 提交时间（ISO 字符串） */
+  date?: string;
+  /** 应用时间（毫秒时间戳） */
+  appliedAt?: number;
+  /** check 之后才有：上游与本地相差的文件数（契约里挂在 latest 上） */
+  files?: number;
+}
+
+export interface UpdateJob {
+  phase: UpdatePhase;
+  step: string;
+  percent: number;
+  message: string;
+  startedAt: number | null;
+  finishedAt: number | null;
+  log: string[];
+}
+
+export interface UpdateLastResult {
+  ok: boolean;
+  sha?: string;
+  short?: string;
+  /** 实际写入（新增或覆盖）的文件数 */
+  applied?: number;
+  /** 冲突文件相对路径（保留本地，上游版另存 .new-<短sha>） */
+  conflicts?: string[];
+  deleted?: number;
+  built?: boolean;
+  backupDir?: string;
+  finishedAt?: number;
+  error?: string;
+  message?: string;
+  distBackup?: string;
+}
+
+/** 变更动作。除了契约里的四种，当前 updater 还会给出 kept（上游删了、本地改过 → 保留本地）。 */
+export type UpdateFileAction = 'add' | 'update' | 'conflict' | 'delete' | 'kept';
+
+export interface UpdatePlanEntry {
+  rel: string;
+  action: UpdateFileAction;
+  localBytes?: number;
+  upstreamBytes?: number;
+}
+
+export interface UpdatePlanCounts {
+  add: number;
+  update: number;
+  conflict: number;
+  delete: number;
+  /** 上游删除但本地改过、因此保留的文件数（老版本没有） */
+  kept?: number;
+}
+
+export interface UpdatePlanResult {
+  ok: boolean;
+  sha?: string;
+  entries?: UpdatePlanEntry[];
+  counts?: UpdatePlanCounts;
+  error?: string;
+}
+
+export interface UpdateStatus {
+  ok: boolean;
+  repo?: string;
+  branch?: string;
+  current?: UpdateCommit | null;
+  /** 上游最新提交；status 端点在某些版本里不返回，点「检查更新」后才有 */
+  latest?: UpdateCommit | null;
+  behind?: boolean;
+  job?: UpdateJob;
+  lastResult?: UpdateLastResult | null;
+  /** check 回包里附带的 compare（老版本用它给文件数） */
+  compare?: { aheadBy?: number; files?: number; commits?: Array<{ sha: string; message: string }> };
+  runtimeRoot?: string;
+  error?: string;
+}
+
+export interface UpdateApplyResult { ok: boolean; started?: boolean; error?: string; }
+export interface UpdateRollbackResult { ok: boolean; restored?: number; removed?: number; error?: string; }
+
+export const updateStatus = () => api<UpdateStatus>('/update/status');
+
+export const updateCheck = async () => {
+  const r = await api<UpdateStatus>('/update/check', { method: 'POST', body: '{}' });
+  /* 契约把文件数放在 latest.files；当前后端 check 实际把它放在 compare.files。
+     这里统一抬到 latest 上，页面只认一个位置。 */
+  if (r?.latest && typeof r.latest.files !== 'number' && typeof r.compare?.files === 'number') {
+    r.latest = { ...r.latest, files: r.compare.files };
+  }
+  return r;
+};
+
+export const updatePlan = (sha?: string) =>
+  api<UpdatePlanResult>('/update/plan', { method: 'POST', body: JSON.stringify(sha ? { sha } : {}) });
+
+/** 启动异步更新。build:true = 更新后顺手重建前端产物（dist）。 */
+export const updateApply = (opts: { sha?: string; overwriteAll?: boolean; build?: boolean } = {}) =>
+  api<UpdateApplyResult>('/update/apply', { method: 'POST', body: JSON.stringify(opts) });
+
+export const updateRollback = () =>
+  api<UpdateRollbackResult>('/update/rollback', { method: 'POST', body: '{}' });
