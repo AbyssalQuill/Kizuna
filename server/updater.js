@@ -171,7 +171,7 @@ function httpJson(url, headers = {}) {
   });
 }
 
-export function createUpdater({ runtimeRoot, dataDir, repo, branch, token, log }) {
+export function createUpdater({ runtimeRoot, dataDir, repo, branch, token, log, onFinished }) {
   const REPO = String(repo || process.env.KIZUNA_UPDATE_REPO || DEFAULT_REPO);
   const BRANCH = String(branch || DEFAULT_BRANCH);
   const TOKEN = String(token || process.env.KIZUNA_UPDATE_TOKEN || '');
@@ -492,7 +492,10 @@ export function createUpdater({ runtimeRoot, dataDir, repo, branch, token, log }
       job.message = '更新完成：写入 ' + applied + ' 个文件' + (conflicts.length ? '，冲突 ' + conflicts.length + ' 个已另存 .new' : '') + (distBackup ? '，前端已重建' : '，前端未重建');
       job.finishedAt = Date.now();
       jlog(job.message);
-      jlog('请退出并重新打开 Kizuna 使新代码生效');
+      jlog('更新已完成，系统即将自动重启生效…');
+      if (typeof onFinished === 'function') {
+        try { onFinished(result); } catch (e) { jlog('自动重启回调异常：' + e.message); }
+      }
       return result;
     } catch (err) {
       job.phase = 'error';

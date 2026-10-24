@@ -10405,6 +10405,7 @@ function onManagerListening() {
   {
     console.log(`[QQ-Bridge Manager API] http://127.0.0.1:${PORT}`);
     scheduleAutoStart();
+    scheduleSilentAutoUpdate();
     ensureGuardianArmed();
     /* 2026-09-15 反馈"本地没显示服务端运行中"：管理器一启动就把上次连着的那台服务器连回来：
      * 连接表在内存里（进程重启就空），以前打开应用永远显示"服务端未运行"，非要人手点一次「连接」。
@@ -10880,7 +10881,80 @@ app.post('/api/shutdown', async (req, res) => {
 /* 每个文件的 sha256，据此分辨"上游改的"与"本地改的"；两边都改 → 保留  */
 /* 本地并把上游版另存 .new-<短sha>。细节见 server/updater.js。          */
 /* ------------------------------------------------------------------ */
-const updater = createUpdater({ runtimeRoot: RUNTIME_ROOT, dataDir: CONFIG_DIR, log: (s) => mlog(s) });
+async function onUpdateSuccessRestart() {
+  mlog('[updater] 更新落盘完成，正在执行自动平滑重启…');
+  try {
+    const rt = runtimes.get('bridge-local');
+    if (rt && rt.proc && rt.proc.exitCode === null) {
+      mlog('[updater] 正在自动热重启本地桥 (bridge-local)…');
+      await stopInstance('bridge-local');
+      await startDispatcher('bridge-local', loadConfig());
+      mlog('[updater] 本地桥已重启生效');
+    }
+  } catch (e) {
+    mlog('[updater] 热重启本地桥异常: ' + (e?.message || e));
+  }
+
+  setTimeout(() => {
+    try {
+      mlog('[updater] 正在自动重启 Kizuna 管理器自身…');
+      const child = spawn(process.argv[0], process.argv.slice(1), {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+        windowsHide: true,
+      });
+      child.unref();
+      setTimeout(() => process.exit(0), 1000);
+    } catch (e) {
+      mlog('[updater] 管理器自动重启失败: ' + (e?.message || e));
+    }
+  }, 2500);
+}
+
+const updater = createUpdater({
+  runtimeRoot: RUNTIME_ROOT,
+  dataDir: CONFIG_DIR,
+  log: (s) => mlog(s),
+  onFinished: (res) => {
+    if (res?.ok) void onUpdateSuccessRestart();
+  },
+});
+
+/** 后台静默更新调度器：开机 45s 后首次检测，之后每 45 分钟巡检一次 */
+function scheduleSilentAutoUpdate() {
+  const checkAndApply = async () => {
+    try {
+      const cfg = loadConfig();
+      if (cfg.silentUpdate === false) return;
+      const st = updater.status();
+      if (st.job && st.job.phase !== 'idle' && !['done', 'error'].includes(st.job.phase)) {
+        return;
+      }
+      const chk = await updater.check();
+      const hasNew = Boolean(
+        chk?.ok && (
+          chk.behind ||
+          (chk.latest?.sha && chk.current?.sha && chk.latest.sha !== chk.current.sha)
+        )
+      );
+      if (hasNew) {
+        mlog(`[silent-update] 检测到上游新版本：${chk.latest.short} (${chk.latest.message})，开始后台静默拉取与差量合并…`);
+        await updater.apply({
+          sha: chk.latest.sha,
+          overwriteAll: false,
+          build: true,
+        });
+      }
+    } catch (e) {
+      mlog(`[silent-update] 静默更新检查未成功（静默跳过）：${e?.message || e}`);
+    }
+  };
+
+  setTimeout(checkAndApply, 45 * 1000);
+  setInterval(checkAndApply, 45 * 60 * 1000);
+}
 
 app.get('/api/update/status', (_req, res) => {
   try { res.json(updater.status()); }

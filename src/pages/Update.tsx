@@ -211,6 +211,15 @@ export default function Update({ onBack, modal }: Props) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [logText]);
 
+  useEffect(() => {
+    if (job.phase === 'done') {
+      const t = setTimeout(() => {
+        window.location.reload();
+      }, 3500);
+      return () => clearTimeout(t);
+    }
+  }, [job.phase]);
+
   const reportError = useCallback((e: unknown, fallback: string) => {
     const text = errorText(e, fallback);
     if (text === UNSUPPORTED_TEXT) { setUnsupported(true); return; }
@@ -462,6 +471,24 @@ export default function Update({ onBack, modal }: Props) {
                     }} />
                   </div>
                   <div style={META_LINE}>{job.message || job.step || '—'}</div>
+                  {job.phase === 'done' && (
+                    <div style={{
+                      marginTop: 8,
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      background: 'rgba(34, 197, 94, 0.12)',
+                      border: '1px solid rgba(34, 197, 94, 0.3)',
+                      color: 'var(--nc-success-600, #16a34a)',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}>
+                      <CheckCircle2 size={15} />
+                      更新完成！系统正在自动重启服务并刷新页面（约 3 秒）…
+                    </div>
+                  )}
                   <div className="lrn-status-meta">
                     {job.startedAt ? <span>开始：{fmtTime(job.startedAt)}</span> : null}
                     {job.finishedAt ? <span>结束：{fmtTime(job.finishedAt)}</span> : null}
