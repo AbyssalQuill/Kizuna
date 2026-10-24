@@ -17,7 +17,9 @@ import { warmLearningPage } from './pages/Learning';
 import { warmPortraitPage } from './pages/GroupPortrait';
 import { warmChatPage } from './pages/ChatHistory';
 import { warmAllInstances } from './pages/InstanceConfig';
-import { getState, getOwnerQQ, setOwnerQQ, getNapcatWebuiReady } from './api';
+import { getState, getOwnerQQ, setOwnerQQ, getNapcatWebuiReady, updateCheck } from './api';
+import type { UpdateStatus } from './api';
+import Update from './pages/Update';
 import { lastConnect } from './config-cache';
 import type { ManagerState } from './stores/types';
 
@@ -57,6 +59,45 @@ export default function App() {
   /** 静默预热只打一次（失败重挂）；见下面轮询成功分支里的说明。 */
   const napcatWarmed = useRef(false);
   const ownerDismissed = useRef(false);
+
+  /* ================= 版本更新静默检测 + 首页更新提示小弹窗 ================= */
+  const [updInfo, setUpdInfo] = useState<UpdateStatus | null>(null);
+  const [updPromptOpen, setUpdPromptOpen] = useState(false);
+  const [updModalOpen, setUpdModalOpen] = useState(false);
+
+  const hasUpdate = Boolean(
+    updInfo?.ok && (
+      updInfo.behind ||
+      (updInfo.latest?.sha && updInfo.current?.sha && updInfo.latest.sha !== updInfo.current.sha)
+    ),
+  );
+
+  const checkForUpdates = () => {
+    updateCheck()
+      .then((r) => {
+        if (!r?.ok) return;
+        setUpdInfo(r);
+        const avail = Boolean(
+          r.behind ||
+          (r.latest?.sha && r.current?.sha && r.latest.sha !== r.current.sha),
+        );
+        const dismissKey = `kz_upd_later_${r.latest?.sha || 'latest'}`;
+        if (avail && sessionStorage.getItem(dismissKey) !== '1') {
+          setUpdPromptOpen(true);
+        } else if (!avail) {
+          setUpdPromptOpen(false);
+        }
+      })
+      .catch(() => { /* 离线或超时静默忽略 */ });
+  };
+
+  const dismissUpdPromptLater = () => {
+    if (updInfo) {
+      const dismissKey = `kz_upd_later_${updInfo.latest?.sha || 'latest'}`;
+      try { sessionStorage.setItem(dismissKey, '1'); } catch {}
+    }
+    setUpdPromptOpen(false);
+  };
 
   const back = () => setView({ name: 'launch' });
   const refresh = () => setTick((t) => t + 1);
@@ -133,6 +174,13 @@ export default function App() {
       })
       .catch(() => { /* 后端未启动或该接口不存在：静默跳过，不打断启动流程 */ });
     return () => { alive = false; };
+  }, []);
+
+  /** 启动后静默检查一次是否有新版本 */
+  useEffect(() => {
+    const t = setTimeout(() => { checkForUpdates(); }, 1800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ================= 读取预热（2026-09-26 主人反馈「切换时内容还是有延迟显示」） =================
@@ -254,6 +302,8 @@ export default function App() {
       onOpenVoice={() => setView({ name: 'voice' })}
       /* 2026-09-14：已连接服务器时，功能配置页读写服务端 `/root/qq-bridge/config.json`（页面显示横幅） */
       remote={scopeRemote}
+      hasUpdate={hasUpdate}
+      onUpdateChanged={checkForUpdates}
     />
   );
   if (view.name === 'cfg') return swap(<InstanceConfig state={state} instanceId={view.id} onBack={back} onRefresh={refresh} />);
@@ -276,7 +326,66 @@ export default function App() {
         onOpenConfig={(id) => setView(id === 'bridge-local' ? { name: 'bridge' } : { name: 'cfg', id })}
         onOpenWeb={(url, title) => setView({ name: 'web', url, title })}
         onRefresh={refresh}
+        hasUpdate={hasUpdate}
+        onOpenUpdate={() => { setUpdPromptOpen(false); setUpdModalOpen(true); }}
       />
+
+      {/* 首页更新提示小弹窗：支持「稍后再说」与「立即更新」 */}
+      {updPromptOpen && hasUpdate && !ownerOpen && !updModalOpen && (
+        <div className="help-overlay" style={{ zIndex: 155 }} onClick={dismissUpdPromptLater}>
+          <div className="help-panel kz-upd-prompt-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="help-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>发现新版本可用</span>
+              {updInfo?.latest?.short && (
+                <span className="pill ok" style={{ fontSize: 12 }}>{updInfo.latest.short}</span>
+              )}
+            </div>
+            <div className="help-body" style={{ whiteSpace: 'normal', lineHeight: 1.65 }}>
+              <div style={{ fontSize: 13.5, color: 'var(--text)' }}>
+                检测到管理器有新版本可更新
+                {updInfo?.current?.short && updInfo?.latest?.short
+                  ? `（当前版本 ${updInfo.current.short} → 最新版本 ${updInfo.latest.short}）`
+                  : ''}。
+              </div>
+              {updInfo?.latest?.message && (
+                <div style={{
+                  marginTop: 10,
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  background: 'rgba(236, 72, 153, 0.06)',
+                  border: '1px solid rgba(236, 72, 153, 0.18)',
+                  fontSize: 12.5,
+                  color: 'var(--muted)',
+                }}>
+                  最新提交：{updInfo.latest.message}
+                </div>
+              )}
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+                您可以现在一键拉取更新，或选择「稍后再说」（首页与功能配置页的「更新」按钮会保持呼吸闪烁提醒）。
+              </div>
+            </div>
+            <div className="help-foot" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-sm" onClick={dismissUpdPromptLater}>
+                稍后再说
+              </button>
+              <button
+                className="btn btn-sm btn-primary btn-update-breathe"
+                onClick={() => { setUpdPromptOpen(false); setUpdModalOpen(true); }}
+              >
+                立即更新
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 完整更新弹窗（从首页点击「检查更新 / 有可用更新」或小弹窗「立即更新」进入） */}
+      {updModalOpen && (
+        <Update
+          modal
+          onBack={() => { setUpdModalOpen(false); checkForUpdates(); }}
+        />
+      )}
 
       {/* 首次启动弹窗：配置管理员本人 QQ（应用内弹窗，复用 .help-overlay/.help-panel 样式）。
           点击遮罩或按 ESC 关闭；关闭后本次会话不再自动弹出。 */}

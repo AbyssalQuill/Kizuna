@@ -10,6 +10,7 @@ import { sendWakePrompt } from './wake-send.js';
 import { sendToQQ } from './qq-send.js';
 import { resolveGroupMemberName } from './message-cache.js';
 import { appendSocialPoke } from './social-flow.js';
+import { isSessionSilent } from '../lib/session-silent.js';
 
 export const PEER_TYPING_EXPIRE_MS = 3000; // 没有新的输入状态事件时的过期时间（原 8000：一次输入事件就能把等待顶到 8 秒后）
 
@@ -133,9 +134,12 @@ export async function handlePokeNotice(event) {
   // appendSocialPoke + scheduleWake），于是 deepsleep 期间群里被拍一下照样会被唤醒并回复
   // —— 实测证据：活动日志 16:20~16:47 全是"群消息已静默跳过"，而 16:00:54 有一条
   // `[default] 计划唤醒 group:***（poke）`。这不是"私聊要不要静默"的问题，是群静默漏了。
-  if (kind === 'group' && cfgRef.social?.deepsleep) {
-    appendActivity(key + ' [deepsleep] 群聊拍一拍已静默跳过（不唤醒、不回复）');
-    return;
+  if (kind === 'group') {
+    const silentGroups = Array.isArray(cfgRef.social?.deepsleepGroups) ? cfgRef.social.deepsleepGroups.map(String) : [];
+    if (cfgRef.social?.deepsleep || silentGroups.includes(id) || isSessionSilent(key)) {
+      appendActivity(key + ' [deepsleep/silent] 群聊拍一拍已静默跳过（不唤醒、不回复）');
+      return;
+    }
   }
   let sender = senderId;
   if (kind === 'group' && senderId) {
@@ -157,6 +161,8 @@ export async function handlePokeNotice(event) {
   });
   appendActivity(`${key} 拍一拍事件：${msg.text.slice(0, 80)}`);
   if (social.paused) return;
+  // 群聊中群友互拍（非拍机器人本人）仅记入上下文，不触发唤醒
+  if (kind === 'group' && !targetIsSelf) return;
   const st = getSocialState(key);
   if (!st.bootstrapSent) {
     st.bootstrapSent = true;

@@ -411,6 +411,50 @@ input[type="number"]:not(.is-mid):not(.full) { max-width: 148px; }
   font-family: 'JetBrains Mono', monospace !important;
 }
 
+/* 有更新时的更新按钮：忽亮忽暗呼吸闪烁动效 + 首页轻量更新提示小弹窗 */
+@keyframes kzUpdateBreathe {
+  0%, 100% {
+    background: hsl(339 95% 96%);
+    border-color: var(--nc-primary-300);
+    color: var(--nc-primary-600);
+    box-shadow: 0 0 0 0 hsl(339 92% 72% / 0.12);
+    filter: brightness(0.95);
+  }
+  50% {
+    background: hsl(339 95% 89%);
+    border-color: var(--nc-primary-500);
+    color: var(--nc-primary-700);
+    box-shadow: 0 0 14px 3px hsl(339 92% 68% / 0.52), 0 0 4px 1px hsl(339 92% 62% / 0.35);
+    filter: brightness(1.08);
+  }
+}
+.btn-update-breathe {
+  animation: kzUpdateBreathe 2.1s ease-in-out infinite !important;
+  border: 1px solid var(--nc-primary-400) !important;
+  font-weight: 700 !important;
+  position: relative;
+}
+.btn-update-breathe .kz-upd-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--nc-primary-500);
+  box-shadow: 0 0 6px var(--nc-primary-500);
+  margin-left: 2px;
+}
+.kz-upd-prompt-panel {
+  max-width: 440px;
+  border: 1px solid var(--nc-primary-200);
+  border-radius: var(--nc-radius-l);
+  box-shadow: var(--nc-shadow-l);
+}
+.kz-upd-prompt-panel code {
+  font-family: 'AaCute', 'AaCute-full', sans-serif !important;
+  font-weight: 700;
+  color: var(--nc-primary-600);
+}
+
 /* 新手教程按钮（与一键启动同款但更窄）与教程弹窗 */
 .tutorial-btn { padding: 6px 18px; font-size: 13px; border-radius: 999px; }
 .tutorial-panel { max-width: 620px; }

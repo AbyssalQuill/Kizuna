@@ -221,11 +221,6 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
     }
   }
 
-  // 主人发言直通：由模型结合上下文自由接话，不写死拦截
-  if (isOwner) {
-    return 'owner';
-  }
-
   // 提问触发
   if (tr.question && !atSomeoneElse && !repliesToSomeoneElse && isDirectedAtAi(plainContent)) return 'question';
 
@@ -239,12 +234,9 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
     }
   }
 
-  const rawProb = tr.probability ?? cfgRef?.social?.wake?.recommendedProbability ?? 0.15;
+  // 群聊普通消息：除非 probability 显式配置为 0（明确关闭），一律交由模型结合完整上下文判断是否接话
+  const rawProb = tr.probability;
   if (rawProb !== undefined && rawProb !== null && rawProb !== '' && Number(rawProb) === 0) return null;
-  const probNum = Number(rawProb);
-  if (Number.isFinite(probNum) && probNum > 0 && probNum < 1) {
-    if (Math.random() >= probNum) return null;
-  }
   return 'probability';
 }
 
@@ -359,8 +351,15 @@ function buildRuntimeOverrideBlock() {
  * 来源标记保留：owner = 主人配置的值；model = 模型自己写过的值。
  */
 function wakeRefLine(key) {
+  const st = getSocialState(key);
+  const tr = st?.wakeConfig?.triggers || {};
+  const ownerRaw = cfgRef?.social?.wake?.recommendedProbability;
+  const ownerStr = ownerRaw !== undefined && ownerRaw !== null && ownerRaw !== '' ? String(ownerRaw) : '未设置';
+  const curRaw = tr.probability;
+  const curStr = curRaw !== undefined && curRaw !== null && curRaw !== '' ? String(curRaw) : '未设置';
+  const src = tr.probabilitySource || 'default';
   const ds = deepsleepLine(key);
-  return ds ? `[WakeRef] ${ds}\n` : '';
+  return `[WakeRef] 普通消息不再按概率过滤，交由你结合上下文自主决定是否接话（主人配置=${ownerStr}，当前记录=${curStr}，来源=${src}；仅 0 代表关闭普通消息唤醒）${ds}`;
 }
 
 /**
@@ -614,10 +613,16 @@ export function buildWakePrompt(key, reason) {
     return `${baseWithProtocol}[Wake] ${key} reply check${replyHintRc}`;
   }
   if (reason === 'proactiveCheck') {
-    return `${baseWithProtocol}[Wake] ${key} proactive opening`;
+    const stPc = getSocialState(key);
+    const lastMinPc = stPc.lastAiReplyAt ? Math.max(0, Math.round((Date.now() - Number(stPc.lastAiReplyAt)) / 60000)) : null;
+    const replyHintPc = lastMinPc != null ? ` (you replied ${lastMinPc} min ago)` : '';
+    return `${baseWithProtocol}[Wake] ${key} proactive opening${replyHintPc}`;
   }
   if (reason === 'afterthought') {
-    return `${baseWithProtocol}[Wake] ${key} afterthought`;
+    const stAt = getSocialState(key);
+    const lastMinAt = stAt.lastAiReplyAt ? Math.max(0, Math.round((Date.now() - Number(stAt.lastAiReplyAt)) / 60000)) : null;
+    const replyHintAt = lastMinAt != null ? ` (you replied ${lastMinAt} min ago)` : '';
+    return `${baseWithProtocol}[Wake] ${key} afterthought${replyHintAt}`;
   }
   if (reason === 'poke') {
     return `${baseWithProtocol}[Wake] ${key} poked`;

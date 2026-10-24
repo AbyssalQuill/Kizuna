@@ -21,6 +21,7 @@ export function loadConfig() {
       baseUrl: process.env.QQB_DSH_BASE_URL || 'http://127.0.0.1:10721',
       provider: 'deepseek-official',
       model: 'deepseek-v4-flash-vision-exp',
+      temperature: 1.0,
       reasoningEffort: 'max',
       ...(file.dsh ?? {})
     },
@@ -101,7 +102,7 @@ export function loadConfig() {
      *   改默认值等于改语感，不要随意修改。
      *   空串 = 不注入这一行（完全交给系统提示词时使用）。 */
     prompt: {
-      styleLine: '[Style] 真实二次元少女随性聊天，短气泡分段发送。说自然人话，严禁生造词与意义不明的瞎凑数怪话（如无厘头的打八折等）。冷脸萌(ᗜ系列)可发并分段防截断，禁止传统符号颜文字，QQ表情适度少发，自然带可爱波浪号~与语气助词（可爱捏/呀/嘛/呢/啦/捏，自由灵动不写死）。看清上下文精准引用再接话，严禁列表和说教。',
+      styleLine: '[Style] 像真实人类在QQ随性打字，自然融入[PERSONA]性格底色，日常90%说自然口语，不端着演戏。句式长短千变万化，大多数时候一句话单气泡直接说完（2~18字），确有补充或转折才发2条，不套用固定三段论。冷脸萌(ᗜ系列)可发并独立气泡防截断，不用传统符号颜文字，表情克制少发。群聊回话必传replyToMessageId，插不上话直接qq_mark_read。',
       ...(file.prompt ?? {})
     },
     /* ── 2026-09-21 /token 指令的计价参数（¥ / 百万 tok）─────────────────────────────

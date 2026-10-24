@@ -12,13 +12,23 @@
  * 刷新页面即失效（进程内 Map，不落盘）：不引入"跨会话的过期数据"这种更难解释的问题。
  */
 
+import { activeScopeInfo } from '../config-cache';
+
 type Entry<T> = { at: number; value: T };
 
 const store = new Map<string, Entry<unknown>>();
 
+/** 自动按当前活动作用域（本机 local / 远程服务器 remote:<id>）隔离缓存键，
+ *  彻底杜绝连接服务器前后复用另一侧的画像、学习状态或音色缓存。 */
+function scopedKey(key: string): string {
+  if (!key || key.startsWith('instance:') || /(^|:)local(\b|:)|(^|:)remote:/.test(key)) return key;
+  const sc = activeScopeInfo().scope || 'local';
+  return `${key}@${sc}`;
+}
+
 /** 读缓存。返回 null 表示"没有旧值可用"，调用方按"首次进入"处理（骨架占位）。 */
 export function readCacheValue<T>(key: string): Entry<T> | null {
-  const hit = store.get(key) as Entry<T> | undefined;
+  const hit = store.get(scopedKey(key)) as Entry<T> | undefined;
   return hit ?? null;
 }
 
@@ -30,17 +40,17 @@ export function initialFromCache<T>(key: string): { value: T | null; fromCache: 
 
 /** 写入缓存（只在成功回包后调用）。 */
 export function writeCacheValue<T>(key: string, value: T): void {
-  store.set(key, { at: Date.now(), value });
+  store.set(scopedKey(key), { at: Date.now(), value });
 }
 
 /** 主动作废（例如该对象已被删除/改名，旧值再渲染就是错的）。 */
 export function dropCacheValue(key: string): void {
-  store.delete(key);
+  store.delete(scopedKey(key));
 }
 
 /** 缓存里的这份有多旧（毫秒）；没有缓存返回 -1。用于小字提示"上次读到"。 */
 export function cacheAgeMs(key: string): number {
-  const hit = store.get(key);
+  const hit = store.get(scopedKey(key));
   return hit ? Date.now() - hit.at : -1;
 }
 
@@ -60,22 +70,23 @@ export async function warmCache<T>(
   fetcher: () => Promise<T | null | undefined>,
   opts: { maxAgeMs?: number } = {},
 ): Promise<void> {
+  const sk = scopedKey(key);
   const maxAge = opts.maxAgeMs ?? 5 * 60_000;
-  const hit = store.get(key);
+  const hit = store.get(sk);
   if (hit && Date.now() - hit.at < maxAge) return;
-  if (warming.has(key)) return;
-  warming.add(key);
+  if (warming.has(sk)) return;
+  warming.add(sk);
   try {
     const v = await fetcher();
-    if (v !== null && v !== undefined) store.set(key, { at: Date.now(), value: v });
+    if (v !== null && v !== undefined) store.set(sk, { at: Date.now(), value: v });
   } catch {
     /* 预热失败当没发生：进页面时照常自己读一遍 */
   } finally {
-    warming.delete(key);
+    warming.delete(sk);
   }
 }
 
 /** 这一轮预热是不是已经在跑（有的页面想据此少发一次请求，可不用）。 */
 export function isWarming(key: string): boolean {
-  return warming.has(key);
+  return warming.has(scopedKey(key));
 }

@@ -8,7 +8,7 @@ import { warmInstancePage } from './InstanceConfig';
    `BridgeConfig.tsx` 不 import 本文件，故这里不会形成循环依赖。 */
 import { warmBridgePage } from './BridgeConfig';
 import type { ManagerState, LocalInstance } from '../stores/types';
-import { Settings, Loader2, Rocket, BookOpen, X, RotateCw, Square, AlertTriangle } from 'lucide-react';
+import { Settings, Loader2, Rocket, BookOpen, X, RotateCw, Square, AlertTriangle, DownloadCloud } from 'lucide-react';
 
 interface HomeProps {
   state: ManagerState | null;
@@ -16,6 +16,8 @@ interface HomeProps {
   onOpenConfig: (id: 'dsh-isolated' | 'napcat-local' | 'bridge-local') => void;
   onOpenWeb: (url: string, title: string) => void;  // 应用内打开官方界面（同一页面内）
   onRefresh: () => void;
+  hasUpdate?: boolean;
+  onOpenUpdate?: () => void;
 }
 
 type Phase = 'idle' | 'starting' | 'running' | 'stopping' | 'failed';
@@ -118,7 +120,7 @@ function useTypewriterLoop(text: string, speed = 110, holdMs = 3200) {
 
 type SvcId = 'dsh-isolated' | 'napcat-local' | 'bridge-local';
 
-export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefresh }: HomeProps) {
+export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefresh, hasUpdate, onOpenUpdate }: HomeProps) {
   const [busy, setBusy] = useState<SvcId | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [allBusy, setAllBusy] = useState(false);
@@ -340,9 +342,22 @@ export default function Home({ state, onOpenSSH, onOpenConfig, onOpenWeb, onRefr
       </div>
 
       {/* 新手教程：位于副标题下方、一键启动上方，居中窄按钮 */}
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <button className="btn btn-primary tutorial-btn" onClick={() => setTutorialOpen(true)}>
           <BookOpen size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> 新手教程
+        </button>
+        {onOpenUpdate && (
+          <button
+            className={`btn btn-primary tutorial-btn${hasUpdate ? ' btn-update-breathe' : ''}`}
+            onClick={onOpenUpdate}
+            title={hasUpdate ? '发现新版本，点击查看并一键更新' : '检查并更新到 GitHub 最新版本'}
+          >
+            <DownloadCloud size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+            {hasUpdate ? '有可用更新' : '检查更新'}
+            {hasUpdate && <span className="kz-upd-dot" />}
+          </button>
+        )}
+        <button style={{ display: 'none' }}>
         </button>
       </div>
 

@@ -26,7 +26,7 @@ import { warmChatPage } from './ChatHistory';
 import Update from './Update';
 
 /** remote：连上服务器时把「服务端」那套传进来（配置读写服务端 /root/qq-bridge），null = 编辑本机 */
-interface Props { onBack: () => void; onRefresh: () => void; onOpenLearning: () => void; onOpenPortrait: () => void; onOpenChat: () => void; onOpenVoice: () => void; remote?: { id: string; name: string; host: string } | null; }
+interface Props { onBack: () => void; onRefresh: () => void; onOpenLearning: () => void; onOpenPortrait: () => void; onOpenChat: () => void; onOpenVoice: () => void; remote?: { id: string; name: string; host: string } | null; hasUpdate?: boolean; onUpdateChanged?: () => void; }
 
 /* 2026-09-12：隔离 DSH 里实际生效的模型段（settings.yaml 的 agent-default-model）。
  * 管理端保存模型配置时写的就是它；这里读回来只为两件事：
@@ -72,7 +72,7 @@ const UNNAMED_LABEL = '未登记名称的配置项';
 const LABEL: Record<string, string> = {
   // 模型与推理
   baseUrl: 'DSH 地址', provider: '模型服务商', apiKey: '语言模型密钥', model: '主模型',
-  visionModel: '识图模型', reasoningEffort: '推理档位',
+  visionModel: '识图模型', reasoningEffort: '推理档位', temperature: '采样温度（Temperature）',
   visionBaseUrl: '识图模型请求地址', visionApiKey: '识图模型密钥',
   // NapCat
   wsUrl: 'WebSocket 地址', wsAccessToken: 'WS 访问令牌（已移到「NapCat 鉴权令牌」卡）', httpUrl: 'HTTP 地址', accessToken: 'HTTP 访问令牌（已移到「NapCat 鉴权令牌」卡）',
@@ -448,6 +448,7 @@ function mcpLabel(fullName: string) {
     + '② 它只影响语言模型，与「识图模型密钥」「语音模型密钥」是三把互不影响的密钥；'
     + '③ DSH 的取值优先级为「启动进程的环境变量 > 凭据文件」，若系统中另设过同名环境变量，后者会覆盖此处所填的值。',
   model: '主对话模型，留空由 DSH 默认决定。',
+  temperature: '模型采样温度（Temperature），默认 1.0。控制回话的随机性与灵动度，修改后保存会自动写入隔离 DSH 的 temperature-knob 并重启生效。',
   visionModel: '识图（多模态）模型，用于含图片消息的会话。语言模型与识图模型分开配置：上方「主模型」负责文字回话，此处负责看图。'
     + '三种用法：① 三个识图字段全部留空时，图片按原有方式作为附件发给主模型（要求主模型本身支持多模态，默认已支持）；'
     + '② 只填「识图模型」而不填地址时，仍走 DSH 通路，仅在本次会话中显式指定该模型读图；'
@@ -998,7 +999,7 @@ const EMPTY_CFG: any = {
   deny: { private: [], groups: [] },
 };
 
-export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpenPortrait, onOpenChat, onOpenVoice, remote }: Props) {
+export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpenPortrait, onOpenChat, onOpenVoice, remote, hasUpdate, onUpdateChanged }: Props) {
   const [tab, setTab] = useState<'common' | 'tools' | 'persona' | 'json' | 'profiles'>('common');
   /* 2026-09-14 修改要求：SSH 模式下这一页读写的是服务端 /root/qq-bridge/config.json：
    *  · target 记录本页当前编辑的是哪一套（local / remote）—— 横幅必须一眼看见，别让人以为在改本机；
@@ -1463,7 +1464,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
       {updateOpen && (
         <div className="help-overlay kz-upd-overlay" onClick={() => setUpdateOpen(false)}>
           <div className="kz-upd-dialog" onClick={(e) => e.stopPropagation()}>
-            <Update modal onBack={() => setUpdateOpen(false)} />
+            <Update modal onBack={() => { setUpdateOpen(false); onUpdateChanged?.(); }} />
           </div>
         </div>
       )}
@@ -1488,8 +1489,8 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d' }}>
             <Coffee size={14} /> 请作者喝奶茶
           </button>
-          <button className="btn btn-soft" onClick={() => setUpdateOpen(true)} title="从上游仓库获取新版本，原地合并进安装目录">
-            <DownloadCloud size={14} /> 更新
+          <button className={`btn btn-soft${hasUpdate ? ' btn-update-breathe' : ''}`} onClick={() => setUpdateOpen(true)} title={hasUpdate ? '发现新版本可更新！点击打开更新面板' : '从上游仓库获取新版本，原地合并进安装目录'}>
+            <DownloadCloud size={14} /> 更新{hasUpdate && <span className="kz-upd-dot" />}
           </button>
           <button className="btn btn-soft" onClick={onOpenPortrait} {...hoverWarm(warmPortraitPage)}>
             <Users size={14} /> 群友画像
@@ -2214,9 +2215,10 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       <GroupCard title="智能体总开关" path="social" only={['enabled']}
         cfg={cfg} ch={ch} onHelp={onHelp}
         desc="整套智能体的总开关：关掉 = 桥不再把消息交给模型（只记录、不回复）。" />
-      <GroupCard title="投递与回合（速度 / 不吞消息）" blocks={[{ path: 'social', only: ['steerEnabled'] }, { path: 'social.turnHold' }]}
+      {/* 2026-10-24 按主人要求移除「投递与回合（steer）」卡：底层始终启用 steer 投递 */}
+      {/* <GroupCard title="投递与回合（速度 / 不吞消息）" blocks={[{ path: 'social', only: ['steerEnabled'] }, { path: 'social.turnHold' }]}
         cfg={cfg} ch={ch} onHelp={onHelp}
-        desc="「在途回合注入」：模型正在思考时，新消息会被直接塞进这一轮（而不是等它回完再另起一轮）。默认开启——关掉会让每条消息都要多等一整轮，而且容易卡在 DSH 的 next-turn 队列里出不来。下面一组是「回合保持」：一次唤醒后把这个回合留住多久、最多来回多少次，留住期间你可以连着补话而不用每条都重新唤醒（保持太久会一直占着会话，建议只对私聊开）。" />
+        desc="「在途回合注入」：模型正在思考时，新消息会被直接塞进这一轮（而不是等它回完再另起一轮）。默认开启——关掉会让每条消息都要多等一整轮，而且容易卡在 DSH 的 next-turn 队列里出不来。下面一组是「回合保持」：一次唤醒后把这个回合留住多久、最多来回多少次，留住期间你可以连着补话而不用每条都重新唤醒（保持太久会一直占着会话，建议只对私聊开）。" /> */}
       <GroupCard title="好友申请与信任" path="social" only={['autoFriendApproval', 'autoFriendGuard', 'trustedCrossSessionUids']}
         cfg={cfg} ch={ch} onHelp={onHelp}
         desc="自动通过好友申请、敏感操作只信谁、允许跨会话读取的账号。" />

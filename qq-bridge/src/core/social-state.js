@@ -17,6 +17,7 @@ import { typingHoldDecision, typingHoldText, STEER_IN_TURN_DEFER_MAX_MS } from '
 import { isDirectedAtAi } from '../lib/social-timeline.js';
 import { looksLikeUnfinished } from '../wait.js';
 import { readRoleState } from '../lib/role-access.js';
+import { isSessionSilent } from '../lib/session-silent.js';
 import { bjMinutes, parseClockMin } from '../lib/time.js';
 // 会话重置时"必须跨着重置活下来"的已回复账本（真机事故见本文件 resetConversationKeepingLedger 注释）
 import { carryReplyLedger } from './send-idempotency.js';
@@ -858,7 +859,8 @@ export function scheduleProactiveCheck(key) {
     }
     return; // 免打扰时段不排主动机会（@/私聊等真实触发仍走 scheduleWake）
   }
-  // deepsleep 与「单群静默名单」都只针对群聊（私聊照常）：静默群不主动冒泡。
+  // deepsleep、按会话静默（silent-sessions.json）与「单群静默名单」：静默会话不主动冒泡。
+  if (isSessionSilent(key)) return;
   if (String(key).startsWith('group:')) {
     const gpId = String(key).split(':')[1] || '';
     const silentGroups = Array.isArray(cfgRef.social?.deepsleepGroups) ? cfgRef.social.deepsleepGroups.map(String) : [];
@@ -874,6 +876,7 @@ export function scheduleProactiveCheck(key) {
   const delay = Math.floor(min + Math.random() * (max - min));
   st.proactiveTimer = setTimeout(() => {
     st.proactiveTimer = null;
+    if (isSessionSilent(key)) return;
     ensureWakeable(st, { key });
     const idleThreshold = Number(p.idleThresholdMs) || 15 * 60 * 1000;
     const idle = Date.now() - (st.lastIncomingAt || 0);
