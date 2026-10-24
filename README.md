@@ -1,234 +1,267 @@
 # Kizuna Pro
 
-Kizuna Pro 是运行于 Windows 本机的 QQ 对话机器人一体化部署工具。**NapCat / OneBot v11** 承接 QQ 协议；**隔离的 DeepSeek Harness（DSH）实例**承担 agent 推理；**qq-bridge** 承担唤醒判定、提示词组装、工具调用与消息发送；**Electron 管理端**承担安装、配置、进程编排与运行监控。作者 AbyssalQuill，仓库 AbyssalQuill/Kizuna。
+> 面向 Windows 桌面与 Linux 远程服务器的高拟人 QQ 智能体一体化系统。  
+> 整合 **NapCat (OneBot v11)** 协议层、**DeepSeek Harness (DSH)** 独立推理环境、**qq-bridge** 拟人智能调度内核与 **Electron** 可视化运维管理端。
 
-MIT · Windows 10 / 11 · Node.js ≥ 22.13 · Electron 28 · React 18 · 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)
+---
 
-## 简介
+## 1. 架构总览
 
-管理端在一台 Windows 机器上编排五个部件：QQ 账号、NapCat、qq-bridge、隔离 DSH 与模型服务商，负责安装、配置、启动、探活、日志记录与停止。管理端位于管理面，不在 QQ 数据链路上。
+Kizuna Pro 由四个核心子系统构成，管理面与消息数据面完全解耦：
 
-消息链路：QQ 群 / 私聊 → OneBot v11（WebSocket）→ NapCat → qq-bridge → DSH HTTP API → 模型服务商；回复经工具调用沿原路返回 QQ。
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        QQ 客户端 / 群聊 / 私聊                          │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ QQ NT 协议
+┌───────────────────────────────────▼────────────────────────────────────┐
+│ NapCat (OneBot v11)               WebUI :6099 │ HTTP :3000 │ WS :3001  │
+│ 负责 QQ 协议转接、消息事件推送、API 执行                                 │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ WebSocket 双向通信
+┌───────────────────────────────────▼────────────────────────────────────┐
+│ qq-bridge (智能体调度中枢)          控制台 API :3100                     │
+│ ├─ 唤醒引擎：私聊/被@/引用/关键词/技术话题识别/自然接话                 │
+│ ├─ 拟人体系：三层角色扮演引擎、正向发言规则、单气泡为主、留白机制       │
+│ ├─ 记忆系统：SQLite 三层记忆 (短期/摘要/长期 FTS5)、群成员画像与学习   │
+│ ├─ 工具总线：101 条 MCP 工具分层注册、22 引擎并发搜索、媒体处理        │
+│ └─ 发送调度：打字节拍平滑、多气泡节奏、replyToMessageId 引用           │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ DSH HTTP API (session.prompt: steer)
+┌───────────────────────────────────▼────────────────────────────────────┐
+│ DeepSeek Harness (DSH 隔离实例)   Web 端口 :10721 (本地) / :3080 (远端)  │
+│ ├─ 独立 DSH_HOME，与本地全局 DSH 隔离                                   │
+│ ├─ Agent Preset (qq-chat)：装载底层协议、工具绑定与安全边界             │
+│ └─ 本地插件：dsh-qq-hold 回合保持、dsh-memory 跨会话语义记忆            │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ LLM API (默认 Temperature: 1.0)
+┌───────────────────────────────────▼────────────────────────────────────┐
+│ 模型服务商 (DeepSeek 官方 API / 兼容 OpenAI 格式的大模型服务)          │
+└────────────────────────────────────────────────────────────────────────┘
 
-隔离 DSH 使用独立 `DSH_HOME`，与桌面端 DSH 实例相互隔离。QQ 会话与 DSH 会话一对一映射（`private:<QQ 号>` 或 `group:<群号>`），映射持久化在 `qq-bridge/state/sessions.json`。分层结构、状态落盘位置与端口表见 [docs/TECHNICAL.md](docs/TECHNICAL.md)。
-
-## 安装与首次启动
-
-表 1：安装包（`release/`）
-
-| 安装包 | 内容 | 适用 |
-| --- | --- | --- |
-| `Kizuna Pro Setup.exe` | 管理端与整套内置组件：NapCat（OneKey 与 QQ 客户端）、DSH CLI、qq-bridge 出厂桥 | 本机运行整套；也可只使用其 SSH 配置页连接自备服务器 |
-
-安装步骤：
-
-1. 双击安装包，安装到任意盘；运行时根目录按程序自身位置推导（`server/index.js` 的 `RUNTIME_ROOT`）。
-2. 首次启动前完成两项准备：在首页 NapCat 卡点「启动」，用机器人 QQ 扫码登录（登录态只保存在本机，不随安装包分发）；在隔离 DSH 卡的配置中，向隔离 home 的 `.credentials.yaml` 写入 `DEEPSEEK_API_KEY: xxx`，或改在功能配置页配置模型服务商。
-3. 按「NapCat → 扫码登录 QQ → 隔离 DSH → 桥」的顺序启动；NapCat 登录后自行写入 OneBot 网络配置（HTTP 3000 / WS 3001，令牌 `truefriend`）。
-4. 在首页观察日志流；向机器人账号发送私聊消息或在群内 @ 机器人账号验证。
-
-首次启动的完成判据：
-
-- 隔离 DSH：`http://127.0.0.1:10721` 可打开，管理端状态显示运行中。
-- NapCat：WebUI 可登录，OneBot 的 WebSocket 服务端与 HTTP API 均已开启。
-- 桥：日志出现 `NapCat 已连接：ws://127.0.0.1:3001`，随后出现新会话创建与消息投递记录。
-- 端到端：私聊或群内 @ 之后，日志出现 agent 回复行。
-
-关闭窗口时管理端自动停止 NapCat、桥与隔离 DSH；不随应用进程树退出的关窗守卫 `server/napcat-guardian.mjs` 执行一次后备清理。
-
-以源码运行时：在仓库根目录执行 `npm install` 与 `npm run dev`（或双击 `启动管理端.bat`）。桥接层在 `qq-bridge/` 下执行 `copy config.example.json config.json` 并填写后，再执行 `npm start`。桥启动时把 preset、MCP 组与内置插件幂等安装进隔离 DSH home（`qq-bridge/src/lib/dsh-side.js`），默认不修改桌面端 DSH 实例；手动补装执行 `node qq-bridge/scripts/setup-dsh.mjs`。
-
-以手动方式接入时，缺少的部件只有 NapCat 本体：从 <https://github.com/NapCat/NapCat/releases/latest> 下载 `NapCat-v<版本>-win-x64.zip`，解压后执行 `launcher.bat`，在 WebUI 中完成首次引导（同意条款、设置密码、扫码接入 QQ 进程）并开启 WebSocket 服务端与 HTTP API，记录端口与 accessToken。
-
-### 仓库结构
-
-```
-Kizuna Public/
-├─ src/                   管理端前端（React + TypeScript + Vite）
-├─ server/                管理端后端（HTTP API、实例编排与探活、SSH 部署）
-├─ qq-bridge/             桥接层
-│   ├─ src/core/*.js      业务：唤醒投递、会话、社交状态、发送链、媒体、语音、学习、用量
-│   ├─ src/lib/*.js       基础库：OneBot 客户端、消息解析、图片体检、Pixiv、路径与文本
-│   ├─ src/mcp-*.js       三组 MCP server
-│   ├─ dsh/               agent preset（qq-chat）
-│   ├─ plugins/           DSH 插件：dsh-qq-hold、qq-mode-console、dsh-memory
-│   ├─ characters/        角色库（一个子目录 = 一个角色包）
-│   ├─ roles/             角色卡（一个 .md = 一个角色）
-│   ├─ config.example.json  出厂配置模板
-│   └─ state/             运行数据（记忆库、聊天记录、社交状态、用量日志）
-├─ tools/                 管理端侧开发与运维脚本
-├─ docs/                  文档集
-└─ CHANGELOG.md  LICENSE
+▲ 管理面（独立编排）：
+┌────────────────────────────────────────────────────────────────────────┐
+│ Electron 可视化管理端 (React 18 + TypeScript + Vite + Express :1921)   │
+│ ├─ 本机实例编排：一键起停 NapCat、DSH、qq-bridge，进程守护与热重启     │
+│ ├─ 远程 SSH 运维：一键部署、自动建立 4 路安全隧道、配置热同步          │
+│ └─ 可视化看板：实时日志、配置面板、聊天记录检索、画像关系图、Token 计量 │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 快速开始
+### 1.1 模块职责划分
 
-### 启动、停止与端口
+| 组件 | 运行形态 | 核心职责 |
+| :--- | :--- | :--- |
+| **Electron 管理端** | 本地 UI (`:1921`) | 进程编排、状态探活、日志流聚合、SSH 远程连接与隧道映射、配置热重载、数据库可视化查看。位于管理面，不介入消息数据链路。 |
+| **NapCat** | 本地独立进程 / 远端 Docker | 基于 QQ NT 架构的 OneBot v11 协议端。对外暴露反向 WebSocket (`:3001`) 与 HTTP API (`:3000`)，WebUI 运维端口为 `:6099`。 |
+| **qq-bridge** | 独立 Node.js 进程 (`:3100`) | 整个系统的业务大脑。负责社交状态机、消息唤醒判定、提示词动态合成、在途消息注入（steer）、MCP 工具宿主以及拟人打字节奏调度。 |
+| **隔离 DSH** | 独立服务 (`:10721` / `:3080`) | Agent 执行引擎。采用独立运行目录，内置 `qq-chat` 智能体预设、MCP 客户端与 `dsh-qq-hold` 钩子，向下调用 LLM。 |
 
-表 2：端口与默认值
+---
 
-| 部件 | 地址 | 说明 |
-| --- | --- | --- |
-| 管理端 | `http://127.0.0.1:1921` | 界面入口；首页三张卡负责启动、重启、停止 |
-| NapCat WebUI | `http://127.0.0.1:6099` | 登录令牌出厂为 `truefriend`，可由 `instances.napcatLocal.webuiToken` 覆盖 |
-| NapCat OneBot | HTTP `http://127.0.0.1:3000`、反向 WS `ws://127.0.0.1:3001` | 出厂注入，令牌 `truefriend`；改动后须重启 NapCat 才生效 |
-| 隔离 DSH | `http://127.0.0.1:10721` | `dsh.baseUrl` 缺省值，可由环境变量 `QQB_DSH_BASE_URL` 覆盖 |
-| qq-bridge 控制台 | `http://127.0.0.1:3100` | 配置项 `consolePort`；配置合法 `consoleToken` 后所有请求须带 `x-console-token` |
+## 2. 核心运行机制
 
-- 整套启动：首页按钮按 NapCat → 隔离 DSH → 桥的顺序拉起；NapCat 首次仍需扫码。
-- 单服务控制：每张卡各自提供启动、重启与停止，卡右下角齿轮为其启动配置。
-- 连接服务器后，首页三张卡即代表服务器那一套，状态行显示服务端运行或未运行，按钮改为操作远端（隔离 DSH 走 `systemctl dsh-web`，NapCat 走 `docker`，桥走其自身启动脚本）。
-- 打开界面：NapCat 与隔离 DSH 卡的「打开」经隧道加载远端界面并自动携带该机令牌；隧道映射为 NapCat WebUI 6099→13000、NapCat HTTP 3000→13001、DSH 3080→13080、桥控制台 3100→13100（桥控制台仅支持「新窗口打开」）。
+### 2.1 通用分发级三层拟人角色扮演引擎
+为了支持灵活分发与多种人设切换，提示词采用**三层解耦与高密度正向权重**架构，彻底消除了僵硬刻板的“AI 腔调”：
 
-### 聊天窗口命令
+1. **第一层：底层通用协议与角色扮演底座 (`agent.cordis.yml`)**
+   - 角色无关（Persona-Agnostic），约束安全边界、工具协议、群聊/私聊交互规范。
+   - 确立 **90/10 黄金比例**：90% 使用自然真实的现代人类日常口语，10% 自然点缀角色独有特质。无论扮演何种人设，都不说教、不背诵背景设定、不用书面剧本台词。
+2. **第二层：通用发言与打字拟人规则 (`speech-rules.md`)**
+   - **单气泡为主**：日常交流中 65% 以上采用单个自然气泡回复，需要连发时控制在 2~3 条短句之内，避免刷屏。
+   - **群聊必带引用**：群聊场景下的所有回复严格携带 `replyToMessageId`，确保聊天上下文清晰。
+   - **主动留白**：不需要回复的消息、已结束的话题或无关闲聊，直接调用 `qq_mark_read` 留白已读，杜绝“句句必回”的机械感。
+3. **第三层：当前激活角色卡 (`persona.md` / `roles/*.md`)**
+   - 默认出厂角色为“DeepSeek 小鲸鱼”，保留对主人的温软亲近感与冷脸萌颜文字（如 `ᗜ_ᗜ`、`ᗜ‸ᗜ` 以独立短气泡偶尔点缀）。
+   - 日常起居与生活交流使用真实人类语言（如“刚敲完代码歇会儿”、“想喝奶茶”），严禁机械堆砌“鱼鳍/尾巴/搁浅/巡游”等生硬设定。
+   - 角色库全面通用化，用户随时可通过管理端或指令无缝切换其他角色卡（如高冷少女、学术助手等），底层拟人逻辑 100% 自动复用。
 
-仅管理员私聊可用，由桥直接执行、不经过模型：`/reset` 或 `/new`（重置当前会话，保留已回复账本以防重复回复）、`/status`（会话 id、白名单是否通过、角色与模式）、`/token [天数]`（用量与花费）、`/op <QQ或昵称>` 与 `/op del <QQ或昵称>`（增删管理员，仅账号所有者）、`/role <包名>` 与 `/role clear`（从角色库合成人设或回到默认人格）、`/slang ...`（黑话学习）。
+### 2.2 消息唤醒、在途注入（Steer）与会话调度
+- **多维度唤醒矩阵**：
+  - 私聊场景：全量消息唤醒响应。
+  - 群聊场景：精确命中“被 @”、“被回复引用”、“包含昵称/小鲸鱼”、“包含直接疑问词（怎么/为什么/求助）”、“AI与编程技术话题讨论”，以及活跃群内的概率跟帖插话。
+  - 过滤拦截：静默群聊不主动发言，非针对机器人的拍一拍自动忽略。
+- **Steer 在途注入（永驻开启）**：
+  - 当模型正在思考或回复上一条消息时，新收到的用户消息会被底层直接追加进当前回合队列中（`mode: 'steer'`），模型能立刻看到最新上下文并合并回复，无需多等一整轮，彻底解决并发吞消息与死锁问题。
+- **拟人打字节拍**：
+  - 发送链内置打字节拍平滑机制，按消息字数动态计算延迟（夹紧在 60~320ms/字，单气泡间隔 800~6000ms），真实还原人类打字与停顿感。
 
-### SSH 配置与服务器同步
+### 2.3 记忆、档案与关系图谱
+- **SQLite 三层记忆架构**：
+  - 聊天记录与记忆库严格按当前工作模式（本机/远程服务器）分流，保证数据一致性与隔离性。
+  - **短期上下文**：当前活跃会话的未读与历史滑动窗口。
+  - **会话级记忆与摘要**：阶段性提炼会话重点与关系进展。
+  - **长期核心记忆**：基于 SQLite + FTS5 全文检索引擎，持久化存储事实记忆与用户偏好。
+- **群成员结构化画像**：
+  - 自动分析活跃群友的说话风格、发言时段与互动频次，构建动态信任等级与性格画像。
+  - 支持群内黑话（Slang）自学习与语料沉淀。
 
-1. 首页「SSH 配置」卡 →「添加服务器」：填写名称、主机、端口、用户名以及密码或密钥，先「测试」再「连接」。
-2. 连上之后，功能配置页读写的是服务器的 `/root/qq-bridge/config.json`（页首有横幅提示）：保存流程为备份 `config.json.bak-<时间戳>` → 原子替换 → 回读比对关键字段；桥按 mtime 热加载，无需重启桥即可生效，人设与发言规则亦可一并写入服务端。
-3. 每台服务器行另设「同步」（把本地桥代码推送至服务器）与「清整套」（删除远端整套并备份）按钮。
-4. 连接测试失败会短暂冷却（无法连接或超时 20 → 40 → 60 秒，凭据类 10 秒），提示中给出具体报错并提供「仍然重试一次」；不要反复点击测试，服务器上的 fail2ban 按认证失败次数封禁来源 IP，被误封时在服务器执行 `fail2ban-client set sshd unbanip <本机IP>`。
+### 2.4 MCP 扩展工具面（101 条工具）
+系统内嵌 3 组标准 MCP（Model Context Protocol）服务，为模型提供完备的系统与社交操作能力：
 
-## 主要能力
+| 服务名称 | 工具数量 | 覆盖功能领域 |
+| :--- | :---: | :--- |
+| **`mcp-napcat`** | 94 条 | 消息收发（单发/连发/戳一戳/撤回）、聊天记录检索、会话管理、三层记忆存取、人设与角色库切换、好友/黑名单管理、表情包与贴纸收藏、语音与文档发送、QQ空间动态浏览与发布、日程与跨会话留言等。 |
+| **`mcp-napcat-host`** | 5 条 | 语料沉淀提交、NapCat 进程与运行状态自检、宿主生命周期监控。 |
+| **`mcp-web-search-safe`**| 2 条 | 安全全网检索与网页抓取（`web_search` / `web_fetch`）。 |
 
-- **桥接与消息**：唤醒判定（私聊、被 @、被引用、点名、关键词、直接提问、AI 与技术话题、指定发言人与概率接话），潜水与活跃双模式，活跃时段与免打扰窗口，在途注入与回合保持，私聊打字等待，文本气泡分段与发送节奏，引用回复、撤回、定时消息、跨会话留言，富文本卡片、音乐卡、合并转发与 Word 文档，收发图片，Pixiv 搜图与发图，QQ 空间动态与配图，语音合成与转写（云端为主，另有**可选的本地引擎**：GPT-SoVITS ONNX 跑在本机，语音不出网、不吃云端额度），QQ 原生表情、收藏贴纸与内置表情包，视频解析与检索。
-- **记忆与画像**：SQLite 长期记忆（三层记忆 + FTS5 检索）、会话级记忆、群成员画像与结构化档案、黑话学习、人格学习、角色库与角色卡，以及隔离 DSH 侧的跨会话语义记忆插件（`remember` / `recall` / `/lmemory`）。
-- **NapCat 集成**：三组 MCP server（`mcp-napcat` / `mcp-napcat-host` / `mcp-web-search-safe`），工具描述压缩代理与名单档位裁剪，发送白名单强制，`[CQ:` 注入转义，敏感内容拦截，NapCat 会话守护与登录态巡检。
-- **SSH 部署与同步**：远程部署保留目标机既有数据，代码、数据、表情包与 `config.json` 分别同步；配置热加载；上下文压缩（阈值 0.16）与工具表压缩；Token 计量与费用估算。
-- **管理端页面**：首页（进程与日志）、实例配置、SSH 配置、功能配置、聊天记录、群友画像、学习与用量、语音、内嵌界面、关系图。
+- **全网并发聚合检索**：
+  - 内置高性能并发搜索内核，跨 Bing、百度、360、萌娘百科、中英日维基、Bilibili 等 22 个权威平台同时并发检索，经过去重、质量打分与相关度闸门后毫秒级返回，并配有严格的 SSRF 防护（禁止内网/本机地址，限制响应体积）。
+- **多媒体与特色交互**：
+  - **Pixiv 原图链路**：支持画师检索、标签搜索与原图防沉降校验。
+  - **QQ 空间互动**：模型可主动查看好友说说、点赞评论，或发送带图动态。
+  - **语音双引擎**：支持云端高保真 TTS / 语音转写，以及基于 GPT-SoVITS ONNX 的本地零延迟离线语音合成（语音不出网）。
+  - **富文本能力**：支持发送 Word 文档（`.docx`）、音乐分享卡片与合并转发消息。
 
-### MCP 工具
+---
 
-三组 MCP server 共注册 101 条工具：`mcp-napcat` 94 条、`mcp-napcat-host` 5 条、`mcp-web-search-safe` 2 条。运行时实际注册数另受工具名单档位裁剪（`toolAllowedByTier`）与 `config.json` 的开关分支影响（如 `napcat.allowProcessControl` 关闭时进程控制工具不注册）。下表为名称清单，必填与可选参数、最低保留档位与功能表述见 [docs/TECHNICAL.md](docs/TECHNICAL.md) 附录 A 与附录 B。
+## 3. 部署架构：双模运行与网络拓扑
 
-表 3：MCP 工具清单（101 条）
+Kizuna Pro 支持**本地独立全套运行**与**远程 Linux 服务器生产部署**两种模式，可在管理端中一键切换。
 
-| 用途分组 | 条数 | 工具 |
-| --- | --- | --- |
-| 状态、时间与运行时信息 | 5 | `qq_status`、`get_time`、`qq_get_prompt`、`qq_social_state`、`qq_global_overview` |
-| 群组与会话 | 4 | `qq_list_groups`、`qq_get_group_members`、`qq_get_group_owner`、`qq_get_active_members` |
-| 消息发送 | 7 | `qq_send_message`、`qq_reply`、`qq_send_group_message`、`qq_send_private_message`、`qq_proactive_send`、`qq_withdraw_message`、`qq_send_poke` |
-| 消息读取与历史 | 8 | `qq_get_unread_messages`、`qq_get_recent_messages`、`qq_get_my_recent_messages`、`qq_get_message_detail`、`qq_get_group_history`、`qq_get_forward_msg`、`qq_history_delete`、`qq_history_clear` |
-| 唤醒、收尾与等待 | 3 | `qq_set_wake_config`、`qq_mark_read`、`qq_wait_for_messages` |
-| 记忆与群内用语 | 8 | `qq_memory_search`、`qq_memory_remember`、`qq_memory_query`、`qq_memory_append`、`qq_memory_remove`、`qq_memory_clear`、`qq_slang_query`、`qq_slang_submit` |
-| 人设与角色 | 8 | `qq_persona_learn_start`、`qq_persona_learn_stop`、`qq_persona_learn_status`、`qq_character_list`、`qq_character_read`、`qq_character_pack`、`qq_character_search`、`qq_character_switch` |
-| 档案、关系与权限 | 7 | `qq_profile_get`、`qq_profile_set`、`qq_like`、`qq_blacklist`、`qq_remove_friend`、`qq_admin_set`、`qq_whitelist` |
-| 图片、表情与表情包 | 13 | `qq_get_message_images`、`qq_send_image`、`qq_get_self_image`、`qq_list_stickers`、`qq_get_sticker_image`、`qq_send_sticker`、`qq_collect_sticker`、`qq_sticker_note`、`qq_set_sticker_remark`、`qq_meme_search`、`qq_send_meme`、`qq_face_list`、`qq_send_qq_face` |
-| 语音、文件与文档 | 4 | `qq_send_voice`、`qq_transcribe_voice`、`qq_get_file_content`、`qq_send_docx` |
-| 卡片、转发与视频 | 4 | `qq_send_rich`、`qq_send_forward`、`qq_video_parse`、`qq_video_search` |
-| 网络素材检索 | 4 | `qq_image_search`、`qq_pixiv_search`、`qq_send_pixiv`、`qq_music_search` |
-| QQ 空间 | 5 | `qq_qzone_view`、`qq_qzone_comment`、`qq_qzone_reply_comment`、`qq_qzone_like`、`qq_send_qzone` |
-| 计划与定时 | 3 | `qq_schedule_message`、`qq_schedule_list`、`qq_schedule_cancel` |
-| 跨会话通信 | 2 | `qq_crosschat_send`、`qq_crosschat_inbox` |
-| 配置与管理 | 9 | `qq_get_system_config`、`qq_set_system_config`、`qq_get_activity_hours`、`qq_set_activity_hours`、`qq_deepsleep`、`qq_report_feedback`、`qq_config_get`、`qq_config_set`、`qq_voice_manage` |
-| 宿主服务（`mcp-napcat-host`） | 5 | `qq_learning_corpus`、`qq_learning_submit`、`napcat_status`、`start_napcat`、`stop_napcat` |
-| 联网检索（`mcp-web-search-safe`） | 2 | `web_search`、`web_fetch` |
+### 3.1 端口与网络分配表
 
-## 配置要点
+| 服务组件 | 本机默认端口 | 远端服务器端口 | SSH 隧道映射（本机端口） | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| **管理端 UI / API** | `1921` (dev: 5173) | — | — | 可视化运维控制台 |
+| **NapCat WebUI** | `6099` | `6099` | `127.0.0.1:13000` | 官方扫码登录与状态监控 |
+| **NapCat OneBot** | HTTP `3000`, WS `3001` | HTTP `3000`, WS `3001` | `127.0.0.1:13001` (HTTP) | OneBot 协议通讯面 |
+| **隔离 DSH** | `10721` (或 13210) | `3080` | `127.0.0.1:13080` | DeepSeek Harness 运行时 |
+| **qq-bridge 控制台** | `3100` | `3100` | `127.0.0.1:13100` | 内部状态控制与学习接口 |
 
-表 4：`qq-bridge/config.json` 关键项与出厂默认（模板为 `qq-bridge/config.example.json`；真实配置与 `state/` 不纳入版本管理）
+### 3.2 远程 SSH 部署与自动化隧道
+1. **自动建立安全隧道**：在管理端「SSH 配置」添加服务器并点击连接后，系统使用 `ssh2` 在后台建立 4 条端口转发隧道（`13000`、`13001`、`13080`、`13100`）。
+2. **数据源严格分流**：
+   - 处于远程连接状态时，管理端（聊天记录、记忆库、群友画像、Token 计量）**100% 读取服务器端数据**，采用内存并发锁与原子替换，杜绝回退读本机旧库的竞态 Bug。
+   - 处于未连接状态时，100% 读取本机数据目录。
+3. **安全与防封保护**：内置重连退避机制与凭据测试冷却闸门，防止连续密码错误触发服务器的 `fail2ban` 机制。
 
-| 配置项 | 出厂默认与说明 |
-| --- | --- |
-| `dsh.baseUrl` | `http://127.0.0.1:10721`，可由 `QQB_DSH_BASE_URL` 覆盖 |
-| `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` | 会话使用的模型与推理强度；所选模型不存在时只记录日志，不阻塞启动 |
-| `napcat.wsUrl` / `napcat.httpUrl` | OneBot WebSocket 与 HTTP 地址；`httpUrl` 填成 WebSocket 端口会使接口返回 HTTP 426 |
-| `napcat.accessToken` | OneBot 访问令牌，须与 NapCat 网络配置一致；未配置时留空 |
-| `napcat.launcherPath` / `napcat.homeDir` | NapCat 启动脚本与安装目录，供宿主侧进程控制使用 |
-| `napcat.allowProcessControl` | 缺省 `false`；关闭时 `start_napcat` / `stop_napcat` 不注册 |
-| `ownerQQ` | 账号所有者的 QQ 号，是管理员命令与权限判定的依据 |
-| `agentPreset` / `workspaceTitle` | 会话使用的 preset 缺省 `qq-chat`；会话在 DSH 界面中的工作区名缺省 `Agents` |
-| `allow.private` / `allow.groups` / `deny.*` | 白名单与黑名单（黑名单优先）；两侧为空且 `allowAllWhenEmpty: true` 时放行全部来源，此时应在配置阶段显式填写白名单 |
-| `consolePort` / `consoleToken` | 控制台端口缺省 `3100`；未配置令牌时控制台默认本机可信 |
+---
 
-人设、角色与默认行为：
+## 4. 快速上手
 
-- 人设 `qq-bridge/persona.md` 与发言规则 `qq-bridge/speech-rules.md` 由 `qq-bridge/src/lib/preset-compose.js` 合成进 agent preset 的 `[PERSONA]` 与 `[SPEECH RULES]` 段，并保留运行时覆盖段：改动这两个文件立即对当前会话生效，新会话则直接从系统提示词取得。
-- 出厂默认不提供人设文件，人设刻意留空，缺少人设时不扮演任何角色；发言规则随包提供内置模板 `qq-bridge/speech-rules.md`，功能配置页「人设与发言规则」可编辑并「恢复默认」写回内置模板。
-- 角色卡保存在 `qq-bridge/roles/<角色名>.md`，当前角色记录在 `qq-bridge/state/current-role.json`，文件变更后无需重启即生效；单张角色卡注入上限 6000 字符，角色名只保留字母、数字、汉字、下划线与连字符，`README` 为保留名称。
-- 聊天中的自然语言角色切换对非管理员一律拒绝，仅管理员可在管理端操作；`/role <包名>` 走角色库 `characters/` 的合成路径，与 `roles/` 下的角色卡是两套机制。
-- 行为默认值：唤醒默认活跃（潜水须指定有限时长，到期自动恢复活跃），打字节拍 150 ms/字（桥侧夹在 60–320 ms 与 800–6000 ms 之内），上下文压缩阈值 0.16。
+### 4.1 环境准备
+- 操作系统：Windows 10 / 11 (64-bit) 或 Linux (Ubuntu 22.04+，用于服务器)
+- 运行环境：**Node.js ≥ 22.13**（必须，依赖原生的 `node:sqlite` 模块）
+- QQ 账号：准备一个可用的 QQ 号作为机器人账号（建议提前完成实名认证）
 
-数据落盘与隐私：聊天记录 `qq-bridge/state/chat.db`、记忆档案 `qq-bridge/state/memory.db` 与 JSON 状态文件只保存在本机与部署方自行配置的服务器上，不上传至项目本身；模型调用会把当前会话上下文发送给部署方配置的模型服务商。隔离 DSH 侧的记忆插件另在 `~/.dsh/lmemory/` 及其注册的记忆根下保存一份语义事实记忆。
+### 4.2 本地运行（推荐日常调试与使用）
 
-联网检索（模型侧只有一套工具，桥自己提供）：`mcp__web-search-safe__web_search` 与 `mcp__web-search-safe__web_fetch`，由桥的 `qq-bridge/src/mcp-web-search-safe.js` 注册，内核在 `qq-bridge/src/lib/web-search.js`（`searchAll()`：Firecrawl / Bing / 必应新闻 / DuckDuckGo / 百度 / 360 / 萌娘百科 / 中英日维基 / bilibili 等 22 个平台并发抓取，交错合并后过相关度闸门、去重、缓存 5 分钟，CORE 平台全部落定即早返回，硬上限 7.4 s）。`web_fetch` 带 SSRF 加固（仅 http/https、禁内网与本机地址、每跳重定向重新校验、响应体限量读取）。
+#### 步骤 1：克隆代码与安装依赖
+```powershell
+# 克隆仓库
+git clone https://github.com/AbyssalQuill/Kizuna.git
+cd Kizuna
 
-- same engine, two callers：桥进程内的 pixiv「名字 → 画师号」（第 ④ 条来源）直接 `import` 同一个 `searchAll()`，不再 spawn 子进程，所以引擎只有一份、行为一致。
-- 宿主 DSH 自带的 `web_search` / 抓取**不注册**：`qq-chat` 预设里 `tool-web` 的 `search` 与 `fetch` 恒为 `false`，桥每次启动都用 `syncPresetToolWeb` 钉住（幂等），避免出现"看得见却调不动"或静默换一条搜索路径的第二套工具面。
-- 历史：2026-09-28 曾集成第三方 DSH 插件 ModSearch（`@liustack/modsearch`，开关 `dsh.modsearch`）；同日晚些时候按要求**整体去掉**（装配代码、开关、测试、文档一并删除，`dsh.modsearch` 这个配置键不再存在，写了也会被忽略）。升上来的旧隔离 home 里若还留着 `tool-web.search: true` 或 profile 的 `# === modsearch overlay …` 覆盖行，启动时分别被 `syncPresetToolWeb` 改回、被 `stripLegacyModsearchOverlay` 摘掉（都幂等）。
+# 安装管理端依赖
+npm install
 
-## 常用命令与故障处置
-
-桥接层（在 `qq-bridge/` 下执行）：
-
-```bash
-npm install                  # 安装依赖
-npm start                    # 启动桥，等价于 node src/bridge.js
-start.bat                    # 守护方式启动：异常退出后 5 秒自动重启
-restart.bat                  # 终止旧实例、清理锁文件后重新启动守护进程
-npm run self-test [baseUrl]  # DSH 侧链路自测，创建独立测试会话
-npm run check                # 全量回归，含 check-scope / check-size
-node scripts/setup-dsh.mjs   # 手动把 preset、MCP 组与内置插件装进隔离 DSH home
+# 安装桥接层依赖
+cd qq-bridge
+npm install
+cd ..
 ```
 
-管理端（仓库根目录）：
+#### 步骤 2：启动系统
+你可以通过以下任一方式启动：
 
-```bash
-npm run dev                                  # 前端与后端开发模式
-npm run build                                # tsc -b && vite build，改过 src/ 或 server/ 后必须执行
-powershell -File tools\restart-manager.ps1   # 重启管理端后端，不影响桥与 DSH
+- **方式 A（开发模式）**：
+  ```powershell
+  npm run dev
+  ```
+  同时拉起前端 Vite (`http://127.0.0.1:5173`) 与后端服务 (`http://127.0.0.1:1921`)。
+- **方式 B（生产模式 / 安装包）**：
+  ```powershell
+  npm run build
+  node server/index.js
+  ```
+  直接访问 `http://127.0.0.1:1921`。
+
+#### 步骤 3：首次启动引导
+1. 访问管理端首页，在 **NapCat 卡片** 点击「启动」。在弹出的 WebUI（`:6099`）中完成引导并扫码登录机器人 QQ。
+2. 在 **隔离 DSH 卡片** 点击「配置」，填入你的大模型 API 密钥（如 `DEEPSEEK_API_KEY`），启动隔离 DSH。
+3. 在 **qq-bridge 卡片** 点击「启动」，观察日志输出显示 `NapCat 已连接：ws://127.0.0.1:3001` 且会话映射成功。
+4. 私聊向机器人发送消息或在群内 @ 它，即可开始拟人对话。
+
+### 4.3 常用维护命令
+- **重启桥接进程**：在 `qq-bridge/` 目录下执行 `restart.bat`（会自动释放文件锁并重启）。
+- **守护模式启动桥**：在 `qq-bridge/` 目录下双击 `start.bat`（异常崩溃后 5 秒自动重拉）。
+- **前端重构打包**：在根目录下执行 `npm run build`。
+
+---
+
+## 5. QQ 聊天窗口管理员指令
+
+以下指令仅限管理员（在 `qq-bridge/config.json` 中配置的 `ownerQQ`）在私聊中直接向机器人发送，由桥接层直接拦截执行，不消耗模型 Token：
+
+| 指令 | 参数格式 | 功能描述 |
+| :--- | :--- | :--- |
+| `/reset` 或 `/new` | 无 | 重置当前会话的上下文记忆（保留回复防重账本，安全重开）。 |
+| `/status` | 无 | 查看当前会话 ID、白名单验证状态、激活角色与运行模式。 |
+| `/token` | `[天数]` (可选，默认 1) | 查看过去 N 天内各会话的模型 Token 消耗量与预估费用。 |
+| `/op` | `<QQ号或昵称>` | 添加管理员账号。 |
+| `/op del` | `<QQ号或昵称>` | 移除指定管理员账号。 |
+| `/role` | `<角色包名>` | 从角色库中切换并激活指定人设。 |
+| `/role clear` | 无 | 清除自定义角色，恢复出厂默认设定。 |
+| `/slang` | `[查询词]` | 查询或更新本地沉淀的群内黑话词条。 |
+
+---
+
+## 6. 配置参考字典 (`qq-bridge/config.json`)
+
+配置文件位于 `qq-bridge/config.json`（可参考 `config.example.json` 模板）。支持在管理端「Bridge 配置」页面在线修改，保存后**自动热重载生效**，无需重启桥接服务：
+
+```jsonc
+{
+  "dsh": {
+    "baseUrl": "http://127.0.0.1:10721",   // 隔离 DSH 监听地址
+    "provider": "deepseek-official",       // 模型服务商
+    "model": "deepseek-chat",              // 采用的模型名称
+    "temperature": 1.0                     // 默认采样温度，严格推荐 1.0 保证鲜活拟人感
+  },
+  "napcat": {
+    "wsUrl": "ws://127.0.0.1:3001",        // NapCat 反向 WebSocket
+    "httpUrl": "http://127.0.0.1:3000",    // NapCat HTTP API 端口
+    "accessToken": "truefriend",           // 访问令牌，须与 NapCat 网络配置保持一致
+    "allowProcessControl": false           // 是否允许模型关闭/重启 NapCat 进程
+  },
+  "ownerQQ": "1736784911",                 // 机器人最高所有者 QQ（权限指令唯一依据）
+  "agentPreset": "qq-chat",                // DSH 智能体预设，默认 qq-chat
+  "allow": {
+    "private": [],                         // 私聊白名单（空且 allowAllWhenEmpty 为 true 时放行全部）
+    "groups": [],                          // 群聊白名单
+    "allowAllWhenEmpty": true
+  },
+  "deny": {
+    "private": [],                         // 私聊黑名单（优先级高于白名单）
+    "groups": []
+  },
+  "social": {
+    "enabled": true,                       // 智能体总开关（关掉后只记录不发言）
+    "steerEnabled": true,                  // 底层在途注入开关（保持 true）
+    "autoFriendApproval": false            // 是否自动同意好友申请
+  },
+  "prompt": {
+    "styleLine": ""                        // 唤醒正文末尾注入的即时语感提醒（留空 = 走内置规则）
+  }
+}
 ```
 
-服务器运维：
+---
 
-```bash
-cd /root/qq-bridge && bash start-bridge.sh      # 启动桥接进程
-bash /root/qq-bridge/tools/restart-bridge.sh    # 重启桥接，部署脚本认这一条
-systemctl status dsh-web                        # 隔离 DSH
-systemctl status napcat                         # NapCat（原生跑法）
-```
+## 7. 常见问题与排错指南
 
-桥接层的运行约束：
+| 现象 | 排查定位依据 | 最快处置步骤 |
+| :--- | :--- | :--- |
+| **发送消息机器人无回复** | 检查 `qq-bridge/state/bridge.log`。若无 `NapCat 已连接`，说明 OneBot 通讯断开；若提示 `未放行` 说明被名单拦截。 | 1. 确认 NapCat WebUI（`:6099`）中 QQ 账号处于在线状态。<br>2. 检查 `config.json` 中的 `allow` 规则是否放行了当前 QQ 或群号。<br>3. 检查 DSH 服务是否启动。 |
+| **桥接启动报错 `已有实例在运行`** | 上次退出时 node 进程未彻底清理，残存了 `state/bridge.lock`。 | 执行 `qq-bridge/restart.bat`，脚本会自动检测清理残留锁文件与僵尸进程。 |
+| **修改配置后未生效** | 观察桥接控制台是否有 `已热加载，变更字段: ...` 日志。 | `config.json` 绝大部分字段支持热加载；若修改的是 `agentPreset` 或 MCP 基础组，需重启隔离 DSH 实例。 |
+| **回复延迟过高** | 打字节拍被安全钳位（60–320ms/字，首气泡 800–6000ms）。 | 在管理端「Bridge 配置」检查 `social.send` 中的节拍配置，或观察大模型本身的首字 TTFT 耗时。 |
+| **SSH 远程连接被封禁** | 连续输错密码或端口错误，触发了远程 Linux 系统的 fail2ban。 | 登录服务器终端执行：<br>`fail2ban-client set sshd unbanip <你的本机公网IP>`。 |
 
-- 同一时刻只允许一个桥实例：启动时以 `state/bridge.lock` 记录 PID，检测到存活实例即以退出码 2 结束并打印「已有实例在运行」。
-- 隔离 DSH 重启不影响桥：桥每 5 秒探活一次，其间收到的消息进入队列缓存（每会话上限 50 条），DSH 恢复后自动补投。
-- `config.json` 由桥原地热加载；`roles/` 与 `state/current-role.json` 按文件 mtime 感知；agent preset 与 MCP 配置的改动须重启隔离 DSH。
+---
 
-表 5：常见故障与最短处置
+## 8. 开源协议与声明
 
-| 现象 | 处置 |
-| --- | --- |
-| 机器人无回复 | 查 `qq-bridge/state/bridge.log`：缺少 `NapCat 已连接` 表示连接层问题；`[napcat-login]` 行区分登录态失效与连接中断。桥不退出进程，按退避持续重连 |
-| 桥异常或消息无响应 | 执行 `restart.bat`，它终止旧实例并清理锁文件后重新启动守护进程 |
-| 配置改动未生效 | 桥日志应出现 `已热加载，变更字段: …`；`agentPreset` 只在创建会话时绑定，旧会话需等待轮换或归档重建；工具名单档位在注册期生效，改动后须重启隔离 DSH |
-| 唤醒后响应延迟 | 打字节拍被 `clampSendPace` 夹在 60–320 ms 与 800–6000 ms 之内，检查 `social.send` 取值 |
-
-已知限制：
-
-- 回复在回合结束时统一发送，不做流式逐字转发；单条正文超过 4000 字符时按换行切分。
-- Markdown 转为纯文本：链接保留为 `文字 (url)` 形式，代码围栏、标题符与列表符被去除或改写。
-- 视频段与转发内容中的非文本段渲染为 `[视频]` 等占位标记；文件段渲染为 `[文件:名称 · 类型 · 大小]`。
-- 宿主进程控制在缺省配置下不可用：`start_napcat` / `stop_napcat` 不注册。
-- 发送的图片可能为缩略图或内容不完整，见 [docs/PIXIV-AND-QZONE.md](docs/PIXIV-AND-QZONE.md)；单句成本偏高见 [docs/TECHNICAL.md](docs/TECHNICAL.md)。
-
-## 文档索引
-
-表 6：配套文档
-
-| 文档 | 内容范围 |
-| --- | --- |
-| [docs/TECHNICAL.md](docs/TECHNICAL.md) | 体系结构（分层、单条消息的处理路径、状态落盘位置、端口与安装布局、线上部署）、能力域清单与生产约束、MCP 工具与路由全表、上下文压缩的数学建模与标定 |
-| [docs/PIXIV-AND-QZONE.md](docs/PIXIV-AND-QZONE.md) | pixiv 原图发送链路的构成、QQ 空间配图不落盘的原因 |
-| [CHANGELOG.md](CHANGELOG.md) | 逐版本变更记录 |
-
-桥接层的项目说明书与 DSH 端安装说明见 [qq-bridge/docs/PROJECT_GUIDE.md](qq-bridge/docs/PROJECT_GUIDE.md) 与 [qq-bridge/docs/DSH_SETUP.md](qq-bridge/docs/DSH_SETUP.md)；本地运行与手动同步说明见 `本地运行指引.md` 与 `手动同步与SSH说明.md`。
-
-## 许可与致谢
-
-MIT，见 [LICENSE](LICENSE)。
-
-第三方组件：NapCat 是独立第三方项目，与腾讯及 QQ 无隶属关系，仅用于学习与技术研究；使用前应阅读其 EULA 与《QQ 用户协议》。
-
-访问控制：发送类工具的目标必须命中白名单（`allow.private` / `allow.groups`）；正文中的 `[CQ:` 一律转义，拒绝 CQ 码注入；NapCat 的进程控制缺省关闭。白名单两侧为空且 `allowAllWhenEmpty: true` 时全部来源被放行，此时账号的发送能力等同于交由模型使用，因此应在配置阶段显式填写白名单。
+- **开源协议**：本项目基于 [MIT License](LICENSE) 开源。
+- **免责声明**：NapCat 是独立的开源第三方 QQ 协议实现，与腾讯公司无任何官方隶属关系。本项目仅供学术研究、个人学习与技术实验使用，请遵守国家法律法规及相关平台服务条款，严禁用于任何商业欺诈、违规引流或灰黑产场景。
