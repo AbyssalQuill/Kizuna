@@ -9,6 +9,7 @@
     "dev:web": "vite",
     "dev:api": "node server/index.js",
     "build": "tsc -b && vite build",
+    "build:fast": "node tools/build-fast.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
