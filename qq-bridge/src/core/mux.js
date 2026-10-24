@@ -1250,8 +1250,25 @@ export async function pumpMux() {
               } catch (eUd) { log(`[default] 暂存未发出正文失败 (${key}): ${eUd?.message ?? eUd}`); }
             } else if (ended.reason.kind === 'error') {
               const msg = ended.reason.error?.message ?? '未知错误';
-              // === 429/限流拦截：不发原始报错到 QQ，发一句中性的提示并结束桥进程 ===
-              const isRateLimit = /429|rate.?limit|FreeUsageLimit|quota.?exceed|Too.?Many.?Requests|过载|流控/i.test(msg);
+              // 推进水位，防止引发错误的毒丸消息在下一轮被反复重放
+              try {
+                const stNm = getSocialState(key);
+                if (stNm && !stNm._silentAdvanceGuard) {
+                  stNm._silentAdvanceGuard = true;
+                  const snapSeq = (Array.isArray(stNm.turnSeenUnread) ? stNm.turnSeenUnread : []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+                  const maxSeen = snapSeq.length ? Math.max(...snapSeq) : 0;
+                  if (maxSeen > 0 && Array.isArray(stNm.unread)) {
+                    stNm.unread = stNm.unread.filter((m) => m && Number(m.seq) > maxSeen);
+                    stNm.lastAiSeenAt = Date.now();
+                    try { markMessagesRead(key, maxSeen); } catch (_) {}
+                    saveSocialState();
+                  }
+                  stNm._silentAdvanceGuard = false;
+                }
+              } catch (_) {}
+
+              // === 1. 429/限流拦截：不发原始报错到 QQ，发一句中性的提示并结束桥进程 ===
+              const isRateLimit = /429|rate.?limit|FreeUsageLimit|quota.?exceed|Too.?Many.?Requests|过载|流控|insufficient_quota/i.test(msg);
               if (isRateLimit) {
                 // 限流去重：每个 key 只发一次提示，恢复前不再重复
                 if (!globalThis._rateLimitMuted) globalThis._rateLimitMuted = {};
@@ -1259,8 +1276,6 @@ export async function pumpMux() {
                   globalThis._rateLimitMuted[key] = true;
                   log(`[rateLimit] 模型限流 (${key}): ${msg.slice(0, 200)}`);
                   appendActivity(`[rateLimit] ${key} 模型限流，静默等待恢复`);
-                  // 2026-09-15 去人设化：原来发的是"小鲸鱼饿了，需要投喂～"——
-                  // 那是开发初版鲸鱼人设的口吻，且不说清发生了什么。现在只讲事实给用户看。
                   void sendToQQ(key, '⚠️ 模型通道被限流（429），我这边先停一下；额度恢复后重启桥就能继续。').catch(() => {}); // 泵内不阻塞: 发送走链异步完成
                 } else {
                   log(`[rateLimit] ${key} 限流中，静默跳过`);
@@ -1269,23 +1284,29 @@ export async function pumpMux() {
                 const safeMsg = shouldAuditKey(key) && SENSITIVE_RE.test(msg) ? '（含敏感信息，已隐藏）' : msg.slice(0, 500);
                 log(`[error] agent 处理出错 (${key}): ${msg.slice(0, 500)}`);
                 appendActivity(`${key} [error] agent 处理出错: ${msg.slice(0, 120)}`);
-                // 报错文本一律只进日志/活动记录，不再广播到 QQ 聊天：
-                // - content_filter（模型侧安全过滤，如命中内容审查）发到群里既暴露内部机制又吓人；
-                // - 其他 agent 报错（网络抖动/上游异常等）同理，原始错误文本对群友没有意义。
-                // 完整错误始终可在 state/bridge.log 与活动记录里查看。
-                const isContentFiltered = /content_filter|finish_reason.{0,24}content|内容过滤|安全策略拦截|拒绝生成/i.test(msg);
-                if (!isContentFiltered) {
-                  // 非内容过滤类错误：给一句简短自然的话，避免群友以为机器人死机，但不透出原始报错。
-                  // 防连环刷屏：同一会话 5 分钟内已提示过就不再重复补发（如 QQ 风控期每条都失败，
-                  // 反复"重说一遍"只会再触发更多失败发送）。
+
+                // === 2. 内容安全 / 审查过滤类（绝不外显） ===
+                const isContentFiltered = /content_filter|finish_reason.{0,24}content|内容过滤|安全策略|敏感词|安全拦截|拒绝生成|sensitive|violation|policy|prohibited|inappropriate|harmful|safety/i.test(msg);
+
+                // === 3. 内部故障 / 工具JSON解析 / 网络超时 / 上游5xx / 上下文截断 / 流中止类（纯内部技术抖动，完全静默） ===
+                const isInternalError = /invalid json|tool input|tool_use|failed to parse tool|JSON\.parse|unexpected token|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENOTFOUND|socket hang up|fetch failed|network timeout|request timeout|gateway timeout|bad gateway|service unavailable|internal server error|upstream error|500|502|503|504|overloaded|context_length_exceeded|maximum context length|tokens? exceed|prompt is too long|context window|abort|aborted|canceled|cancelled|stream ended early|premature close/i.test(msg);
+
+                // 只有既非内容审查、非内部技术抖动，且必须是用户显式直接唤醒（私聊、或群聊明确 @/戳一戳）时，才作极轻量提示；群聊背景感知或非直接唤醒一律 100% 静默
+                const lw = String(getSocialState(key)?.lastWakeReason ?? '').split(':')[0];
+                const isExplicitWake = key.startsWith('private:') || /^(atMention|poke|question)$/.test(lw);
+
+                if (!isContentFiltered && !isInternalError && isExplicitWake) {
+                  // 非内部/过滤类未知错误，且属于显式提问：给一句简短自然的话，防连环刷屏（10分钟冷却）
                   if (!globalThis._agentErrMuted) globalThis._agentErrMuted = {};
                   const lastHint = globalThis._agentErrMuted[key] || 0;
-                  if (Date.now() - lastHint > 5 * 60 * 1000) {
+                  if (Date.now() - lastHint > 10 * 60 * 1000) {
                     globalThis._agentErrMuted[key] = Date.now();
-                    void sendToQQ(key, '刚走神了一下，你重说一遍？').catch(() => {}); // 泵内不阻塞
+                    void sendToQQ(key, '刚刚卡了一下没发出来，你再说一次？').catch(() => {}); // 泵内不阻塞
                   } else {
-                    log(`[agent-err] ${key} 距上次失败提示不足 5 分钟，静默跳过（QQ 侧持续失败?）`);
+                    log(`[agent-err] ${key} 距上次失败提示不足 10 分钟，静默跳过`);
                   }
+                } else {
+                  log(`[agent-err] ${key} 错误命中静默规则 (contentFiltered=${isContentFiltered}, internalError=${isInternalError}, explicitWake=${isExplicitWake})，已静默处理`);
                 }
               }
             } else if (ended.reason.kind === 'aborted') {
