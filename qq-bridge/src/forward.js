@@ -201,7 +201,24 @@ function collectSegmentMeta(content) {
 export function formatForwardResponse(data, options = {}) {
   const maxMessages = Math.max(1, Math.min(100, Number(options.maxMessages) || 50));
   const maxCharsPerMessage = Math.max(1, Math.min(2000, Number(options.maxCharsPerMessage) || 500));
-  const raw = Array.isArray(data) ? data : (Array.isArray(data?.messages) ? data.messages : []);
+  let raw = [];
+  if (Array.isArray(data)) {
+    raw = data;
+  } else if (data && typeof data === 'object') {
+    if (Array.isArray(data.messages)) {
+      raw = data.messages;
+    } else if (Array.isArray(data.nodes)) {
+      raw = data.nodes;
+    } else if (data.data && typeof data.data === 'object') {
+      if (Array.isArray(data.data)) {
+        raw = data.data;
+      } else if (Array.isArray(data.data.messages)) {
+        raw = data.data.messages;
+      } else if (Array.isArray(data.data.nodes)) {
+        raw = data.data.nodes;
+      }
+    }
+  }
   const total = raw.length;
   const truncatedByCount = total > maxMessages;
   let textTruncated = false;

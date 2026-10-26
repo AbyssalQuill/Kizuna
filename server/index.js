@@ -10901,8 +10901,8 @@ async function onUpdateSuccessRestart() {
       const child = spawn(process.argv[0], process.argv.slice(1), {
         cwd: process.cwd(),
         detached: true,
-        stdio: 'inherit',
-        shell: process.platform === 'win32',
+        stdio: 'ignore',
+        shell: false,
         windowsHide: true,
       });
       child.unref();

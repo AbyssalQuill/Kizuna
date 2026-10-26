@@ -457,7 +457,7 @@ const anchorRebuildTried = new Set();
 /** wav → mp3（本机有 ffmpeg 才转；没有就保持 wav —— 宁可文件大一点，也不能因为缺 ffmpeg 就合成不出来）。 */
 function transcodeToMp3(fromPath, toPath) {
   try {
-    const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', fromPath, '-b:a', '96k', toPath], { encoding: 'utf8', timeout: 120000 });
+    const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', fromPath, '-b:a', '96k', toPath], { encoding: 'utf8', timeout: 120000, windowsHide: true });
     if (r.status === 0) {
       const st = fs.existsSync(toPath) ? fs.statSync(toPath) : null;
       if (st && st.size > 0) return true;
@@ -882,8 +882,8 @@ let _ffmpegOn = null;
 function ffmpegAvailable() {
   if (_ffmpegOn !== null) return _ffmpegOn;
   try {
-    _ffmpegOn = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', timeout: 5000 }).status === 0
-      && spawnSync('ffprobe', ['-version'], { encoding: 'utf8', timeout: 5000 }).status === 0;
+    _ffmpegOn = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', timeout: 5000, windowsHide: true }).status === 0
+      && spawnSync('ffprobe', ['-version'], { encoding: 'utf8', timeout: 5000, windowsHide: true }).status === 0;
   } catch { _ffmpegOn = false; }
   if (!_ffmpegOn) log('[voice] 本机没有 ffmpeg/ffprobe，合成结果不做回声裁剪（只影响音质，不影响发送）');
   return _ffmpegOn;
@@ -899,11 +899,11 @@ export function trimEchoTail(filePath, logFn = log, { chars = 0 } = {}) {
   if (!ffmpegAvailable()) return null;
   if (path.extname(filePath).toLowerCase() !== '.mp3') return null;
   try {
-    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filePath], { encoding: 'utf8', timeout: 15000 });
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filePath], { encoding: 'utf8', timeout: 15000, windowsHide: true });
     const dur = Number(String(probe.stdout ?? '').trim());
     if (!Number.isFinite(dur) || dur < 2.2) return null;
     /* 注意别加 `-v error`：silencedetect 的检测结果走 info 级 stderr，压掉就什么都读不到 */
-    const scan = spawnSync('ffmpeg', ['-hide_banner', '-i', filePath, '-af', 'silencedetect=noise=-45dB:d=0.9', '-f', 'null', '-'], { encoding: 'utf8', timeout: 20000 });
+    const scan = spawnSync('ffmpeg', ['-hide_banner', '-i', filePath, '-af', 'silencedetect=noise=-45dB:d=0.9', '-f', 'null', '-'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
     const err = String(scan.stderr ?? '');
     const starts = [...err.matchAll(/silence_start:\s*([\d.]+)/g)].map((m) => Number(m[1]));
     const ends = [...err.matchAll(/silence_end:\s*([\d.]+)/g)].map((m) => Number(m[1]));
@@ -919,7 +919,7 @@ export function trimEchoTail(filePath, logFn = log, { chars = 0 } = {}) {
     if (chars > 0 && head < chars * 0.15) return null;
     const cut = head + 0.12;                          // 留一点点余量，避免切口蹭到最后一个字的尾音
     const tmp = `${filePath}.trim.mp3`;
-    const run = spawnSync('ffmpeg', ['-hide_banner', '-y', '-i', filePath, '-t', cut.toFixed(3), '-c', 'copy', '-f', 'mp3', tmp], { timeout: 20000, encoding: 'utf8' });
+    const run = spawnSync('ffmpeg', ['-hide_banner', '-y', '-i', filePath, '-t', cut.toFixed(3), '-c', 'copy', '-f', 'mp3', tmp], { timeout: 20000, encoding: 'utf8', windowsHide: true });
     if (run.status !== 0 || !fs.existsSync(tmp)) { try { fs.unlinkSync(tmp); } catch { /* 忽略 */ } return null; }
     const bytes = fs.statSync(tmp).size;
     if (!bytes) { try { fs.unlinkSync(tmp); } catch { /* 忽略 */ } return null; }

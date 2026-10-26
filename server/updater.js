@@ -275,7 +275,7 @@ export function createUpdater({ runtimeRoot, dataDir, repo, branch, token, log, 
 
   function runCmd(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-      const p = spawn(cmd, args, Object.assign({ stdio: ['ignore', 'pipe', 'pipe'] }, opts));
+      const p = spawn(cmd, args, Object.assign({ stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, opts));
       let out = '';
       p.stdout.on('data', (c) => { out += c; });
       p.stderr.on('data', (c) => { out += c; });
@@ -287,7 +287,7 @@ export function createUpdater({ runtimeRoot, dataDir, repo, branch, token, log, 
   function runStream(cmd, args, cwd, label) {
     return new Promise((resolve, reject) => {
       const win = process.platform === 'win32';
-      const p = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: win });
+      const p = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: win, windowsHide: true });
       const eat = (buf) => {
         const text = String(buf);
         for (const line of text.split(/\r?\n/)) {
