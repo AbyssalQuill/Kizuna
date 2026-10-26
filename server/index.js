@@ -230,8 +230,48 @@ function openTunnels(connId, conn, list) {
     const attempt = (tryNo) => {
       const srv = createServer((socket) => {
         conn.forwardOut(socket.remoteAddress || '127.0.0.1', socket.remotePort || 0, '127.0.0.1', remote, (err, stream) => {
-          if (err) { socket.end(); return; }
-          socket.pipe(stream).pipe(socket);
+          if (err) {
+            try { socket.destroy(); } catch {}
+            return;
+          }
+          const cleanup = () => {
+            try { if (!socket.destroyed) socket.destroy(); } catch {}
+            try { if (!stream.destroyed) stream.destroy(); } catch {}
+          };
+          socket.on('error', cleanup);
+          stream.on('error', cleanup);
+          socket.on('close', cleanup);
+          stream.on('close', cleanup);
+
+          stream.on('data', (chunk) => {
+            try {
+              if (!socket.destroyed && socket.writable && !socket.writableEnded) {
+                socket.write(chunk);
+              }
+            } catch { cleanup(); }
+          });
+          stream.on('end', () => {
+            try {
+              if (!socket.destroyed && socket.writable && !socket.writableEnded) {
+                socket.end();
+              }
+            } catch {}
+          });
+
+          socket.on('data', (chunk) => {
+            try {
+              if (!stream.destroyed && stream.writable && !stream.writableEnded) {
+                stream.write(chunk);
+              }
+            } catch { cleanup(); }
+          });
+          socket.on('end', () => {
+            try {
+              if (!stream.destroyed && stream.writable && !stream.writableEnded) {
+                stream.end();
+              }
+            } catch {}
+          });
         });
       });
       // 隧道建立成功要如实回报（原来 resolve() 不带值 → 响应里 tunnels 全是 null，
@@ -3174,7 +3214,9 @@ app.get('/api/state', async (req, res) => {
     remoteStatus: r.remoteStatus ?? null,
     /* 2026-09-22：连接服务端的状态机（connecting → tunnels → server-starting → warming → ready）：
      * 界面据此显示"服务端启动中：DSH 已就绪 · NapCat 启动中"。读它不花任何网络动作。 */
-    connect: connectMachine.view(),
+    connect: (connected && sshConnections.has(connected.id))
+      ? connectMachine.view()
+      : { phase: 'idle', message: '未连接服务器', components: [] },
     instances,
     // 2026-09-12 可移植性：安装位置体检：所有运行数据（记忆库 memory.db / 社交状态 / 人设）都写在
     // 安装树里，所以装在 Program Files（用户级进程写不进去）或 OneDrive 等同步盘（SQLite 会被反复同步、
@@ -3631,7 +3673,8 @@ app.post('/api/ssh/disconnect', (req, res) => {
   remoteStatusCache.delete(id || ''); remoteBridgeDirCache.delete(id || '');
   remoteBridgeCfgCache.delete(id || '');          // 断开后别把服务端配置缓存留着（下次连上重新预热）
   if (cfg.activeServerId === id) { cfg.activeServerId = null; saveConfig(cfg); }
-  res.json({ success: true });
+  connectMachine.idle('已主动断开连接');
+  res.json({ success: true, connect: connectMachine.view() });
 });
 
 /* ------------------------------------------------------------------ */

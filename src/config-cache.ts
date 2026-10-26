@@ -587,19 +587,27 @@ export interface ConnectViewLike {
  * → 本函数（返回文案时显示中性一行）→ 已连上/未连上的既有一切文案。
  * @returns 可直接显示的文案（含服务器名，若记得）；没有这种情况下该显示的内容时返回 null
  */
+export function clearLastConnect() {
+  const prev = getCachedConfig<LastConnect>(CFG_LAST_CONNECT);
+  if (prev) {
+    persist(CFG_LAST_CONNECT, {
+      ...prev,
+      connected: false,
+      wasConnectedAt: 0,
+      at: Date.now(),
+    });
+  }
+}
+
 export function pendingConnect(state: ConnectViewLike | null | undefined): string | null {
+  // 如果 state 已返回，且已处于 idle 或未连接，或者确定不是连接中，绝不再猜测显示"正在连接"！
+  if (state) {
+    if (state.connected) return null;
+    const phase = state.connect?.phase ?? 'idle';
+    if (phase === 'idle' || phase === 'failed') return null;
+    return null;
+  }
   const last = lastConnect();
-  if (!last) return null;                                       // 从未取到过状态：按"首次连接"照常显示
-  const wasConnected = last.connected || last.wasConnectedAt > 0;
-  if (!wasConnected) return null;                               // 上次就知道没连上 → 照实说"未连接"
-  const text = last.serverName
-    ? `正在连接 ${last.serverName}…`
-    : '正在连接服务器…';
-  if (!state) return text;                                      // 状态还没回来（页面刚打开）
-  if (state.connected) return null;                             // 已连上：由既有逻辑渲染
-  const phase = state.connect?.phase ?? 'idle';
-  if (phase === 'failed') return null;                          // 确定失败：照实显示失败
-  if (phase !== 'idle') return null;                            // 连接进行中：由 CONNECT_FOOT 的那套文案承担
-  if (state.autoConnectServer !== true) return null;            // 用户关了自动连接 → idle 就是"不连"
-  return text;                                                  // idle + 自动连接开着 = 后端还没开始连
+  if (!last || !last.connected) return null;
+  return last.serverName ? `正在连接 ${last.serverName}…` : '正在连接服务器…';
 }
