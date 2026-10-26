@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import NoticeBar from '../components/NoticeBar';
 import type { ReactNode } from 'react';
-import { api, postConfig, deployStart, deployStatus, syncBridge, removeServerStack, remoteStackById } from '../api';
+import { api, postConfig, deployStart, deployStatus, deployTasks, syncBridge, removeServerStack, remoteStackById } from '../api';
 import type { SSHServer, ManagerState } from '../stores/types';
 import { ArrowLeft, Plus, Trash2, Loader2, PlugZap, Plug, TestTube2, Server, Settings, Save, Rocket, X, Check, RefreshCw, Play, Square } from 'lucide-react';
 import NumInput from '../components/NumInput';
@@ -174,7 +174,7 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
       if (c.activeServerId) setSelectedId(c.activeServerId);
     }).catch(() => {});
     // 刷新后恢复进行中的克隆部署日志（任务在后台运行，日志不丢失）
-    import('../api').then((m) => m.deployTasks()).then((r) => {
+    deployTasks().then((r) => {
       const run = (r.tasks ?? []).find((t) => t.status === 'running');
       if (run) { setDeployTask(run.id); setDeployLog([]); }
     }).catch(() => {});
