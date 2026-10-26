@@ -18,17 +18,49 @@ export function sanitizeForwardId(value) {
 
 // 从单个 forward 消息段 data 中取 id，供 segmentsToText 与 extractForwardIds 共用。
 export function forwardIdFromData(data) {
-  const d = data && typeof data === 'object' ? data : {};
-  return sanitizeForwardId(d?.id ?? d?.res_id ?? d?.file_id ?? d?.forward_id ?? '');
+  if (!data) return '';
+  if (typeof data === 'string') {
+    try {
+      const obj = JSON.parse(data);
+      return forwardIdFromData(obj);
+    } catch {
+      return sanitizeForwardId(data);
+    }
+  }
+  const d = typeof data === 'object' ? data : {};
+  let rawId = d?.id ?? d?.res_id ?? d?.resId ?? d?.resid ?? d?.file_id ?? d?.forward_id ?? '';
+  if (!rawId && d.meta && typeof d.meta === 'object') {
+    for (const k of Object.keys(d.meta)) {
+      const sub = d.meta[k];
+      if (sub && typeof sub === 'object') {
+        const subId = sub.resId ?? sub.resid ?? sub.res_id ?? sub.forward_id ?? sub.id;
+        if (subId) { rawId = subId; break; }
+      }
+    }
+  }
+  return sanitizeForwardId(rawId);
 }
 
 export function extractForwardIds(segments) {
   if (!Array.isArray(segments)) return [];
   const out = [];
   for (const seg of segments) {
-    if (!seg || typeof seg !== 'object' || seg.type !== 'forward') continue;
-    const id = forwardIdFromData(seg.data);
-    if (id && !out.includes(id)) out.push(id);
+    if (!seg || typeof seg !== 'object') continue;
+    if (seg.type === 'forward') {
+      const id = forwardIdFromData(seg.data);
+      if (id && !out.includes(id)) out.push(id);
+    } else if (seg.type === 'json') {
+      const raw = seg.data?.data ?? seg.data?.content ?? seg.data;
+      const id = forwardIdFromData(raw);
+      if (id && !out.includes(id)) out.push(id);
+    } else if (seg.type === 'xml') {
+      const xml = String(seg.data?.data ?? seg.data ?? '');
+      const m = xml.match(/(?:m_resid|res_id|resid)=["']([^"']+)["']/i);
+      if (m && m[1]) {
+        const id = sanitizeForwardId(m[1]);
+        if (id && !out.includes(id)) out.push(id);
+      }
+    }
   }
   return out;
 }

@@ -336,6 +336,21 @@ function buildRuntimeOverrideBlock() {
   return parts.length ? `\n${parts.join('\n\n')}\n\n` : '';
 }
 
+/** 2026-10-26 深度拟人化锚点（防止长会话 Attention 稀释导致人设漂移）：
+ * 即使系统提示词已有缓存，也在每轮动态保持高优先级角色强化，禁止回复变成冰冷客套的 AI 助手。 */
+function buildPersonaAnchorBlock() {
+  const personaText = readRuntimeOverrideFile('persona.md');
+  const speechText = readRuntimeOverrideFile('speech-rules.md');
+  if (!personaText && !speechText) return '';
+  const nameMatch = personaText ? personaText.match(/(?:角色|姓名|名字|称呼|称谓|Name)[:：]\s*([^\n\r]+)/i) : null;
+  const roleName = nameMatch ? nameMatch[1].trim() : '当前设定角色';
+  return `\n[CHARACTER ANCHOR] (保持拟人沉浸，拒绝机械客套)
+- 真实身份锚定：你此刻完全就是【${roleName}】。请全情投入扮演，保持符合该角色的生活感、真情实感与独特口吻。
+- 拒绝 AI 机械腔：严禁像客服或冷冰冰的 AI 语言模型那样机械礼貌、说教或模式化否定；像真人好友发微信一样自然随性打字。
+- 发言习惯遵循：严格遵守设定中的标点习惯、用词特色与情绪流动。
+\n`;
+}
+
 /**
  * 「普通消息怎么判 / 当前记录值 / 来源」这一行（2026-09-19 引入，2026-09-30 改造）。
  *
@@ -591,11 +606,11 @@ export function buildWakePrompt(key, reason) {
   const needPersonaBlock = shouldInjectPersonaBlock({
     composedStamp, currentStamp: ovStampNow, needsReinject: stOv._personaNeedsReinject === true,
   });
-  const baseWithProtocol = base + (needPersonaBlock ? buildRuntimeOverrideBlock() : '');
+  const baseWithProtocol = base + (needPersonaBlock ? buildRuntimeOverrideBlock() : buildPersonaAnchorBlock());
   if (needPersonaBlock) {
-    log(`[wake] ${key} 注入人设/发言规则（preset 里那份${personaInSystemPrompt ? '是当前版本但会话标记需要重注入' : '不是当前版本'}）`);
+    log(`[wake] ${key} 注入全量人设/发言规则（preset 里那份${personaInSystemPrompt ? '是当前版本但会话标记需要重注入' : '不是当前版本'}）`);
   } else {
-    log(`[wake] ${key} 跳过人设/发言规则注入（系统提示词里已是当前版本 ${ovStampNow.slice(0, 24)}…）`);
+    log(`[wake] ${key} 注入拟人强化锚点并跳过全量重复人设（系统提示词里已是当前版本 ${ovStampNow.slice(0, 24)}…）`);
   }
   if (stOv) { stOv._personaSeenStamp = ovStampNow; stOv._personaNeedsReinject = false; }
   // 2026-09-12 规则搬家：每种唤醒原因的"该怎么做"全部写进系统提示词 [WAKE TYPES]（第 1~14 条），
