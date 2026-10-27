@@ -874,15 +874,20 @@ body textarea.json-text, body .log-viewer, body .log-viewer *, body .log-line {
 .lrn-note-block > div + div { margin-top: 3px; }
 .lrn-note-muted { opacity: .78; font-size: 11.5px; }
 
-/* ===== BridgeConfig v3.9：人设 / 发言规则双卡（并列等高） ===== */
+/* ===== BridgeConfig v3.9：人设单卡（铺满工作区，无右侧留白） ===== */
 .dp-grid {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px; align-items: stretch; max-width: 1560px; margin: 0 auto;
+  gap: 14px; align-items: stretch; max-width: 100%; margin: 0 auto; width: 100%;
 }
-.dp-card { display: flex; flex-direction: column; }
+.dp-grid.single-col {
+  grid-template-columns: 1fr !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.dp-card { display: flex; flex-direction: column; width: 100%; }
 .dp-card .card-title { justify-content: flex-start; }
 .dp-card .card-title .badge { margin-left: auto; }
-.dp-card > .textarea { flex: 1 1 auto; min-height: 430px; }
+.dp-card > .textarea { flex: 1 1 auto; min-height: 480px; width: 100%; }
 .dp-actions {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   margin-top: 12px; padding-top: 10px; border-top: 1px dashed hsl(339.33 90% 90% / .9);

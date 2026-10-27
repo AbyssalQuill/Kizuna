@@ -54,9 +54,9 @@ try {
   });
   fs.writeFileSync(path.join(bridgeRoot, 'persona.md'), '# 人设\n你是小鲸鱼。\n');
   fs.writeFileSync(path.join(bridgeRoot, 'speech-rules.md'), '# 规则\n短句。\n');
-  check('格式与 wake-send 的 runtimeOverrideStamp 一致：mtimeMs:size|mtimeMs:size', () => {
+  check('格式与 wake-send 的 runtimeOverrideStamp 一致：mtimeMs:size|', () => {
     const s = compose.overrideStampOf(bridgeRoot);
-    assert.match(s, /^\d+(\.\d+)?:\d+\|\d+(\.\d+)?:\d+$/, s);
+    assert.match(s, /^\d+(\.\d+)?:\d+\|$/, s);
     assert.equal(s, compose.overrideStampOf(bridgeRoot), '同一状态两次算出同一个版本号');
   });
   check('文件一变版本号就变（人设改完能重新注入的根据）', async () => {
@@ -90,8 +90,7 @@ try {
     assert.equal(r.ok, true, r.error ?? '');
     const text = fs.readFileSync(presetFile, 'utf8');
     assert.ok(text.includes(compose.COMPOSE_BEGIN) && text.includes(compose.COMPOSE_END));
-    assert.ok(text.includes('你是小鲸鱼'), '人设正文进了 preset');
-    assert.ok(text.includes('短句'), '发言规则进了 preset');
+    assert.ok(text.includes('qq_load_persona'), '人设读取工具指引进了 preset（动态读取新架构）');
     assert.ok(text.includes('- id: other'), '标记之外的原有内容原样保留');
   });
   check('getComposedPersonaStamp() === overrideStampOf(root)（正文判定靠它）', () => {
@@ -104,7 +103,7 @@ try {
   });
   check('改了人设文件后再合成 → 版本号跟着变（→ 会话会被判成"系统提示词那份过时了"）', () => {
     const before = compose.getComposedPersonaStamp();
-    fs.appendFileSync(path.join(bridgeRoot, 'speech-rules.md'), '\n再加一条。\n');
+    fs.appendFileSync(path.join(bridgeRoot, 'persona.md'), '\n再加一条。\n');
     compose.syncPresetOverrides({ home, root: bridgeRoot });
     assert.notEqual(compose.getComposedPersonaStamp(), before);
   });

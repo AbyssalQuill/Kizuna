@@ -404,7 +404,59 @@ function replaceDeclBlock(text, block) {
   out = segs.filter(function (seg, i) { return i === 0 || seg.indexOf("id: preset-qq-chat") < 0; }).join("\n");
   return out.trimEnd() + "\n\n" + block;
 }
+/** 本机隔离 DSH 的版本（从 manager 配置里的 dsh CLI 反推 @deepseek-ai/dsh/package.json）。
+ *  拿不到一律返回 ''：调用方据此沿用旧行为，绝不因为探测失败改变远端 0.2.1 的行为。 */
+function readIsolatedDshVersion() {
+  try {
+    const p = path.join(os.homedir(), '.qq-bridge-manager', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const cli = cfg?.instances?.dshIsolated?.dshCli;
+    if (!cli) return '';
+    const pkgFile = path.resolve(path.dirname(cli), '..', '@deepseek-ai', 'dsh', 'package.json');
+    return String(JSON.parse(fs.readFileSync(pkgFile, 'utf8')).version || '');
+  } catch { return ''; }
+}
+
+/** 0.2.1 起 preset 才是"profile patch 里的内联声明"；0.1.x 走目录扫描
+ *  （<home>/.agent-presets/<id>/），内联声明会以 $.default 缺值在启动阶段硬失败。 */
+function supportsInlinePresetDeclaration(version) {
+  const m = /^(\d+)\.(\d+)\./.exec(String(version || ''));
+  if (!m) return true; // 版本读不懂 → 按支持处理，保持远端行为不变
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return major > 0 || minor >= 2;
+}
+
+/** 纯移除声明块（BEGIN..END + 历史上按段拆开的残留），不追加任何内容。 */
+function stripDeclBlock(text) {
+  let out = text;
+  for (;;) {
+    const i = out.indexOf(PRESET_DECL_BEGIN);
+    if (i < 0) break;
+    const j = out.indexOf(PRESET_DECL_END, i);
+    if (j < 0) break;
+    out = out.slice(0, i) + out.slice(j + PRESET_DECL_END.length);
+  }
+  const segs = out.split(/\n(?=- insert:\n {4}- id: preset-qq-chat)/);
+  out = segs.filter(function (seg, i) { return i === 0 || seg.indexOf("id: preset-qq-chat") < 0; }).join("\n");
+  return out.replace(/[ \t\r\n]*$/, '\n');
+}
 export async function syncPresetDeclaration21(target) {
+  /* 0.1.x 的隔离 DSH 不认内联声明：写了会以 $.default 缺值在启动阶段硬失败
+   * （2026-10-26 实测：本地 0.1.2-rc.1 + 新桥代码 → 10721 起不来）。
+   * 目录式 preset 由 agent-presets 注册表扫描 .agent-presets/ 自动发现，不需要这条声明。 */
+  const dshVersion = readIsolatedDshVersion();
+  if (dshVersion && !supportsInlinePresetDeclaration(dshVersion)) {
+    const patchFile = path.join(target.profileDir, 'cordis.patch.yml');
+    if (!fs.existsSync(patchFile)) return { ok: false, reason: 'profile patch 不存在' };
+    const text = fs.readFileSync(patchFile, 'utf8');
+    const next = stripDeclBlock(text);
+    if (next !== text) {
+      fs.writeFileSync(patchFile, next, 'utf8');
+      log(`[dsh-side] 隔离 DSH ${dshVersion} 走目录式 preset，已清掉不兼容的 0.2.1 声明块`);
+    }
+    return { ok: true, changed: next !== text, reason: `DSH ${dshVersion} 不支持内联声明，已跳过` };
+  }
   const presetDir = path.join(target.home, '.agent-presets', 'qq-chat');
   const metaFile = path.join(presetDir, 'preset.yml');
   const rowsFile = path.join(presetDir, 'agent.cordis.yml');

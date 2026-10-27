@@ -1122,11 +1122,7 @@ export default function Learning({ onBack }: Props) {
                         <input className="input" type="text" inputMode="numeric" placeholder="如 04:00（留空表示不定时）"
                           value={slgTime} disabled={!cfgReady} onChange={(e) => setSlgTime(normHHMM(e.target.value))} />
                       </label>
-                      <label className="switch-row">
-                        <input type="checkbox" checked={slgLiveWin === true} disabled={!cfgReady} onChange={(e) => setSlgLiveWin(e.target.checked)} />
-                        <span>实时窗口提取</span>
-                        <em>开启：消息到达时实时提取唤醒，额度消耗更高；关闭：仅在定时任务中批量学习</em>
-                      </label>
+                      
                       <label className="switch-row">
                         <input type="checkbox" checked={slgResearch === true} disabled={!cfgReady} onChange={(e) => setSlgResearch(e.target.checked)} />
                         <span>自动深入研究</span>
@@ -1696,11 +1692,10 @@ export default function Learning({ onBack }: Props) {
                       </button>
                     </div>
                     <div className="lrn-slang-note">
-                      「已确认」= 词条已入库、有含义、可被检索。<b>黑话表不注入唤醒提示词</b>
-                      （为省 token，桥侧 injectIntoPrompt 保持关闭），改由系统提示词的 SLANG_NOT_IN_CONTEXT 硬规则
-                      要求机器人遇到生词先自己查 qq_slang_query，查不到再联网搜 —— 所以「已确认且已填含义」的词条才检索得到。
-                      候选的释义由「批量分析」交研究会话补齐，<b>研究会话明确确认后桥侧自动转为「已确认」</b>
-                      （slang.js 的 autoConfirmed 一段），因此此处不再提供「批量通过」。删除不可恢复；如需留存档案，宜改用「批量拒收」。
+                      「已确认」= 词条已入库并生效。系统现已升级为<b>群黑话上下文智能感知注入引擎</b>：
+                      当群聊消息中命中已确认黑话时，自动在唤醒正文中附加精炼释义，使机器人秒懂群聊专属梗并自然接话；
+                      生僻词亦可由机器人自主调用 <code>qq_slang_query</code> 查询或联网求证。
+                      候选词条经「批量分析」由研究会话补齐释义后自动转入「已确认」。删除不可恢复；如需留存档案，宜改用「批量拒收」。
                     </div>
                     {slangNote && <div className="lrn-slang-result">{slangNote}</div>}
                   </div>

@@ -102,7 +102,7 @@ export function loadConfig() {
      *   改默认值等于改语感，不要随意修改。
      *   空串 = 不注入这一行（完全交给系统提示词时使用）。 */
     prompt: {
-      styleLine: '[Style] 像真实人类在QQ随性打字，自然融入[PERSONA]性格底色，日常90%说自然口语，不端着演戏。句式长短千变万化，大多数时候一句话单气泡直接说完（2~18字），确有补充或转折才发2条，不套用固定三段论。冷脸萌(ᗜ系列)可发并独立气泡防截断，不用传统符号颜文字，表情克制少发。群聊回话必传replyToMessageId，插不上话直接qq_mark_read。',
+      styleLine: '[Style] 像真实人类在QQ随性打字，自然融入[PERSONA]性格底色，日常90%说自然口语，不端着演戏。句式长短千变万化，大多数时候一句话单气泡直接说完（2~18字），确有补充或转折才发2条，不套用固定模板。表情包与标点自然克制。群聊回话必传replyToMessageId，插不上话直接qq_mark_read留白。',
       ...(file.prompt ?? {})
     },
     /* ── 2026-09-21 /token 指令的计价参数（¥ / 百万 tok）─────────────────────────────
@@ -184,7 +184,7 @@ export function loadConfig() {
          * 于是"活跃"= 每 ~20 条消息才随机醒一次，观感和潜水差不多。
          * 现在给活跃模式一个自己的概率：切到 active 时若没显式指定 probability 就用它。 */
         activeProbability: 0.3,
-        recommendedKeywords: ['小鲸鱼', 'DeepSeek', 'deepseek', 'DS', 'D老师', 'd老师', 'D指导', 'd指导', 'D师傅', 'd师傅', '深度求索', '大肥鱼', '鲸鱼', 'DeepSeek V3', 'DeepSeek R1', 'R1'],
+        recommendedKeywords: [],
         recommendedAtMention: true,
         recommendedNameMention: true,
         recommendedQuestion: true,

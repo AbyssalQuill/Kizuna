@@ -358,3 +358,43 @@ export function parseResearchJson(text) {
       confirmed: item.confirmed === true,
     }));
 }
+
+/**
+ * 智能检索文本中命中的群黑话与网络用语（LLM 动态上下文注入引擎）。
+ * 优先匹配当前会话 scope（如 group:123456），再匹配 global 全局黑话。
+ * 返回格式化后的精简上下文提示，供唤醒或 prompt 注入。
+ */
+export function detectSlangMatches(text, entries = [], currentScope = 'global', maxMatches = 5) {
+  const raw = String(text ?? '').trim();
+  if (!raw || !Array.isArray(entries) || entries.length === 0) return '';
+  const confirmed = entries.filter((e) => e && e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning);
+  if (!confirmed.length) return '';
+
+  const hits = [];
+  const lower = raw.toLowerCase();
+  for (const entry of confirmed) {
+    const term = String(entry.content).trim();
+    if (!term) continue;
+    // 检查作用域匹配：全局，或当前群专属
+    const entryScope = String(entry.scope || 'global').trim();
+    if (entryScope !== 'global' && entryScope !== currentScope) continue;
+
+    if (lower.includes(term.toLowerCase())) {
+      hits.push(entry);
+    }
+  }
+
+  if (!hits.length) return '';
+  // 按热度排序并取前 maxMatches 个
+  const selected = hits
+    .sort((a, b) => (b.count || 0) - (a.count || 0))
+    .slice(0, maxMatches);
+
+  const lines = selected.map((e) => {
+    let s = `- "${escapeLearnerText(e.content)}" = ${escapeLearnerText(e.meaning)}`;
+    if (e.example) s += ` (语境例: ${escapeLearnerText(e.example)})`;
+    return s;
+  });
+
+  return `[Active Slangs Detected in Chat]\n${lines.join('\n')}`;
+}

@@ -284,16 +284,28 @@ export function setProfileField(uid, field, value) {
   }
 }
 
+function getPersonaLibraryEntrySafe(uid) {
+  try {
+    const f = path.join(ROOT, 'state', 'persona-library.json');
+    if (!fs.existsSync(f)) return null;
+    const all = JSON.parse(fs.readFileSync(f, 'utf8'));
+    return all && typeof all === 'object' ? all[String(uid)] : null;
+  } catch {
+    return null;
+  }
+}
+
 export function formatProfileText(uid) {
   const p = getProfile(uid);
-  if (!p) return '';
   const parts = [];
-  if (p.name) parts.push(`Name:${p.name}`);
-  if (p.personality) parts.push(`Personality:${p.personality}`);
-  if (p.likes) parts.push(`Likes:${p.likes}`);
-  if (p.dislikes) parts.push(`Dislikes:${p.dislikes}`);
-  if (p.birthday) parts.push(`Birthday:${p.birthday}`);
-  if (p.notes) parts.push(`Notes:${p.notes}`);
+  if (p?.name) parts.push(`Name:${p.name}`);
+  const lib = getPersonaLibraryEntrySafe(uid);
+  if (lib?.oneSentenceSummary) parts.push(`Summary:${lib.oneSentenceSummary}`);
+  if (p?.personality) parts.push(`Personality:${p.personality}`);
+  if (p?.likes) parts.push(`Likes:${p.likes}`);
+  if (p?.dislikes) parts.push(`Dislikes:${p.dislikes}`);
+  if (p?.birthday) parts.push(`Birthday:${p.birthday}`);
+  if (p?.notes) parts.push(`Notes:${p.notes}`);
   return parts.length ? parts.join('; ') : '';
 }
 

@@ -516,10 +516,9 @@ export function sendMessages(key, messages, delays, replyToMessageId, atUserId =
   const total = Math.max(messages.length, images.length);
   for (let i = 0; i < total; i++) {    const msg = messages[i] ?? '';
     const img = images[i] ?? null;
-    /* 2026-09-20 定稿：引用只可能来自模型显式传的 replyToMessageId。
-     * 旧写法在这里有第二个分支：没传引用时调 pickSmartQuoteFor() 让桥自己挑一条 —— 已删除
-     * （理由见本文件上方那段注释；猜错就是"引用错误"）。多气泡时只有第一条能带引用。 */
-    const explicitQuote = replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '';
+    // 2026-10-27 私聊绝不带引用（像真人聊天一样直接回复，防止破坏私聊生活感与无辜拦截语音）
+    const isPrivate = key.startsWith('private:');
+    const explicitQuote = !isPrivate && replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '';
     const useAt = i === 0 ? atUserId : null;
     enqueueSend(async () => {
       const useReply = (i === 0 && explicitQuote) ? String(replyToMessageId).trim() : null;

@@ -244,7 +244,6 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
 
   const disconnect = async () => {
     await api('/ssh/disconnect', { method: 'POST', body: JSON.stringify({}) });
-    clearLastConnect();
     setMsg('已断开');
     onRefresh();
   };

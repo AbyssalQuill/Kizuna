@@ -106,6 +106,7 @@ import {
   touchTurnTotalTimer,
   setTurnGuardApi, TURN_TIMEOUT_MS, TURN_TOTAL_TIMEOUT_MS,
 } from './turn-guard.js';
+import { pruneSessionEphemeralRecord } from './turn-pruner.js';
 import {
   collectors, TurnStartAt, pendingWakeKeys, sessionPromises, promptQueues,
   agentRunningSessions,
@@ -1231,6 +1232,19 @@ export async function pumpMux() {
                 log(`[default] 模型以裸 OK 收尾（本轮无发送工具调用）—— 按"本轮不说话"处理，不记草稿 (${key})`);
                 continue;
               }
+              /* 2026-10-26 主人要求：agy/gemini 这类"只写不调"的模型，真人触发的回合直接兜底发出去。
+               * 判定沿用下面暂存草稿的 lastWakeReason：只有真人触发（private/@/提问/点名/戳/关键词/首次连接）
+               * 才兜底；内部唤醒（回复检查/主动冒泡/概率/睡醒）照旧丢弃，防止把自言自语发进群里。 */
+              const lwFb = String(getSocialState(key)?.lastWakeReason ?? '').split(':')[0];
+              const userTriggeredFb = /^(private|atMention|question|speaker|nameMention|poke|keyword|bootstrap)$/.test(lwFb);
+              if (userTriggeredFb) {
+                try {
+                  log(`[fallback] 模型本轮没调发送工具，按用户触发兜底发正文 (${key})`);
+                  await sendToQQ(key, plain);
+                  appendActivity(`${key} [fallback] 模型未调发送工具，正文已兜底发出：${undelivered.slice(0, 60)}`);
+                  continue;
+                } catch (eFb) { log(`[fallback] 兜底发送失败 (${key}): ${eFb?.message ?? eFb}`); }
+              }
               log(`[default] 模型正文未通过发送工具发出（不再自动转发）(${key}): ${undelivered.slice(0, 60)}`);
               appendActivity(`${key} [undelivered] 模型正文未走发送工具（未转发）：${undelivered.slice(0, 80)}`);
               // 只暂存"用户真实触发"回合的正文：模型可能本想回话却漏调工具 → 下轮给补发提示。
@@ -1340,6 +1354,8 @@ export async function pumpMux() {
                 }
               } catch (eNm) { log(`[default] 无正文水位推进异常 ${key}: ${eNm?.message ?? eNm}`); }
             }
+            // 步末瞬态人设裁剪：每轮结束自动修剪 session 历史，削减长人设与冗余堆积
+            void pruneSessionEphemeralRecord(frame.sessionId);
           }
         } else if (frame.type === 'host/session-status') {
           // turn-hold 补完：DSH 的权威运行状态帧（dsh-host-apiproxy/lib/index.js:3699：

@@ -285,7 +285,7 @@ export async function getLuoguSolution(rawPid) {
         needLogin,
         pid,
         message: needLogin
-          ? '洛谷题解需要登录态后方可查阅。请在管理端配置洛谷 Cookie，或者由小鲸鱼直接为你讲解解题思路并写出 C++ 代码哦！'
+          ? '洛谷题解需要登录态后方可查阅。请在管理端配置洛谷 Cookie，或者由我直接为你讲解解题思路并写出 C++ 代码哦！'
           : (res.data?.errorMessage || '暂无可用公开题解')
       };
     }

@@ -34,12 +34,12 @@ export function planSocialTimeline(text, socialCfg) {
 // 是否"直接针对 AI"的提问/挑战：提到 AI 相关词且带疑问/比较，或对"你"开火，或追问催促
 export function isDirectedAtAi(textContent) {
   const lower = String(textContent ?? '').toLowerCase();
-  const aiMention = /deepseek|claude|chatgpt|gpt|大肥鱼|小鲸鱼|鲸鱼|d指导|d老师|d师傅|深度求索|\bds\b|ai|人工智障|机器人|模型/.test(lower);
-  const challenge = /强|弱|行不行|能不能|会不会|是不是|一半|水平|垃圾|废物|白嫖|菜|不如|厉害|赢|输|比.*强|比.*弱/.test(lower);
+  const aiMention = /deepseek|claude|chatgpt|gpt|\bds\b|ai|人工智障|机器人|模型/.test(lower);
+  const challenge = /强|弱|行不行|不行|能不能|会不会|是不是|一半|水平|垃圾|废物|白嫖|菜|不如|厉害|赢|输|差|比.*强|比.*弱/.test(lower);
   const question = /[?？吗呢吧]|怎么|为什么|哪|谁/.test(lower);
   if (aiMention && (question || challenge)) return true;
   // "你/您" + 疑问/比较/挑战（放宽，避免漏掉"你有claude一半强吗"这类直接问）
-  if (/(你|您).{0,10}(吗|呢|？|\?|怎么|是不是|能不能|行不行|有没有|有|没有|比|不如|强|弱|一半|厉害|垃圾|菜|赢|输)/.test(lower)) return true;
+  if (/(你|您).{0,10}(吗|呢|？|\?|怎么|是不是|能不能|行不行|不行|有没有|有|没有|比|不如|强|弱|一半|厉害|垃圾|菜|赢|输|差)/.test(lower)) return true;
   if (/^(你|您)(是不是|行不行|能不能|会不会|觉得|有|没有)/.test(lower)) return true;
   // "你是...还是... / 你是...吗 / 你是...？"（如：你是人类还是ai、你是真人吗）
   if (/(你|您)是[^？?。！!]{0,14}(还是|或者|吗|么|？|\?)/.test(lower)) return true;

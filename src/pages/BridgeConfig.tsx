@@ -1570,7 +1570,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
         <div className="tabs">
           {(['common', 'tools', 'persona', 'json'] as const).map((t) => (
             <button key={t} className={`btn ${tab === t ? 'btn-primary' : 'btn-soft'}`} onClick={() => setTab(t)}>
-              {t === 'common' ? '常用设置' : t === 'tools' ? '工具与规则' : t === 'persona' ? '人设与发言规则' : 'JSON 进阶'}
+              {t === 'common' ? '常用设置' : t === 'tools' ? '工具与规则' : t === 'persona' ? '人设' :  'JSON 进阶'}
             </button>
           ))}
           {/* 2026-09-12 修改要求：JSON 进阶旁边加一个「方案」页签：浅蓝，与 Token 用量面板同一支色 */}
@@ -1616,7 +1616,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
         {tab === 'tools' && <ToolsTab cfg={view} diskCfg={diskCfg} ch={ch} onSave={save} saving={saving} target={target} remoteServerId={remote?.id} />}
 
         {tab === 'persona' && (
-          <div className="dp-grid">
+          <div className="dp-grid single-col" style={{ width: "100%", maxWidth: "100%" }}>
             {/* 人设卡：persona.md */}
             <div className="card dp-card">
               <div className="card-title">
@@ -1626,13 +1626,10 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 </span>
               </div>
               <div className="cfg-card-desc">
-                角色描述与人设提示词，<b>原样注入给模型，中英文均注入</b>。用法：初始为空，可上传 .md/.txt，或点「角色库导入」载入完整角色，再点「保存人设」写入 persona.md。
-                人设为空即默认助手（框内的 <i>You're a helpful assistant.</i> 只是灰色占位提示，不会写入文件，也不注入模型）。
-                它与内置规则分属<b>两层</b>：内置规则（安全边界、工具用法、唤醒协议、发言纪律）始终生效，人设决定「你是谁、何种性情、如何与主人相处」；<b>人设文件中自定义的规矩同样生效</b>。
-                注意：保存后下一条消息即采用新人设（桥检测文件变更并重新注入完整提示词），无需重启任何进程。
+                角色人设定义。保存后即刻生效，由系统动态注入并保持最高沉浸感。
               </div>
               <textarea className="textarea persona-text" rows={18}
-                placeholder="You're a helpful assistant."
+                placeholder="【persona_load】"
                 value={persona} onChange={(e) => setPersona(e.target.value)} spellCheck={false} />
               <div className="dp-actions">
                 <input ref={personaFileRef} type="file" hidden accept=".md,.txt,.skill.zip,.zip"
@@ -1649,45 +1646,16 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                   onClick={() => { setTab('common'); setTimeout(() => document.getElementById('meme-packs-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); }}>
                   <Layers size={14} /> 表情包库
                 </button>
-                <span className="upload-hint">.md/.txt 载入编辑器（点右侧保存生效）；.skill.zip/.zip 上传到角色包目录</span>
+                <span className="upload-hint">支持载入 .md/.txt，保存后即刻生效</span>
                 <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => saveCard('persona')}>
                   {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存人设
-                </button>
-              </div>
-            </div>
-
-            {/* 发言规则卡：speech-rules.md */}
-            <div className="card dp-card">
-              <div className="card-title">
-                <MessagesSquare size={17} /> 发言规则 · speech-rules.md
-                <span className={`badge ${speechHasFile ? 'badge-success' : 'badge-soft'}`}>
-                  {speechHasFile ? '文件已存在' : '默认模板'}
-                </span>
-              </div>
-              <div className="cfg-card-desc">
-                消息发送的言行规矩（投入角色 / 发送与引用协议 / 分段节奏 / 表情包用法 / 去 AI 味 / 看场合）。文件为英文短句模板，可直接编辑覆盖，也可点「恢复默认」写回内置模板。
-                与 persona.md 同目录，每次唤醒注入提示词顶部；文件变更后无需重启。
-              </div>
-              <textarea className="textarea persona-text" rows={18}
-                value={speechRules} onChange={(e) => setSpeechRules(e.target.value)} spellCheck={false} />
-              <div className="dp-actions">
-                <input ref={speechFileRef} type="file" hidden accept=".md,.txt"
-                  onChange={(e) => { pickSpeechFile(e.target.files?.[0] ?? null); e.target.value = ''; }} />
-                <button className="btn btn-soft btn-sm" disabled={saving} onClick={() => speechFileRef.current?.click()}>
-                  <Upload size={14} /> 上传 .md
-                </button>
-                <button className="btn btn-outline-danger btn-sm" disabled={saving} onClick={resetSpeech}>
-                  <RotateCcw size={14} /> 恢复默认
-                </button>
-                <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => saveCard('speech')}>
-                  {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存发言规则
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {tab === 'json' && (
+                {tab === 'json' && (
           <div className="card">
             <div className="card-title">config.json（进阶）</div>
             {cfg ? (
@@ -1914,7 +1882,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 <ul>
                   <li><b>常用设置</b>：最常用的可视化配置，按功能分卡片（模型与推理、NapCat 连接、Pixiv（镜像站与登录 cookie）、允许与拒绝名单、唤醒与潜水、发送节奏、上下文与轮换、主动闲聊、回复停顿、表情包、静默群聊、好友信任等）。</li>
                   <li><b>工具与规则</b>：上卡为桥提供给模型的 QQ 工具开关（发消息、读未读、戳一戳、撤回、表情包等），关闭即不授予该工具，<b>但不省 token</b>；下卡「工具 schema 精简」才真正让工具描述不再随请求发送给模型，改完须重启隔离 DSH。</li>
-                  <li><b>人设与发言规则</b>：编辑 persona.md（角色人设，初始为空，可上传 .md 或从「角色库导入」整包载入）与 speech-rules.md（言行规矩，含恢复默认）。<b>人设原样注入给模型</b>（中英文均注入），与内置规则分属两层：内置规则管安全、工具与唤醒协议，人设管「你是谁」；人设文件中自定义的规矩同样生效。</li>
+                  <li><b>人设</b>：编辑 persona.md（角色人设），支持极简标签与自由人设。系统规则已内置融入底座，人设由系统动态注入并保持沉浸感。</li>
                   <li><b>JSON 进阶</b>：直接编辑 config.json 全文，适合批量修改或引用新字段。</li>
                   <li><b>方案</b>：把当前整套配置存为命名方案，可套用或回退；参数完全相同的配置会自动识别、不重复新增；方案存于管理端，更换浏览器不丢失。</li>
                   <li><b>指令速查</b>（页签右侧按钮）：聊天中可发送的全部 <code>/</code> 指令与解释。</li>
@@ -2010,7 +1978,7 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
               <DocSection title="保存规则总览：哪些项点顶部「保存」即可，哪些卡片需自行保存一次">
                 <ul>
                   <li><b>点顶部「保存」（写入整份 config.json）：</b>常用设置中的全部字段——模型与厂商、NapCat 地址与路径、允许与拒绝名单、唤醒与潜水、发送节奏、上下文与轮换、主动闲聊、等待、打字等待、表情包参数、静默群聊、投递与回合、好友申请、Word 额度，以及「工具与规则」中的工具开关与工具 schema 精简。</li>
-                  <li><b>卡片自行写盘、无需点顶部保存：</b>人设（persona.md，点「保存人设」）、发言规则（speech-rules.md，点「保存发言规则」）、群聊活跃时段（点「保存这个」，写入桥的 state/activity-windows.json，不是 config.json）、NapCat 鉴权令牌（写入 NapCat 配置并重启 NapCat）、表情包导入（写入表情库并重启桥）、「保存并重启」（先代执行一次顶部保存，再重启 DSH 与桥）。</li>
+                  <li><b>卡片自行写盘、无需点顶部保存：</b>人设（persona.md，点「保存人设」）、群聊活跃时段（点「保存这个」，写入桥的 state/activity-windows.json，不是 config.json）、NapCat 鉴权令牌（写入 NapCat 配置并重启 NapCat）、表情包导入（写入表情库并重启桥）、「保存并重启」（先代执行一次顶部保存，再重启 DSH 与桥）。</li>
                   <li><b>会一并写入 config.json 的两个按钮：</b>「活跃时段 → 添加群」（把群加入允许名单）与「活跃时段 → 关闭静默，恢复群聊响应」（关闭 deepsleep）；两者立即写盘，无需再点顶部保存。</li>
                   <li><b>配置方案页签：</b>点「存为新方案」只写方案文件；点「套用」写整份 config.json（等同一次全局保存）。</li>
                 </ul>

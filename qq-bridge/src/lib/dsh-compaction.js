@@ -53,17 +53,40 @@ const MIN_THRESHOLD_RATIO = 0.08;
 /** 缺省阈值比例（2026-09-22 第四次重算的最省值，见上面 ④）。 */
 const DEFAULT_THRESHOLD_RATIO = 0.16;
 
+/**
+ * 2026-10-27：根据人设提示词长度动态建模求解最优压缩阈值
+ * @param {number} personaChars - 当前生效的人设+发言规则字符总数
+ * @returns {number} thresholdRatio (0.12 ~ 0.28)
+ */
+export function solveOptimalCompactionByPersona(personaChars = 0) {
+  const chars = Math.max(0, Number(personaChars) || 0);
+  const personaTokens = Math.ceil(chars * 0.55);
+  // 固定开销模型（全功能保留工具）：工具~12,500 token + 系统~1,200 token + 生成~4,096 token
+  const baseOverhead = 12500 + 1200 + 4096;
+  const totalFixed = baseOverhead + personaTokens;
+  const W = 131072;
+  // 人设越大，自注意力预算越需要保护，阈值向下微调触发更平稳的修剪；人设精简则放宽以增加缓存命中
+  const dynamicRatio = Math.max(0.12, Math.min(0.28, (totalFixed + (W - totalFixed) * 0.14) / W));
+  return Math.round(dynamicRatio * 1000) / 1000;
+}
+
 /** 把任意配置值夹成合法的压缩策略（纯函数；返回值即可直接生成 YAML 的那组数字） */
-export function normalizeCompaction(raw) {
+export function normalizeCompaction(raw, options = {}) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const notes = [];
   const num = (v, d) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : d;
   };
+  
+  // 支持根据当前人设提示词自动求解最优压缩阈值
+  const defaultRatio = (options.personaChars != null)
+    ? solveOptimalCompactionByPersona(options.personaChars)
+    : DEFAULT_THRESHOLD_RATIO;
+
   // 阈值比例：0.08 ~ 0.5（>0.5 等于没治理；<0.08 会被固定开销顶穿 → 每一步都压缩，见上面的四次实测）
-  let thresholdRatio = Math.min(0.5, Math.max(MIN_THRESHOLD_RATIO, num(src.thresholdRatio, DEFAULT_THRESHOLD_RATIO)));
-  if (thresholdRatio !== num(src.thresholdRatio, DEFAULT_THRESHOLD_RATIO)) {
+  let thresholdRatio = Math.min(0.5, Math.max(MIN_THRESHOLD_RATIO, num(src.thresholdRatio, defaultRatio)));
+  if (thresholdRatio !== num(src.thresholdRatio, defaultRatio)) {
     notes.push(`thresholdRatio 被夹到 ${thresholdRatio}（低于 ${MIN_THRESHOLD_RATIO} 会被固定开销顶穿 → 每一步都压缩，只会更慢更贵）`);
   }
   // 逐字保留比例：必须在 (0, thresholdRatio) 开区间内 —— DSH 加载期会校验 retainRatio < thresholdRatio

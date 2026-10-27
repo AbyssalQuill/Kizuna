@@ -81,8 +81,14 @@ export async function renderMarkdownToImage(markdown, options = {}) {
   const htmlContent = buildServerRenderedHtml(markdown, title, width);
   fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
 
+  // 动态自适应超长图所需视口高度（彻底消除 3600px 限制，自适应长图）
+  const lineCount = (markdown.match(/\n/g) || []).length + 1;
+  const codeBlocks = Math.floor((markdown.match(/```/g) || []).length / 2);
+  const mathBlocks = Math.floor((markdown.match(/\$\$/g) || []).length / 2);
+  const estimatedHeight = Math.max(3600, Math.min(32000, Math.ceil(lineCount * 38 + codeBlocks * 220 + mathBlocks * 120 + 1600)));
+
   try {
-    // 1. 无头浏览器截图（2x 超高清视网膜渲染）
+    // 1. 无头浏览器截图（2x 超高清视网膜渲染，动态高度支持长图）
     execFileSync(chrome, [
       '--headless=new',
       '--no-sandbox',
@@ -90,11 +96,11 @@ export async function renderMarkdownToImage(markdown, options = {}) {
       '--disable-dev-shm-usage',
       '--hide-scrollbars',
       '--force-device-scale-factor=2',
-      '--window-size=' + width + ',3600',
-      '--virtual-time-budget=3000',
+      '--window-size=' + width + ',' + estimatedHeight,
+      '--virtual-time-budget=3500',
       '--screenshot=' + tmpRawPng,
       tmpHtml
-    ], { timeout: 40000, stdio: 'ignore' });
+    ], { timeout: 60000, stdio: 'ignore' });
 
     // 2. 用 Python Pillow 精确探测底部边界并裁剪
     let finW = width * 2;
@@ -108,12 +114,13 @@ export async function renderMarkdownToImage(markdown, options = {}) {
         'im = Image.open(raw_path).convert("RGB")',
         'w, h = im.size',
         'bottom_y = h - 1',
-        'for y in range(h - 1, 0, -2):',
+        'step = 4 if h > 4000 else 2',
+        'for y in range(h - 1, 0, -step):',
         '    row = [im.getpixel((x, y)) for x in range(0, w, 4)]',
-        '    if any((p[0] < 248 or p[1] < 248 or p[2] < 248) for p in row):',
+        '    if any((p[0] < 246 or p[1] < 246 or p[2] < 246) for p in row):',
         '        bottom_y = y',
         '        break',
-        'crop_bottom = min(h, bottom_y + 44)',
+        'crop_bottom = min(h, bottom_y + 48)',
         'im.crop((0, 0, w, crop_bottom)).save(out_path, "PNG")',
         'print("%dx%d" % (w, crop_bottom))'
       ].join('\n');
@@ -255,15 +262,12 @@ function buildServerRenderedHtml(markdown, title, width) {
     return [
       '<div class="code-card">',
       '  <div class="code-header">',
-      '    <span class="code-lang">' + escapeHtml(cleanLang || 'text') + '</span>',
-      '    <div class="code-actions">',
-      '      <span class="code-action-btn">',
-      '        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>复制',
-      '      </span>',
-      '      <span class="code-action-btn">',
-      '        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>下载',
-      '      </span>',
+      '    <div class="code-window-controls">',
+      '      <span class="mac-dot mac-dot-red"></span>',
+      '      <span class="mac-dot mac-dot-yellow"></span>',
+      '      <span class="mac-dot mac-dot-green"></span>',
       '    </div>',
+      '    <span class="code-badge">' + escapeHtml(cleanLang.toUpperCase() || 'CODE') + '</span>',
       '  </div>',
       '  <pre class="language-' + escapeHtml(cleanLang) + '"><code class="language-' + escapeHtml(cleanLang) + '">' + highlighted + '</code></pre>',
       '</div>'
@@ -305,64 +309,68 @@ function buildServerRenderedHtml(markdown, title, width) {
   ].join('\n');
 }
 
-// ── 视觉样式（对齐 DeepSeek 网页端浅色主题） ──
+// ── 视觉样式（现代高颜值排版：Mac风格代码块、精致KaTeX、现代斑马纹表格） ──
 function CSS_BODY(width) {
   return [
     '    * { box-sizing: border-box; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }',
     '    html, body { background: #ffffff; }',
     '    body {',
-    '      margin: 0; padding: 0; color: #0f1115;',
-    '      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;',
-    '      font-size: 15px; line-height: 1.75; letter-spacing: 0.01em;',
+    '      margin: 0; padding: 0; color: #0f172a;',
+    '      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;',
+    '      font-size: 15px; line-height: 1.8; letter-spacing: 0.015em;',
     '      display: flex; justify-content: center; width: ' + width + 'px;',
     '    }',
-    '    #container { width: 100%; padding: 32px 40px 36px 40px; background: #ffffff; }',
-    '    .main-title { font-size: 22px; font-weight: 700; color: #0f1115; margin: 0 0 20px 0; line-height: 1.45; letter-spacing: 0; }',
-    '    h1 { font-size: 23px; font-weight: 700; color: #0f1115; margin: 26px 0 14px; line-height: 1.45; }',
-    '    h2 { font-size: 19px; font-weight: 700; color: #0f1115; margin: 24px 0 12px; line-height: 1.5; }',
-    '    h3 { font-size: 16px; font-weight: 700; color: #0f1115; margin: 20px 0 10px; line-height: 1.55; }',
+    '    #container { width: 100%; padding: 36px 44px 42px 44px; background: #ffffff; }',
+    '    .main-title { font-size: 24px; font-weight: 700; color: #0f172a; margin: 0 0 20px 0; padding-bottom: 12px; border-bottom: 2px solid #e2e8f0; line-height: 1.4; letter-spacing: -0.01em; }',
+    '    h1 { font-size: 22px; font-weight: 700; color: #1e293b; margin: 28px 0 14px; line-height: 1.45; }',
+    '    h2 { font-size: 18px; font-weight: 700; color: #1e293b; margin: 24px 0 12px; line-height: 1.5; }',
+    '    h3 { font-size: 16px; font-weight: 600; color: #334155; margin: 20px 0 10px; line-height: 1.55; }',
     '    p { margin: 10px 0; }',
     '',
-    '    /* ── 代码卡片：单一浅灰底、无描边（DeepSeek 网页端） ── */',
-    '    .code-card { margin: 16px 0 18px; border-radius: 10px; background: #f9fafb; border: none; overflow: hidden; }',
-    '    .code-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 2px 16px; min-height: 28px; background: transparent; }',
-    '    .code-lang { font-size: 12px; color: #6a6e72; font-family: Consolas, "SF Mono", "JetBrains Mono", Menlo, monospace; letter-spacing: 0; }',
-    '    .code-actions { display: flex; gap: 14px; align-items: center; color: #9b9ea2; font-size: 12px; }',
-    '    .code-action-btn { display: inline-flex; align-items: center; gap: 4px; }',
-    '    .code-action-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }',
-    '    pre { margin: 0 !important; padding: 8px 16px 18px 16px !important; overflow: visible;',
-    '      font-family: Consolas, "SF Mono", "Fira Code", "JetBrains Mono", Menlo, monospace !important;',
-    '      font-size: 13.5px !important; line-height: 1.72 !important; color: #383a42 !important; background: transparent !important; white-space: pre-wrap; word-break: break-word; }',
-    '    code { font-family: Consolas, "SF Mono", "Fira Code", "JetBrains Mono", Menlo, monospace; }',
-    '    :not(pre) > code { background: #ebeef2; border: none; border-radius: 4px; padding: 1px 5px; font-size: 13px; color: #4a4c51; }',
+    '    /* ── 代码卡片：Mac 经典三色圆点 + 语言徽章 + 柔和边框 ── */',
+    '    .code-card { margin: 18px 0 20px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }',
+    '    .code-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; min-height: 32px; }',
+    '    .code-window-controls { display: flex; gap: 6px; align-items: center; }',
+    '    .mac-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }',
+    '    .mac-dot-red { background: #ff5f56; }',
+    '    .mac-dot-yellow { background: #ffbd2e; }',
+    '    .mac-dot-green { background: #27c93f; }',
+    '    .code-badge { font-size: 11px; font-weight: 600; color: #475569; background: #e2e8f0; padding: 2px 8px; border-radius: 4px; font-family: Consolas, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.04em; }',
+    '    pre { margin: 0 !important; padding: 12px 16px 18px 16px !important; overflow: visible;',
+    '      font-family: Consolas, "JetBrains Mono", "Fira Code", Menlo, monospace !important;',
+    '      font-size: 13.5px !important; line-height: 1.72 !important; color: #334155 !important; background: transparent !important; white-space: pre-wrap; word-break: break-word; }',
+    '    code { font-family: Consolas, "JetBrains Mono", "Fira Code", Menlo, monospace; }',
+    '    :not(pre) > code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #0f172a; font-weight: 500; }',
     '',
-    '    /* ── 语法高亮：DeepSeek 网页端同款（Atom One Light 变体） ── */',
-    '    .token.comment, .token.prolog, .token.doctype, .token.cdata { color: #a0a1a7 !important; font-style: italic; }',
-    '    .token.punctuation { color: #383a42 !important; }',
-    '    .token.property, .token.tag, .token.constant, .token.symbol, .token.deleted, .token.number, .token.boolean { color: #986801 !important; }',
-    '    .token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: #50a14f !important; }',
-    '    .token.operator, .token.entity, .token.url { color: #383a42 !important; }',
-    '    .token.atrule, .token.attr-value, .token.keyword { color: #a626a4 !important; font-weight: 400; }',
-    '    .token.function, .token.class-name { color: #4078f2 !important; font-weight: 400; }',
-    '    .token.regex, .token.important, .token.variable { color: #e45649 !important; }',
+    '    /* ── 语法高亮：现代高对比度配色 ── */',
+    '    .token.comment, .token.prolog, .token.doctype, .token.cdata { color: #94a3b8 !important; font-style: italic; }',
+    '    .token.punctuation { color: #475569 !important; }',
+    '    .token.property, .token.tag, .token.constant, .token.symbol, .token.deleted, .token.number, .token.boolean { color: #d97706 !important; }',
+    '    .token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: #16a34a !important; }',
+    '    .token.operator, .token.entity, .token.url { color: #475569 !important; }',
+    '    .token.atrule, .token.attr-value, .token.keyword { color: #7c3aed !important; font-weight: 600; }',
+    '    .token.function, .token.class-name { color: #2563eb !important; font-weight: 600; }',
+    '    .token.regex, .token.important, .token.variable { color: #dc2626 !important; }',
     '    .token.italic { font-style: italic; } .token.bold { font-weight: 700; }',
     '',
-    '    /* ── KaTeX 公式排版：数学字体必须真正加载，否则上下标会错位重叠 ── */',
-    '    .katex { font-size: 1.06em; color: #0f1115; }',
-    '    .katex-display { margin: 14px 0 !important; text-align: center; overflow: visible; }',
+    '    /* ── KaTeX 公式排版：微底衬托，舒适外边距 ── */',
+    '    .katex { font-size: 1.08em; color: #0f172a; }',
+    '    .katex-display { margin: 16px 0 !important; padding: 12px 16px; background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 8px; text-align: center; overflow: visible; }',
     '    .katex-display > .katex { white-space: normal; }',
-    '    .katex .boxed { padding: 0.34em 0.5em; border-width: 1px; border-color: #3f4550; }',
+    '    .katex .boxed { padding: 0.34em 0.5em; border-width: 1px; border-color: #3b82f6; }',
     '',
     '    /* ── 表格 / 引用 / 列表 ── */',
-    '    table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }',
-    '    th, td { border: 1px solid #e6e8ec; padding: 8px 12px; text-align: left; vertical-align: top; }',
-    '    th { background: #f7f8fa; font-weight: 600; color: #0f1115; }',
-    '    tbody tr:nth-child(even) { background: #fbfcfd; }',
-    '    blockquote { margin: 14px 0; padding: 2px 0 2px 14px; border-left: 2px solid #d5d8de; color: #4a4c51; }',
-    '    ul, ol { padding-left: 22px; margin: 10px 0; }',
-    '    li { margin: 3px 0; }',
-    '    hr { border: none; border-top: 1px solid #e6e8ec; margin: 22px 0; }',
-    '    a { color: #4078f2; text-decoration: none; }',
-    '    strong { font-weight: 600; }'
+    '    table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 18px 0; font-size: 14px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }',
+    '    th, td { padding: 10px 14px; text-align: left; vertical-align: top; }',
+    '    th { background: #f1f5f9; font-weight: 600; color: #1e293b; border-bottom: 1px solid #e2e8f0; }',
+    '    td { border-bottom: 1px solid #f1f5f9; color: #334155; }',
+    '    tbody tr:last-child td { border-bottom: none; }',
+    '    tbody tr:nth-child(even) { background: #f8fafc; }',
+    '    blockquote { margin: 16px 0; padding: 12px 18px; border-left: 4px solid #3b82f6; background: #f0f7ff; border-radius: 0 8px 8px 0; color: #1e3a8a; }',
+    '    ul, ol { padding-left: 22px; margin: 12px 0; color: #334155; }',
+    '    li { margin: 4px 0; }',
+    '    hr { border: none; border-top: 1px dashed #cbd5e1; margin: 26px 0; }',
+    '    a { color: #2563eb; text-decoration: none; font-weight: 500; }',
+    '    strong { font-weight: 600; color: #0f172a; }'
   ].join('\n');
 }

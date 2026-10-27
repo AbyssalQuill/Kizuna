@@ -632,6 +632,48 @@ async function main() {
         saveSocialState();
         log(`[recall] 对方撤回消息已标记 ${key} ${msgId}（${marked} 条）`);
       }
+
+      // ── 2026-10-27：智能判断撤回的消息能不能回、值不值得回 ──
+      const recalledMsg = Array.isArray(stR.recentMessages)
+        ? stR.recentMessages.find((m) => m && String(m.messageId || '') === msgId)
+        : null;
+      if (recalledMsg) {
+        const text = String(recalledMsg.text || recalledMsg.plain || '').trim();
+        const senderId = String(event.user_id || recalledMsg.userId || '');
+        const isSelf = recalledMsg.isSelf || senderId === String(event.self_id);
+        const isAdminRecall = event.operator_id && String(event.operator_id) !== senderId;
+        const isOwner = senderId === String(cfg.ownerQQ || '');
+        const isCommand = /^[/#!\.、。]/.test(text) || /(签到|打卡|clock in|sign in)/i.test(text);
+
+        // 纠错重发检测：看该用户在撤回前后的 6 秒内是否紧接着发了新消息（Typo Correction 自我纠错）
+        const now = Date.now();
+        const hasFollowup = (stR.recentMessages || []).some((m) =>
+          !m.isSelf && !m.recalled && String(m.userId) === senderId && (now - (Number(m.time) || 0) < 6000)
+        );
+
+        const shouldReply = Boolean(
+          !isSelf &&
+          !isAdminRecall &&
+          !isCommand &&
+          !hasFollowup &&
+          text.length >= 2 &&
+          (isOwner || key.startsWith('private:') || Math.random() < 0.35)
+        );
+
+        if (shouldReply) {
+          log(`[recall] 智能判定撤回值得回复: key=${key}, text="${text.slice(0, 30)}", isOwner=${isOwner}`);
+          stR._lastRecallEvent = {
+            text,
+            isOwner,
+            senderName: recalledMsg.sender || senderId,
+            time: fmtBeijing(Date.now())
+          };
+          saveSocialState();
+          scheduleWake(key, 'recall');
+        } else {
+          log(`[recall] 智能判定撤回不值得或不应回复: text="${text.slice(0, 20)}", self=${isSelf}, admin=${isAdminRecall}, typo=${hasFollowup}`);
+        }
+      }
     } catch (error) { log('处理撤回事件出错:', error?.message ?? error); }
   });
   // 好友请求：自动审批（deny 黑名单拒绝，其余同意）；开关 autoFriendApproval 可关

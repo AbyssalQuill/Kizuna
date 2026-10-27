@@ -20,8 +20,8 @@ export const COMPOSE_BEGIN = '      # === qq-bridge persona/rules BEGIN ===';
 export const COMPOSE_END = '      # === qq-bridge persona/rules END ===';
 /** preset 的 text: |- 块内缩进（6 空格），插入的每一行都必须带同样缩进，否则 YAML 会散架 */
 const INDENT = '      ';
-const NO_PERSONA_LINE = '(主人还没有上传人设：不要扮演任何角色，也不要自己编一个；就做那个说话直接、有判断、不谄媚的助手。)';
-const NO_RULES_LINE = '(主人还没有写发言规则：按 [WHO YOU ARE] 分层里第 3 层说的那样打字——没有被注入的发言规则时，按系统提示词里那份兜底的打字方式说话。)';
+const NO_PERSONA_LINE = '(尚未指定专属人设：扮演自然、松弛、真诚的通用伴侣与朋友，严禁以机械客服腔说话。)';
+const NO_RULES_LINE = '(遵循通用拟人打字规则：单气泡自然生活口语，绝不机械套用模板。)';
 
 function indentBlock(text, fallbackLine) {
   const body = String(text || '').replace(/\r\n/g, '\n').trim();
@@ -29,15 +29,15 @@ function indentBlock(text, fallbackLine) {
   return lines.map((l) => (l.trim() ? INDENT + l.replace(/\s+$/, '') : ''));
 }
 
-/** 生成带标记的那段（缩进已就位） */
+/** 生成带标记的那段（缩进已就位）。遵照动态人设架构：不再将庞大人设注入预设，仅保留动态读取工具指引 */
 export function buildOverrideBlock({ persona = '', speechRules = '' } = {}) {
+  const line = persona
+    ? `${INDENT}call_tool_qq_load_persona_for_character`
+    : `${INDENT}${NO_PERSONA_LINE}`;
   return [
     COMPOSE_BEGIN,
     `${INDENT}[PERSONA]`,
-    ...indentBlock(persona, NO_PERSONA_LINE),
-    '',
-    `${INDENT}[SPEECH RULES]`,
-    ...indentBlock(speechRules, NO_RULES_LINE),
+    line,
     COMPOSE_END,
   ].join('\n');
 }
@@ -69,22 +69,21 @@ export function stripOverrideBlock(text) {
   return src.slice(0, cutFrom) + src.slice(ei + COMPOSE_END.length);
 }
 
-/** 读桥目录下的 persona.md / speech-rules.md（读不到当空，绝不抛） */
+/** 读桥目录下的 persona.md（读不到当空，绝不抛） */
 export function readOverrideFiles(root) {
   const read = (name) => {
     try { return fs.readFileSync(path.join(root, name), 'utf8').replace(/^\uFEFF/, ''); } catch { return ''; }
   };
-  return { persona: read('persona.md'), speechRules: read('speech-rules.md') };
+  return { persona: read('persona.md'), speechRules: '' };
 }
 
-/** 人设 / 发言规则的"版本号"：每个文件 mtimeMs:size，`|` 分隔。
- *  【必须与 core/wake-send.js::runtimeOverrideStamp() 的格式逐字一致】——那边用它判断
- *  "唤醒正文里的那份是不是已经过时了"，这边用它记下"preset 里合成的是哪一版"。 */
+/** 人设的"版本号"：persona.md 的 mtimeMs:size，`|` 分隔。
+ *  【必须与 core/wake-send.js::runtimeOverrideStamp() 的格式逐字一致】 */
 export function overrideStampOf(root) {
   const one = (name) => {
     try { const s = fs.statSync(path.join(root, name)); return `${s.mtimeMs}:${s.size}`; } catch { return ''; }
   };
-  return `${one('persona.md')}|${one('speech-rules.md')}`;
+  return `${one('persona.md')}|`;
 }
 
 /** 当前**已合成进 preset**的人设/发言规则版本号（每次 syncPresetOverrides 时更新，含"内容没变"的情况）。

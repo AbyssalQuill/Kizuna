@@ -1124,6 +1124,21 @@ registerTool(
 
 // ── default模式（default）工具 ─────────────────────────────────────────
 registerTool(
+  'qq_load_persona',
+  'Read full character persona, personality traits, and speech specifications from persona.md (read-only). Call this in-turn to dynamically load and boost character persona weights on demand without bloating long-term conversation history.',
+  {},
+  async () => {
+    try {
+      const personaFile = path.join(ROOT, 'persona.md');
+      const text = fs.existsSync(personaFile) ? fs.readFileSync(personaFile, 'utf8') : '';
+      return { content: [{ type: 'text', text: `【persona_load】\n${text}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读取人设失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+registerTool(
   'qq_get_prompt',
   'View the current default-mode simulation prompt (read-only): role, recommended values, available tools, wake config.',
   { key: z.string().describe('Session key: group:ID or private:QQ'), token: z.string().describe('Session token (from wake prompt)') },

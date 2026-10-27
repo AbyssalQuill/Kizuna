@@ -486,9 +486,9 @@ function resolveNightlyEnabled(live) {
   return cfgRef?.slang?.enabled !== false;
 }
 
-/** 实时窗口提取开关：仅当 learning-config slang.liveWindowExtract===true 才开；读失败按 false（停用实时，省额度）。 */
+/** 实时黑话学习功能已关闭（停用实时，省额度） */
 function resolveLiveWindowExtract(live) {
-  return live.ok ? live.data?.slang?.liveWindowExtract === true : false;
+  return false;
 }
 
 /** 定时时刻：HH:MM → 北京当日分钟；缺省/非法 → 0（00:00）。 */

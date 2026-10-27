@@ -56,6 +56,12 @@ const SAFE_PREFIXES = [
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
+  // 【2026-10-26 主人授权：自己用的，接入放行】
+  //   antigravity（agy CLI）每轮自己的工具动作都靠 agy_tool 回放。不放行时模型每步都吃
+  //   "不在白名单"，还会把整轮带偏（实测 21:19 那轮两次 run_command 被拒后只输出文字、
+  //   没调发送工具 → QQ 收不到）。放行后 agy 侧 run_command 会真实执行，
+  //   这份白名单也就不再是本机执行的隔离边界 —— 仅限主人本机使用。
+  'agy_tool',
   // 【2026-09-28】宿主的 `web_search` **曾经**在这里放行过（那时 preset 的 `tool-web.search` 会被
   //   桥按 ModSearch 的装配结果改写）。同日去掉 ModSearch 后，`lib/dsh-side.js` 的 syncPresetToolWeb
   //   把 `tool-web` 的 `search` 钉成 false（宿主 `web_search` 根本不注册），这一条随之删掉 ——

@@ -990,6 +990,38 @@ export function scheduleWake(key, reason) {
     return;
   }
 
+  // ── 2026-10-27：连续打字防抢话与合并连贯思考（Burst Typing Debounce & Fusion） ──
+  // 当用户在快速打字连发（连续多句间隔 < 2.5s 或 peerTypingUntil 处于活动状态）时：
+  // 坚决不停留在单句即时抢跑，而是留出 1200ms 的防抖缓冲，停一停等对方把整段话说完，将两段或多段合并送入思考！
+  const lastUnreadTime = Array.isArray(st.unread) && st.unread.length >= 1
+    ? (Number(st.unread[st.unread.length - 1]?.time) || 0)
+    : 0;
+  const isBurstTyping = Boolean(
+    (st.peerTypingUntil && st.peerTypingUntil > Date.now()) ||
+    (lastUnreadTime > 0 && Date.now() - lastUnreadTime < 2500)
+  );
+
+  if (isBurstTyping && (!st._burstDebounceStart || Date.now() - st._burstDebounceStart < 3500)) {
+    st._burstDebounceStart = st._burstDebounceStart || Date.now();
+    if (st.pendingWakeTimer) clearTimeout(st.pendingWakeTimer);
+    const burstDelayMs = 1200;
+    st.pendingWakeTimer = setTimeout(() => {
+      st.pendingWakeTimer = null;
+      st._burstDebounceStart = 0;
+      log(`[typing] ${key} 连续打字停歇防抖结束，合并多段连贯执行投递`);
+      const sidNow = state.sessions[key];
+      const running = Boolean(sidNow && (TurnStartAt.has(sidNow) || collectors.has(sidNow)));
+      if (running && typeof steerSender === 'function') {
+        void steerSender(key, reason, { force: false, allowDefer: false });
+      } else {
+        void dispatchWake(key, reason).catch((err) => log(`[default] 计划唤醒异常 ${key}:`, err?.message ?? err));
+      }
+    }, burstDelayMs);
+    log(`[typing] ${key} 检测到对方连续打字连发中，防抖等待 ${burstDelayMs}ms（等打完并合并两段连贯思考）`);
+    return;
+  }
+  st._burstDebounceStart = 0;
+
   // 思考中即时注入（需求：在思考的过程中，如果又发了一条，还能看见，而不必再次收尾和唤醒，也不是合并为窗口）：
   // 如果会话当前正有真实的 DSH 模型回合在跑（TurnStartAt 或 collectors 标记在跑）：
   // 绝不等待合并窗、不排队，立即将新未读 steer 进在途回合，让模型在当前思考中直接看见并一并处理！

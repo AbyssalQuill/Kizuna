@@ -962,7 +962,18 @@ function startIsolatedDsh(cfgIso) {
       const nodeFlags = /bin\.js$/i.test(dshBin) ? ['--expose-internals'] : [];
       const dshArgs = [...nodeFlags, dshBin, '--profile', cfgIso.profile, '--port', String(cfgIso.port), '--no-open', '--trusted-host', `127.0.0.1:${cfgIso.port}`, '--trusted-host', `localhost:${cfgIso.port}`];
       const dshOpts = {
-        env: { ...process.env, DSH_HOME: home, ...loadCredentialEnv(home) },
+        /* 2026-10-26：Gemini 的 OpenAI 兼容端点要过本机代理，而 Node 的全局 fetch 只有
+         * NODE_USE_ENV_PROXY=1 时才认 HTTPS_PROXY。管理端自身环境里没有这些变量，这里补默认值；
+         * 环境里已有就以环境为准。 */
+        env: {
+          ...process.env,
+          DSH_HOME: home,
+          HTTPS_PROXY: process.env.HTTPS_PROXY || 'http://127.0.0.1:7890',
+          HTTP_PROXY: process.env.HTTP_PROXY || 'http://127.0.0.1:7890',
+          NO_PROXY: process.env.NO_PROXY || '127.0.0.1,localhost',
+          NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY || '1',
+          ...loadCredentialEnv(home),
+        },
         cwd: dirname(dshBin) || undefined,
       };
       const child = await spawnWithLogFile(process.execPath, dshArgs, dshOpts, logFile);
@@ -9392,6 +9403,8 @@ function personaLibraryEntry(uid) {
       : null;
     return {
       nickname: String(it.nickname ?? '') || null,
+      affinity: (String(uid) === '1736784911') ? 100 : (Number(it.affinity) >= 0 ? Math.min(100, Math.round(Number(it.affinity))) : (Number(it.samples) > 0 ? Math.min(85, 30 + Math.floor(Number(it.samples) / 5)) : 25)),
+      oneSentenceSummary: String(it.oneSentenceSummary || it.summary || '') || null,
       addressTerms: String(it.addressTerms ?? ''),
       profile: String(it.profile ?? '') || null,
       personality: String(it.personality ?? '') || null,

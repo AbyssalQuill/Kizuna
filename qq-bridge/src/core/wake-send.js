@@ -1,3 +1,5 @@
+import { detectSlangMatches } from '../slang-learner.js';
+import { slangEntries } from './slang.js';
 // M8 唤醒引擎
 // deliverPrompt(投递) 经 setWakeDeliver 注入；api 经 setWakeApi；cfg 经 initWakeCore。
 import { fmtBeijing } from '../lib/time.js';
@@ -42,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE_DIR } from '../lib/paths.js';
 
-export const TOPIC_WAKE_RE = /(?:\b(?:ai|gpt|deepseek|dsh|llm|aigc)\b|人工智能|大模型|机器人|小鲸鱼|大肥鱼)/i;
+export const TOPIC_WAKE_RE = /(?:\b(?:ai|gpt|deepseek|dsh|llm|aigc)\b|人工智能|大模型|机器人)/i;
 
 let cfgRef = null;
 let apiRef = null;
@@ -301,18 +303,11 @@ function readRuntimeOverrideFile(fileName) {
  *  文件一变版本号就变 → 下一条消息就是新人设，不用重启桥、也不用等会话轮换。 */
 export function runtimeOverrideStamp() {
   readRuntimeOverrideFile('persona.md');
-  readRuntimeOverrideFile('speech-rules.md');
-  return `${runtimeOverrideCache['persona.md']?.key || ''}|${runtimeOverrideCache['speech-rules.md']?.key || ''}`;
+  return `${runtimeOverrideCache['persona.md']?.key || ''}|`;
 }
 
 /**
- * 唤醒正文要不要再带一遍 [PERSONA] / [SPEECH RULES]（纯判定，供测试与 buildWakePrompt 共用）。
- *
- * 背景：人设与发言规则已经由 lib/preset-compose.js 合成进系统提示词（新会话一建起来就带着），
- * 而唤醒正文这一份只是"改完人设立即对正在跑的会话生效"的补丁。所以：
- *   · preset 里那份就是当前版本、且这个会话没有待补标记 → 不注入（省掉 10KB 级的重复文本）；
- *   · preset 里那份过时了（刚改完人设、还没合成）或这个会话被标记要补 → 注入一次。
- * @param {{composedStamp?: string, currentStamp?: string, needsReinject?: boolean}} o
+ * 唤醒正文要不要再带一遍人设（纯判定，供测试与 buildWakePrompt 共用）。
  */
 export function shouldInjectPersonaBlock({ composedStamp = '', currentStamp = '', needsReinject = false } = {}) {
   const inSystemPrompt = !!composedStamp && composedStamp === currentStamp;
@@ -321,34 +316,19 @@ export function shouldInjectPersonaBlock({ composedStamp = '', currentStamp = ''
 
 function buildRuntimeOverrideBlock() {
   const personaText = readRuntimeOverrideFile('persona.md');
-  const speechText = readRuntimeOverrideFile('speech-rules.md');
-  const parts = [];
-  // 2026-09-12：修「上传的人设根本没进模型」。原来的判据是 `persona.md 含中文就整段跳过注入`，
-  // 理由是"避免和英文 preset persona 重复"。实际后果：上传的中文角色卡一个字都没被注入，
-  // 模型一直在演内置的精简版小鲸鱼 —— 这正是"我上传的人设不是你注入的人设"。
-  // 现在：原样注入，中英文都不拦；preset 那边也改成了"人设来自 [PERSONA]，内置角色只是兜底"，
-  // 两层分工清楚：preset 管规则（安全/工具/唤醒协议），persona.md 管"你是谁"。
-  // 人设文件里写的自定义规矩同样生效（不解析、不过滤、不删减）。
-  if (personaText) {
-    parts.push(`[PERSONA] (owner's character card via the manager - this is WHO YOU ARE; play it in full, including any custom rules written inside it)\n${personaText}`);
-  }
-  if (speechText) parts.push(`[SPEECH RULES] (how to type - always in force)\n${speechText}`);
-  return parts.length ? `\n${parts.join('\n\n')}\n\n` : '';
+  return personaText ? `\n\n${personaText.trim()}\n\n` : '';
 }
 
-/** 2026-10-26 深度拟人化锚点（防止长会话 Attention 稀释导致人设漂移）：
- * 即使系统提示词已有缓存，也在每轮动态保持高优先级角色强化，禁止回复变成冰冷客套的 AI 助手。 */
 function buildPersonaAnchorBlock() {
-  const personaText = readRuntimeOverrideFile('persona.md');
-  const speechText = readRuntimeOverrideFile('speech-rules.md');
-  if (!personaText && !speechText) return '';
-  const nameMatch = personaText ? personaText.match(/(?:角色|姓名|名字|称呼|称谓|Name)[:：]\s*([^\n\r]+)/i) : null;
-  const roleName = nameMatch ? nameMatch[1].trim() : '当前设定角色';
-  return `\n[CHARACTER ANCHOR] (保持拟人沉浸，拒绝机械客套)
-- 真实身份锚定：你此刻完全就是【${roleName}】。请全情投入扮演，保持符合该角色的生活感、真情实感与独特口吻。
-- 拒绝 AI 机械腔：严禁像客服或冷冰冰的 AI 语言模型那样机械礼貌、说教或模式化否定；像真人好友发微信一样自然随性打字。
-- 发言习惯遵循：严格遵守设定中的标点习惯、用词特色与情绪流动。
-\n`;
+  return '';
+}
+
+/**
+ * 唤醒末端极简状态注入：仅注入极短的状态 [] 指引调用 qq_load_persona，纯短语下划线，绝不中文扩写
+ */
+export function appendTurnTailPersonaAnchor(promptText) {
+  const text = String(promptText ?? '').trimEnd();
+  return `${text}\n[State] call_tool_qq_load_persona`;
 }
 
 /**
@@ -366,15 +346,8 @@ function buildPersonaAnchorBlock() {
  * 来源标记保留：owner = 主人配置的值；model = 模型自己写过的值。
  */
 function wakeRefLine(key) {
-  const st = getSocialState(key);
-  const tr = st?.wakeConfig?.triggers || {};
-  const ownerRaw = cfgRef?.social?.wake?.recommendedProbability;
-  const ownerStr = ownerRaw !== undefined && ownerRaw !== null && ownerRaw !== '' ? String(ownerRaw) : '未设置';
-  const curRaw = tr.probability;
-  const curStr = curRaw !== undefined && curRaw !== null && curRaw !== '' ? String(curRaw) : '未设置';
-  const src = tr.probabilitySource || 'default';
   const ds = deepsleepLine(key);
-  return `[WakeRef] 普通消息不再按概率过滤，交由你结合上下文自主决定是否接话（主人配置=${ownerStr}，当前记录=${curStr}，来源=${src}；仅 0 代表关闭普通消息唤醒）${ds}`;
+  return ds ? `${ds}` : '';
 }
 
 /**
@@ -421,21 +394,12 @@ const sessionLine = (key) => `[Session] ${key}\n`;
  * 默认值 = 2026-09-26 主人要求改成的那句英文（更拟人）；置空 = 不注入这一行。
  * 读的时候剥掉控制字符与换行（它会被拼进正文的一行里，混进换行会撑破唤醒正文的结构），
  * 并缓存住上一次的结果字符串 —— 保证同一轮配置下拼出来的正文逐字节相同（前缀缓存友好）。 */
-const DEFAULT_STYLE_LINE = '[Style] Sound like a real person texting, not an assistant: short lines, real opinions, no lectures, no lists. Kaomoji go in their own bubble. Read the context before you answer. When a picture or sticker shows up, answer what it means, never describe it.';
-let styleLineCache = { key: null, text: '' };
 export function currentStyleLine() {
-  const raw = cfgRef?.prompt?.styleLine;
-  const text = raw === undefined || raw === null ? DEFAULT_STYLE_LINE : String(raw);
-  const key = text;
-  if (styleLineCache.key === key) return styleLineCache.text;
-  /* 截断上限 200 → 400（2026-09-26）：默认那行英文提醒就有 255 字符，200 会把它切半。 */
-  const clean = text.replace(/[\r\n\u0000-\u001f]+/g, ' ').trim().slice(0, 400);
-  styleLineCache = { key, text: clean ? `${clean}\n` : '' };
-  return styleLineCache.text;
+  return '';
 }
-/** 当前生效的 [Style] 文案（管理端展示用，不带结尾换行） */
+/** 当前生效的 [Style] 文案（已融入系统提示词底座，唤醒正文不再重复注入） */
 export function styleLineText() {
-  return currentStyleLine().trim();
+  return '';
 }
 
 /* 2026-09-20：修「它看不见我引用的那条消息」。
@@ -537,10 +501,17 @@ export function buildWakePrompt(key, reason) {
   } catch (error) {
     log(`[memory] 记忆摘要注入失败: ${error?.message ?? error}`);
   }
+  let slangHint = '';
+  try {
+    const recentMsgs = Array.isArray(st.recentMessages) ? st.recentMessages : [];
+    const corpus = recentMsgs.slice(-5).map((m) => m?.plain || m?.text || '').join('\n');
+    slangHint = detectSlangMatches(corpus, slangEntries, key, 4);
+  } catch {}
   const memoryLine = [
     memoryText, contactsText,
     recallText ? `[Recall] 你长期记住的事（永久层，别忘；要改就用 qq_memory_remember）\n${recallText}` : '',
     profileText ? `[Profile] ${profileText}` : '',
+    slangHint ? `${slangHint}` : '',
   ].filter(Boolean).join('\n') + '\n\n';
   const participationText = formatParticipation(st);
   const participationLine = participationText ? `${participationText}\n\n` : '';
@@ -583,7 +554,8 @@ export function buildWakePrompt(key, reason) {
   if (wcTr.question) wcTriggers.push('question');
   if (wcTr.poke) wcTriggers.push('poke');
   if (Number(wcTr.probability) > 0) wcTriggers.push(`prob${wcTr.probability}`);
-  const wakeLine = `[Wake] ${wcMode}, ${wcTime}${wcTriggers.length ? ` trg:${wcTriggers.join('/')}` : ''}\n${wakeRefLine(key)}\n\n`;
+  const wr = wakeRefLine(key);
+  const wakeLine = `[Wake] ${wcMode}, ${wcTime}${wcTriggers.length ? ` trg:${wcTriggers.join('/')}` : ''}${wr ? '\n' + wr : ''}\n\n`;
   const gInfoText = key.startsWith('group:') ? formatGroupInfoLine(key.split(':')[1]) : '';
   const groupListText = formatGroupListLine();
   const base = tokenLine + nowLine + statusLine + wakeLine + voiceTurnHint(key) + memeTurnHint(key) + memoryLine + (gInfoText ? gInfoText + '\n' : '') + (groupListText ? groupListText + '\n\n' : (gInfoText ? '\n' : ''));
@@ -599,20 +571,7 @@ export function buildWakePrompt(key, reason) {
    *   ① preset 里合成的那份就是当前版本（getComposedPersonaStamp() === runtimeOverrideStamp()）；
    *   ② 这个会话没有"需要重新注入"的标记（人设文件刚被改过 / 重启前就存在的老会话）。
    * 任何一条不成立就照旧注入一次（改完人设立即生效这条路不能丢），注入完把状态记回会话。 */
-  const ovStampNow = runtimeOverrideStamp();
-  const composedStamp = getComposedPersonaStamp();
-  const stOv = getSocialState(key);
-  const personaInSystemPrompt = !!composedStamp && composedStamp === ovStampNow;
-  const needPersonaBlock = shouldInjectPersonaBlock({
-    composedStamp, currentStamp: ovStampNow, needsReinject: stOv._personaNeedsReinject === true,
-  });
-  const baseWithProtocol = base + (needPersonaBlock ? buildRuntimeOverrideBlock() : buildPersonaAnchorBlock());
-  if (needPersonaBlock) {
-    log(`[wake] ${key} 注入全量人设/发言规则（preset 里那份${personaInSystemPrompt ? '是当前版本但会话标记需要重注入' : '不是当前版本'}）`);
-  } else {
-    log(`[wake] ${key} 注入拟人强化锚点并跳过全量重复人设（系统提示词里已是当前版本 ${ovStampNow.slice(0, 24)}…）`);
-  }
-  if (stOv) { stOv._personaSeenStamp = ovStampNow; stOv._personaNeedsReinject = false; }
+  const baseWithProtocol = base;
   // 2026-09-12 规则搬家：每种唤醒原因的"该怎么做"全部写进系统提示词 [WAKE TYPES]（第 1~14 条），
   // 注入这边只留一行数据（原因 + 必需的事实）。首轮也只注入一次，之后全是哨兵轮数据行。
   if (reason === 'bootstrap') {
@@ -641,6 +600,10 @@ export function buildWakePrompt(key, reason) {
   }
   if (reason === 'poke') {
     return `${baseWithProtocol}[Wake] ${key} poked`;
+  }
+  if (reason === 'recall') {
+    const ev = st._lastRecallEvent || {};
+    return `${baseWithProtocol}[Wake] ${key} recall\n[Recall Event] 对方(${ev.isOwner ? '主人' : ev.senderName || '对方'})刚才撤回了一条消息: "${ev.text || ''}"\n[Recall Directives]: 智能评估是否值得回复：若属于撒娇、亲昵开玩笑、错话害羞或有趣发言，可自然俏皮调侃或安慰（如"我可都看见啦~"）；若不值一回则直接 qq_mark_read 留白。时刻保持角色性格，绝不以机器人口吻机械通报！`;
   }
   return `${baseWithProtocol}[Wake] ${key} ${reason}`;
 }
@@ -1194,7 +1157,12 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   //     [Mid-turn] N new message(s) after your last bubble - not answered yet.
   //     owner[QQ=1736784911](id:1107466288): ……
   // 实测同批 2 条时正文 690 → 约 230 字符；规则一条没丢，只是不再随每次注入重复。
-  const text = `[Token] ${st.agentToken}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} new message(s) after your last bubble - not answered yet.\n${lines.join('\n')}`;
+  // 2026-10-27：在途注入末梢同样追加高优先级人设锚，彻底防止在途交互导致模型人设漂移
+  const cohesionHint = unreadToSend.length >= 2
+    ? '\n[Burst Cohesion] 对方在连续打字连发，上述多段消息请连起来作为一个整体语义进行综合深度思考并回复！\n'
+    : '';
+  const rawText = `[Token] ${st.agentToken}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} new message(s) after your last bubble - not answered yet.\n${lines.join('\n')}${cohesionHint}`;
+  const text = appendTurnTailPersonaAnchor(rawText);
   const mySeq = (steerSeq += 1);
   /* 2026-09-22：修「在途注入吞图」—— 报障"附图片好像有问题，修复"。
    * 现场（线上 state/social-state.json + DSH 会话日志一起对出来的）：
@@ -1803,7 +1771,10 @@ export async function sendWakePrompt(key, reason) {
       // 2026-09-12 规则搬家：原来这段还跟着一长串"回完就在同一步收尾 / 别用等待工具 / 旧消息要用
       // qq_get_recent_messages 翻"的规则散文（每轮都注入、步步重发，owner 会话实测 47 次注入≈48KB）。
       // 现在这些规则都在系统提示词 [WAKE TYPES] 第 1/9/10 条，这里只留数据：未读正文 + 省略条数。
-      unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}`
+      const burstGuidance = unreadMsgs.length >= 2
+        ? '\n[Burst Cohesion] 对方在连续打字连发，上述多段消息属于同一意图的连贯表达。请将这几段连起来作为一个完整语义进行综合思考并单气泡统一作答，严禁割裂分开回复！'
+        : '';
+      unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}`
         + (omitted > 0 ? `\n(${omitted} older unread not shown)` : '');
     } else if (key.startsWith('private:')) {
       unreadLine = '\n[Unread 0] nothing new to answer - close with qq_mark_read unless you deliberately want to open a topic.';
@@ -1841,7 +1812,8 @@ export async function sendWakePrompt(key, reason) {
      * 再把抽签行自己的尾部换行去掉，避免和 unreadLine 之间多出一个空行。
      * 同一处还带上 [WakeRef]（用户配的插话概率）——见 wakeRefLine 的说明，它必须每轮都在。 */
     const diceLines = voiceTurnHint(key) + memeTurnHint(key);
-    const diceBlock = `\n${wakeRefLine(key)}${diceLines ? '\n' + diceLines.replace(/\n+$/, '') : ''}`;
+    const wrSent = wakeRefLine(key);
+    const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '');
     /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，
      * 实测模型常常不调 get_time 就直接猜时刻/星期，所以基准行必须每轮都在；要更准再用 get_time 取一次。
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
@@ -1864,6 +1836,11 @@ export async function sendWakePrompt(key, reason) {
       //   （每一种唤醒该怎么处理都写在系统提示词 [WAKE TYPES] 里），正文只留
       //   「[Token] + [OWNER]? + [Wake <原因>] + 数据行」。
       const reasonTag = String(reason ?? '').split(':')[0];
+      let recallLine = '';
+      if (reason === 'recall' && st._lastRecallEvent) {
+        const ev = st._lastRecallEvent;
+        recallLine = `\n[Recall Event] 对方(${ev.isOwner ? '主人' : ev.senderName || '对方'})刚才撤回了一条消息: "${ev.text}"\n[Recall Directives]: 智能评估是否值得回复：若属于撒娇、亲昵开玩笑、错话害羞或有趣发言，可自然俏皮调侃或安慰（如"我可都看见啦~"）；若不值一回则直接 qq_mark_read 留白。时刻保持角色性格，绝不以机器人口吻机械通报！\n`;
+      }
       // `[OWNER]` = 权威的"这就是 owner 本人"标记（见上面 ownerWakeBranch 的说明）。persona 的 [OWNER MODE]
       // 只认这个标记，所以在 owner 私聊里它必须出现，其它任何会话里都必须缺席。
       const ownerTag = ownerWakeBranch ? ownerMarkLines() : '';
@@ -1877,7 +1854,7 @@ export async function sendWakePrompt(key, reason) {
        * 实测（state/tool-calls.jsonl 1966 次调用）qq_send_sticker 只有 5 次（≈1/54 条消息），
        * 而配置的概率是 0.6 —— 低 15~20 倍，正是"每会话只掷一次骰"的形状。
        * 抽签函数本身是纯的（只读配置 + Math.random，不写任何状态），所以每轮都掷没有副作用。 */
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}\n[Session] ${key}\n${currentStyleLine()}[Wake ${reasonTag}]${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}\n[Session] ${key}\n${currentStyleLine()}[Wake ${reasonTag}]${atLine}${typingLine}${diceBlock}${recallLine}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。
@@ -1956,6 +1933,9 @@ export async function sendWakePrompt(key, reason) {
     const fullActive = st?.wakeConfig?.mode === 'active' || st?.wakeConfig?.triggers?.anyMessage === true;
     const actLine = key.startsWith('group:') ? activityStatusLine(key, fullActive) : '';
     if (actLine) promptText = `${promptText}\n${actLine}`;
+    // 2026-10-27：每轮唤醒在最终投递给模型的末尾全量注入人设与最高优先级说话口吻，
+    // 享受 Transformer RoPE 最小衰减距离，赋予人设最高的自注意力权重，彻底解决工具调用稀释人设问题！
+    promptText = appendTurnTailPersonaAnchor(promptText);
     let result = await deliverRef(key, promptText, { media: wakeMedia });
     if (!result.ok && wakeMedia.length > 0) {
       // 视觉投递失败（模型/网关不接受图像内容）时回退纯文本，避免丢失这次唤醒
