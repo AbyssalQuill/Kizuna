@@ -1232,36 +1232,8 @@ export async function pumpMux() {
                 log(`[default] 模型以裸 OK 收尾（本轮无发送工具调用）—— 按"本轮不说话"处理，不记草稿 (${key})`);
                 continue;
               }
-              /* 2026-10-26 主人要求：agy/gemini 这类"只写不调"的模型，真人触发的回合直接兜底发出去。
-               * 判定沿用下面暂存草稿的 lastWakeReason：只有真人触发（private/@/提问/点名/戳/关键词/首次连接）
-               * 才兜底；内部唤醒（回复检查/主动冒泡/概率/睡醒）照旧丢弃，防止把自言自语发进群里。 */
-              const lwFb = String(getSocialState(key)?.lastWakeReason ?? '').split(':')[0];
-              const userTriggeredFb = /^(private|atMention|question|speaker|nameMention|poke|keyword|bootstrap)$/.test(lwFb);
-              if (userTriggeredFb) {
-                try {
-                  log(`[fallback] 模型本轮没调发送工具，按用户触发兜底发正文 (${key})`);
-                  await sendToQQ(key, plain);
-                  appendActivity(`${key} [fallback] 模型未调发送工具，正文已兜底发出：${undelivered.slice(0, 60)}`);
-                  continue;
-                } catch (eFb) { log(`[fallback] 兜底发送失败 (${key}): ${eFb?.message ?? eFb}`); }
-              }
-              log(`[default] 模型正文未通过发送工具发出（不再自动转发）(${key}): ${undelivered.slice(0, 60)}`);
-              appendActivity(`${key} [undelivered] 模型正文未走发送工具（未转发）：${undelivered.slice(0, 80)}`);
-              // 只暂存"用户真实触发"回合的正文：模型可能本想回话却漏调工具 → 下轮给补发提示。
-              // 内部唤醒（回复检查/主动冒泡/概率/睡醒）里模型的正文多为自言自语（如"空唤醒，无新内容"），
-              // 暂存只会污染下轮补发提示，直接丢弃即可（正文本来就不该外发）。
-              try {
-                const lw = String(getSocialState(key)?.lastWakeReason ?? '').split(':')[0];
-                const userTriggered = /^(private|atMention|question|speaker|nameMention|poke|keyword|bootstrap)$/.test(lw);
-                if (userTriggered) {
-                  const stUd = getSocialState(key);
-                  if (!stUd.pendingUndeliveredText || Date.now() - (Number(stUd._undeliveredAt) || 0) > 180000) {
-                    stUd.pendingUndeliveredText = undelivered;
-                    stUd._undeliveredAt = Date.now();
-                    saveSocialState();
-                  }
-                }
-              } catch (eUd) { log(`[default] 暂存未发出正文失败 (${key}): ${eUd?.message ?? eUd}`); }
+              log(`[default] 模型以裸 OK 收尾或发完消息 (${key})`);
+              continue;
             } else if (ended.reason.kind === 'error') {
               const msg = ended.reason.error?.message ?? '未知错误';
               // 推进水位，防止引发错误的毒丸消息在下一轮被反复重放

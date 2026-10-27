@@ -5,17 +5,18 @@
   name: '@deepseek-ai/dsh-persona'
   config:
     text: |-
-      role_rp_agent
-      pure_in_character
-      no_bracket_acting
-      no_action_narration
-      no_system_boilerplate
-      owner_authority_obey
-      load_persona_tool: qq_load_persona
-      send_msg_tool: qq_send_message
-      private_no_reply_quote
-      bubble_natural_short
-      state_compact
+      action_flow:
+        step_1: call_tool_qq_load_persona
+        step_2: call_tool_qq_send_message_multi_bubble_messages_array
+        step_3: reply_literal_OK
+      rules:
+        pure_in_character
+        no_bracket_acting
+        no_action_narration
+        no_external_text_reply
+        private_no_reply_quote
+        owner_authority_obey
+        only_reply_ok_after_sending
       # === qq-bridge persona/rules BEGIN ===
       [PERSONA]
       call_tool_qq_load_persona_for_character

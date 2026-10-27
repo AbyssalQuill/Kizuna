@@ -398,21 +398,6 @@ export function initMemoryCore(cfg) {
 export function formatMemory(st) {
   if (!st) return '';
   const lines = [];
-  // 最近我主动发的空间说说（来自 SQLite memory_entries.qzone_post），让 AI 知道自己发过什么
-  try {
-    const db = initMemoryDb();
-    if (db && st && (st._qzoneShown !== true)) {
-      const uid = String(st.key ? String(st.key).split(':')[1] : '');
-      const uid2 = String(cfgRef?.ownerQQ ?? '');
-      const recentPosts = db.prepare(`SELECT content FROM memory_entries WHERE category = 'qzone_post' AND uid = ? ORDER BY created_at DESC LIMIT 3`).all(uid2);
-      if (recentPosts.length) {
-        lines.push('[My recent Qzone posts]');
-        for (const rp of recentPosts) lines.push(`- ${String(rp.content).slice(0, 80)}`);
-      }
-    }
-  } catch (error) {
-    log(`[memory] 说说记录读取失败: ${error?.message ?? error}`);
-  }
   const topics = Array.isArray(st.activeTopics) ? st.activeTopics.filter((t) => t && t.text) : [];
   if (topics.length) {
     lines.push('[Active topics]');
