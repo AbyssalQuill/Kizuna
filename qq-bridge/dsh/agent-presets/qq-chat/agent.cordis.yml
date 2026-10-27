@@ -8,12 +8,42 @@
       action_flow:
         step_1_load_persona: call_tool_qq_load_persona
         step_2_read_context: inspect_recent_chat_messages_and_speaker_intent
-        step_3_on_demand_tools_if_needed:
-          unknown_slang_or_memes: call_tool_qq_slang_query
-          speaker_profile_or_preferences: call_tool_qq_profile_get
-          durable_memories_or_promises: call_tool_qq_memory_query
-          historical_chat_context_search: call_tool_qq_memory_search
-          new_fact_or_rule_to_store: call_tool_qq_memory_remember
+        step_3_on_demand_mcp_tools:
+          memory_and_cognition:
+            unknown_slang_or_memes: call_tool_qq_slang_query
+            speaker_profile_or_preferences: call_tool_qq_profile_get
+            update_speaker_profile_facts: call_tool_qq_profile_set
+            durable_memories_or_promises: call_tool_qq_memory_query
+            historical_chat_context_search: call_tool_qq_memory_search
+            new_fact_or_rule_to_store: call_tool_qq_memory_remember
+          visual_voice_and_expression:
+            send_meme_or_stickers: call_tool_qq_send_meme_or_qq_send_sticker
+            search_meme_or_stickers: call_tool_qq_meme_search_or_qq_list_stickers
+            collect_favorite_sticker: call_tool_qq_collect_sticker
+            send_qq_face: call_tool_qq_send_qq_face
+            send_voice_or_transcribe: call_tool_qq_send_voice_or_qq_transcribe_voice
+            view_incoming_images: call_tool_qq_get_message_images
+            view_forward_chat: call_tool_qq_get_forward_msg
+            render_markdown_image: call_tool_qq_render_markdown_image
+            send_poke_interaction: call_tool_qq_send_poke
+          social_and_qzone:
+            view_or_post_qzone: call_tool_qq_qzone_view_or_qq_publish_qzone
+            qzone_comment_or_like: call_tool_qq_qzone_comment_or_qq_like
+          utility_media_and_schedule:
+            get_exact_time: call_tool_get_time
+            schedule_future_message: call_tool_qq_schedule_message_or_list_or_cancel
+            search_music: call_tool_qq_music_search
+            search_or_send_pixiv: call_tool_qq_pixiv_search_or_qq_send_pixiv
+            video_parse_or_search: call_tool_qq_video_parse_or_qq_video_search
+            luogu_problem_daily: call_tool_qq_luogu_problem_or_qq_luogu_daily
+            read_or_send_doc_file: call_tool_qq_get_file_content_or_qq_send_docx_or_excel
+          group_and_session_control:
+            get_active_group_members: call_tool_qq_get_active_members
+            get_group_history: call_tool_qq_get_group_history
+            withdraw_sent_message: call_tool_qq_withdraw_message
+            switch_character_persona: call_tool_qq_character_switch_or_qq_character_list
+            change_wake_mode: call_tool_qq_set_wake_config
+            toggle_deepsleep: call_tool_qq_deepsleep
         step_4_internalize_and_prune: adopt_loaded_persona_traits_tone_and_relationship_drop_raw_tool_data
         step_5_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
         step_6_send_messages: call_tool_qq_send_message_with_messages_string_array
