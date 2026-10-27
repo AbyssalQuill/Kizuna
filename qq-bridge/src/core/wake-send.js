@@ -471,13 +471,20 @@ export function buildWakePrompt(key, reason) {
  */
 function formatRecentWindow(st, key, maxCount) {
   let recent = Array.isArray(st.recentMessages) ? st.recentMessages.slice(-maxCount) : [];
+  const resetCutoff = Number(st?._resetAt) || 0;
+  if (resetCutoff > 0) {
+    recent = recent.filter((m) => (Number(m?.time) || 0) > resetCutoff);
+  }
   /* 2026-10-22：窗口不够长就从 chat.db 补齐到 maxCount。
    * 旧注释（2026-09-24）说"窗口就是窗口，缺的让模型自己查"——现场代价是：桥一重启/一轮换，
    * 内存里只剩 5~6 条，模型对着一堆图片和别人的对话瞎接（群聊里"猫娘味儿挺冲的"就是这么来的）。
    * 现在按主人 2026-10-22 的要求：**每轮必须保有充分上下文**，缺的条数由库补齐，但绝不超过 maxCount
    * （上下文成本仍由 contextWindow 这个旋钮控制，不再有隐形缩水）。 */
   if (key) {
-    const fromDb = recentChatMessages(key, maxCount);
+    let fromDb = recentChatMessages(key, maxCount);
+    if (resetCutoff > 0) {
+      fromDb = fromDb.filter((m) => (Number(m?.time) || 0) > resetCutoff);
+    }
     if (fromDb.length) {
       const merged = new Map();
       for (const m of [...fromDb, ...recent]) {
@@ -1211,7 +1218,7 @@ export async function sendWakePrompt(key, reason) {
   // 补入未读/最近窗口，避免进程重启丢消息（read_at 由 qq_mark_read 落库维护）。
   if (key && Array.isArray(st.unread) && st.unread.length === 0) {
     try {
-      const minTs = Number(st.lastAiSeenAt) || 0;
+      const minTs = Math.max(Number(st.lastAiSeenAt) || 0, Number(st._resetAt) || 0);
       const unreadLimit = Math.max(1, Number(cfgRef.social?.context?.unreadLimit) || 30);
       const dbUnread = fetchUnreadChatMessages(key, unreadLimit, minTs);
       if (dbUnread.length) {
@@ -1476,6 +1483,17 @@ export async function sendWakePrompt(key, reason) {
         st.sessionToolCalls = 0;
         wakeConfigMissCount.delete(key);
         st._justAutoReset = true;
+        st.recentMessages = [];
+        st.unread = [];
+        st.turnSeenUnread = [];
+        st.pendingUndeliveredText = '';
+        st._undeliveredAt = 0;
+        st._mediaAttachedSeq = 0;
+        st.activeTopics = [];
+        st.pendingThoughts = [];
+        st._resetAt = Date.now();
+        st.lastAiSeenAt = Math.max(Number(st.lastAiSeenAt) || 0, Date.now());
+        messageMediaStore.delete(key);
         log(`[rotate] ${key} rotateTurns=${count} 已过阈值（${rotateThreshold}），但${sidNow ? '本会话还没注入过完整 prompt' : ' state.sessions 里没有映射会话'} —— 下次投递本来就会新建会话，按"已轮换"处理并把计数归零`);
         saveSocialState();
       } else {
@@ -1507,6 +1525,17 @@ export async function sendWakePrompt(key, reason) {
         st._promptInjected = false; // 下次唤醒重新注入完整 prompt（含最近消息窗口，替代摘要总结）
         st._promptSessionId = state.sessions[key] || null; // 轮换后以新映射为准（standby 或 null=待现建）
         st._justAutoReset = true;   // 首个回合提示 AI：上下文已切换，别重复回复旧消息
+        st.recentMessages = [];
+        st.unread = [];
+        st.turnSeenUnread = [];
+        st.pendingUndeliveredText = '';
+        st._undeliveredAt = 0;
+        st._mediaAttachedSeq = 0;
+        st.activeTopics = [];
+        st.pendingThoughts = [];
+        st._resetAt = Date.now();
+        st.lastAiSeenAt = Math.max(Number(st.lastAiSeenAt) || 0, Date.now());
+        messageMediaStore.delete(key);
       } catch (error) {
         log(`[rotate] ${key} 会话轮换失败（保留现状）: ${error?.message ?? error}`);
       }

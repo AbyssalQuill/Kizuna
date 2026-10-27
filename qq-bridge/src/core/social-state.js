@@ -419,7 +419,8 @@ export function saveSocialState() {
         activeTopics: Array.isArray(st.activeTopics) ? st.activeTopics.slice(-50) : [],
         pendingThoughts: Array.isArray(st.pendingThoughts) ? st.pendingThoughts.slice(-50) : [],
         memberImpressions: st.memberImpressions && typeof st.memberImpressions === 'object' ? st.memberImpressions : {},
-        seenForwardIds: Array.from(seenForwardIds.get(key) || []).slice(-1000)
+        seenForwardIds: Array.from(seenForwardIds.get(key) || []).slice(-1000),
+        _resetAt: Number(st._resetAt) || 0
       };
     }
     atomicWriteJson(SOCIAL_STATE_FILE, obj);
@@ -579,7 +580,8 @@ export function getSocialState(key) {
       _wakeIntendedSeq: 0,   // 桥打算交付的最高 seq（投递看门狗的意图水位，见 sweepUndelivered）
       activeTopics: [],
       pendingThoughts: [],
-      memberImpressions: {}
+      memberImpressions: {},
+      _resetAt: 0
     };
     KNOWN_AGENT_TOKENS.add(st.agentToken);
     social.conversations.set(key, st);
@@ -620,16 +622,30 @@ export function resetConversationKeepingLedger(key) {
   // 清定时器必须发生在 delete 之前（clearSocialTimers 内部按 key 取 st，删了就取不到了）。
   if (prev) clearSocialTimers(canonical);
   social.conversations.delete(canonical);
-  if (!prev) return null;
-  const carried = carryReplyLedger(prev);
-  if (!carried || !carried.carried.length) return null;
+  const carried = prev ? carryReplyLedger(prev) : null;
   // 重建一份干净的会话状态，只把账本写回去（其余 wakeConfig/unread/令牌全部按全新会话走）。
   const st = getSocialState(canonical);
-  Object.assign(st, carried.patch);
+  if (carried?.patch) {
+    Object.assign(st, carried.patch);
+  }
+  // 显式彻底清空桥侧所有内存消息缓存与状态
+  st.recentMessages = [];
+  st.unread = [];
+  st.turnSeenUnread = [];
+  st.pendingUndeliveredText = '';
+  st._undeliveredAt = 0;
+  st._mediaAttachedSeq = 0;
+  st.activeTopics = [];
+  st.pendingThoughts = [];
+  st._resetAt = Date.now();
+  st.lastAiSeenAt = Math.max(Number(st.lastAiSeenAt) || 0, Date.now());
+  st._justAutoReset = true;
+  messageMediaStore.delete(canonical);
   saveSocialState();
-  log(`[reset] ${canonical} 会话已重置，保留已回复账本（${carried.carried.join('、')}）`
+  log(`[reset] ${canonical} 会话已重置，内存消息已清空`
+    + (carried?.carried?.length ? `，保留已回复账本（${carried.carried.join('、')}）` : '')
     + `——重置前后同一批消息不会因为账本丢失被重新唤醒重复回复`);
-  return carried;
+  return carried || { carried: [], patch: {} };
 }
 
 // 从持久化文件加载 social 状态（重启恢复）
@@ -705,7 +721,8 @@ export function loadSocialState() {
               clean[k] = v;
             }
             return clean;
-          })()
+          })(),
+          _resetAt: Number(val._resetAt) || 0
         };
         // 旧状态/异常状态里的指定成员名单也统一归一化，防止"null"/非法值污染。
         if (st.wakeConfig?.triggers && typeof st.wakeConfig.triggers === 'object') {

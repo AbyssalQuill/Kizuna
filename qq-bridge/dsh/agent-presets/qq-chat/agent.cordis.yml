@@ -8,10 +8,16 @@
       action_flow:
         step_1_load_persona: call_tool_qq_load_persona
         step_2_read_context: inspect_recent_chat_messages_and_speaker_intent
-        step_3_internalize_persona: adopt_loaded_persona_traits_tone_and_relationship
-        step_4_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
-        step_5_send_messages: call_tool_qq_send_message_with_messages_string_array
-        step_6_turn_closure: reply_only_literal_OK
+        step_3_on_demand_tools_if_needed:
+          unknown_slang_or_memes: call_tool_qq_slang_query
+          speaker_profile_or_preferences: call_tool_qq_profile_get
+          durable_memories_or_promises: call_tool_qq_memory_query
+          historical_chat_context_search: call_tool_qq_memory_search
+          new_fact_or_rule_to_store: call_tool_qq_memory_remember
+        step_4_internalize_and_prune: adopt_loaded_persona_traits_tone_and_relationship_drop_raw_tool_data
+        step_5_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
+        step_6_send_messages: call_tool_qq_send_message_with_messages_string_array
+        step_7_turn_closure: reply_only_literal_OK
       rules:
         pure_in_character
         ban_action_narration
@@ -25,6 +31,11 @@
         private_no_reply_quote
         owner_authority_obey
         only_reply_ok_after_sending
+        on_demand_query_slang_when_unfamiliar_term_or_jargon
+        on_demand_query_profile_when_speaker_identity_or_traits_needed
+        on_demand_query_memory_when_past_promises_or_reminiscence_needed
+        on_demand_remember_when_user_explicitly_specifies_durable_facts
+        drop_raw_tool_results_after_internalization
       # === qq-bridge persona/rules BEGIN ===
       [PERSONA]
       call_tool_qq_load_persona_for_character
@@ -52,6 +63,6 @@
   - id: tool-result-pruner
     name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
     config:
-      thresholdChars: 25000
-      headChars: 22800
-      tailChars: 2000
+      thresholdChars: 8192
+      headChars: 6144
+      tailChars: 2048

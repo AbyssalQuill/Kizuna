@@ -437,10 +437,10 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     // 2026-09-13 需求：删掉 /help（原来是发《小鲸鱼能力概览》docx）：
     // 该指令不再拦截，会按"其它 /xxx"的通用规则交给模型，由它正常回应。
     if (plainContent === '/reset' || plainContent === '/new') {
+      bumpSessionEpoch();
+      cancelKeyedSends(key); // 取消该会话已入链的旧发送任务，避免重置后旧内容仍发出
       const old = state.sessions[key];
       if (old) {
-        bumpSessionEpoch();
-        cancelKeyedSends(key); // 取消该会话已入链的旧发送任务，避免重置后旧内容仍发出
         delete state.sessions[key];
         reverse.delete(old);
         collectors.delete(old);
@@ -449,39 +449,43 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         TurnStartAt.delete(old);
         toolCallNames.delete(old);
         silentTurnQueue.delete(old);
-        const pe = pending.get(key);
-        if (pe) {
-          clearTimeout(pe.timer);
-          cancelPendingEntry(pe).catch(() => {});
-        }
-        pending.delete(key);
-        queued.delete(key);
-        queuedHintAt.delete(key);
-        sessionPromises.delete(key);
-        drainPromptQueue(key, '会话已重置');
-        messageMediaStore.delete(key);
-        slangWindows.delete(key);
-        slangExtractionCooldowns.delete(key);
-        slangSubmitTimes.delete(key);
-        clearSocialTimers(key);
-        pendingWakeKeys.delete(key);
-        wakeConfigUpdatedKeys.delete(key);
-        markReadCalledKeys.delete(key);
-        wakeConfigMissCount.delete(key);
-        const removed = social.conversations.get(key);
-        if (removed?.agentToken) KNOWN_AGENT_TOKENS.delete(removed.agentToken);
-        // 2026-09-16 /reset · /new 也是 reset 家族：原来直接 delete 会把「已回复账本」
-        // （answeredMessageIds / lastDeliveredSeq / _wakeIntendedSeq / lastUnreadSeq）一起抹掉，
-        // 重置后刚回过的内容可能又被回一遍（真机事故「reset 之后重复回复」）。
-        // 改成"清会话、留账本"，见 social-state.resetConversationKeepingLedger。
-        const carriedCmd = resetConversationKeepingLedger(key);
-        if (!carriedCmd) log(`[reset] ${key} 无账本需要保留（该会话此前没有已回复记录）`);
-        clearSocialTimers(key); // 重建账本会重新装配定时器；本命令语义是"清完等下次唤醒重建"
-        seenForwardIds.delete(key);
-        saveSocialState();
-        saveState();
-        await sendToQQ(key, CMD_ACK);
       }
+      const pe = pending.get(key);
+      if (pe) {
+        clearTimeout(pe.timer);
+        cancelPendingEntry(pe).catch(() => {});
+      }
+      pending.delete(key);
+      queued.delete(key);
+      queuedHintAt.delete(key);
+      sessionPromises.delete(key);
+      drainPromptQueue(key, '会话已重置');
+      messageMediaStore.delete(key);
+      slangWindows.delete(key);
+      slangExtractionCooldowns.delete(key);
+      slangSubmitTimes.delete(key);
+      clearSocialTimers(key);
+      pendingWakeKeys.delete(key);
+      wakeConfigUpdatedKeys.delete(key);
+      markReadCalledKeys.delete(key);
+      wakeConfigMissCount.delete(key);
+      const removed = social.conversations.get(key);
+      if (removed?.agentToken) KNOWN_AGENT_TOKENS.delete(removed.agentToken);
+      // 2026-09-16 /reset · /new 也是 reset 家族：原来直接 delete 会把「已回复账本」
+      // （answeredMessageIds / lastDeliveredSeq / _wakeIntendedSeq / lastUnreadSeq）一起抹掉，
+      // 重置后刚回过的内容可能又被回一遍（真机事故「reset 之后重复回复」）。
+      // 改成"清会话、留账本"，见 social-state.resetConversationKeepingLedger。
+      const carriedCmd = resetConversationKeepingLedger(key);
+      if (!carriedCmd) log(`[reset] ${key} 无账本需要保留（该会话此前没有已回复记录）`);
+      clearSocialTimers(key); // 重建账本会重新装配定时器；本命令语义是"清完等下次唤醒重建"
+      seenForwardIds.delete(key);
+      saveSocialState();
+      saveState();
+      if (old) {
+        try { await apiRef.workspace.archiveSession({ sessionId: old }); } catch {}
+      }
+      log(`会话已重置: ${key}`);
+      await sendToQQ(key, CMD_ACK);
       return;
     }
     if (plainContent === '/status') {

@@ -1126,7 +1126,10 @@ registerTool(
 registerTool(
   'qq_load_persona',
   'Read full character persona, personality traits, and speech specifications from persona.md (read-only). Call this in-turn to dynamically load and boost character persona weights on demand without bloating long-term conversation history.',
-  {},
+  {
+    token: z.string().optional().describe('Optional session token'),
+    key: z.string().optional().describe('Optional session key')
+  },
   async () => {
     try {
       const personaFile = path.join(ROOT, 'persona.md');

@@ -5674,18 +5674,22 @@ export function startConsoleServer() {
       // ── 清除上下文 / 清空工作区 ──────────────────────────────────────────
       if (req.method === 'POST' && url.pathname === '/api/session/reset') {
         const body = await readBody();
-        const key = String(body.key ?? '');
-        if (!key || !state.sessions[key]) { sendJson({ ok: false, error: '会话不存在' }, 404); return; }
+        const rawKey = String(body.key ?? '');
+        const key = canonicalKey(rawKey) || rawKey;
+        if (!key || (!state.sessions[key] && !social.conversations.has(key))) { sendJson({ ok: false, error: '会话不存在' }, 404); return; }
         bumpSessionEpoch();
         cancelKeyedSends(key); // 取消该会话已入链的旧发送任务
         const oldSessionId = state.sessions[key];
-        delete state.sessions[key];
-        reverse.delete(oldSessionId);
-        collectors.delete(oldSessionId);
-        sendToolSucceededSessions.delete(oldSessionId);
-        pendingSendToolCalls.delete(oldSessionId);
-        TurnStartAt.delete(oldSessionId);
-        toolCallNames.delete(oldSessionId);
+        if (oldSessionId) {
+          delete state.sessions[key];
+          reverse.delete(oldSessionId);
+          collectors.delete(oldSessionId);
+          sendToolSucceededSessions.delete(oldSessionId);
+          pendingSendToolCalls.delete(oldSessionId);
+          TurnStartAt.delete(oldSessionId);
+          toolCallNames.delete(oldSessionId);
+          silentTurnQueue.delete(oldSessionId);
+        }
         const pe = pending.get(key);
         if (pe) {
           clearTimeout(pe.timer);
@@ -5697,7 +5701,6 @@ export function startConsoleServer() {
         sessionPromises.delete(key);
         drainPromptQueue(key, '会话已重置');
         messageMediaStore.delete(key);
-        silentTurnQueue.delete(oldSessionId);
         slangWindows.delete(key);
         slangExtractionCooldowns.delete(key);
         slangSubmitTimes.delete(key);
@@ -5716,9 +5719,11 @@ export function startConsoleServer() {
         seenForwardIds.delete(key);
         saveSocialState();
         saveState();
-        try { await apiRef.workspace.archiveSession({ sessionId: oldSessionId }); } catch {}
-        log(`控制台：已清除会话上下文 ${key}（旧会话 ${oldSessionId} 已归档）`);
-        sendJson({ ok: true, key, archived: oldSessionId });
+        if (oldSessionId) {
+          try { await apiRef.workspace.archiveSession({ sessionId: oldSessionId }); } catch {}
+        }
+        log(`控制台：已清除会话上下文 ${key}` + (oldSessionId ? `（旧会话 ${oldSessionId} 已归档）` : ''));
+        sendJson({ ok: true, key, archived: oldSessionId || null });
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/workspace/reset') {
