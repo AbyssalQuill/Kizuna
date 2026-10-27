@@ -35,7 +35,7 @@ const resBlocked = guardFn({
   name: 'mcp__napcat__qq_send_message',
   agent: { session: { id: testSess } }
 });
-assert.ok(resBlocked && resBlocked.includes('必须严格执行 step_1，先调用 qq_load_persona'), '未读人设直接发消息被物理硬门禁拦截');
+assert.ok(resBlocked && resBlocked.includes('qq_load_persona'), '未读人设直接发消息被物理硬门禁拦截');
 
 // 压缩代理下的直接发消息同样被拦截
 const resBlockedInvoke = guardFn({
@@ -43,7 +43,7 @@ const resBlockedInvoke = guardFn({
   arguments: { tool_name: 'qq_send_message' },
   agent: { session: { id: testSess } }
 });
-assert.ok(resBlockedInvoke && resBlockedInvoke.includes('必须严格执行 step_1，先调用 qq_load_persona'), '压缩代理下未读人设同样被拦截');
+assert.ok(resBlockedInvoke && resBlockedInvoke.includes('qq_load_persona'), '压缩代理下未读人设同样被拦截');
 console.log('PASS: 开局未读人设硬门禁拦截测试通过');
 
 console.log('=== 校验 3：调用 qq_load_persona 后发消息顺利放行 ===');
@@ -79,5 +79,38 @@ const resSchedule = guardFn({
 });
 assert.ok(resSchedule && resSchedule.includes('交流闭环已达成！禁止继续调用多余工具'), '发完消息后调用定时任务被收敛拦截');
 console.log('PASS: 发消息后收敛门禁测试通过');
+
+console.log('=== 校验 5：每轮硬开局——新回合必须重新读人设才能再次发言 ===');
+// 当前 loadedAt <= sentAt（因为上次发消息更新了 sentAt）
+const resSecondTurnBlocked = guardFn({
+  name: 'mcp__napcat__qq_send_message',
+  agent: { session: { id: testSess } }
+});
+assert.ok(resSecondTurnBlocked && resSecondTurnBlocked.includes('qq_load_persona'), '新一轮未经重新读人设直接发言被拦截');
+
+// 新一轮重新读人设后即可发言
+guardFn({
+  name: 'mcp__napcat__qq_load_persona',
+  agent: { session: { id: testSess } }
+});
+const resSecondTurnAllowed = guardFn({
+  name: 'mcp__napcat__qq_send_message',
+  agent: { session: { id: testSess } }
+});
+assert.equal(resSecondTurnAllowed, undefined, '重新读人设后顺利发言');
+console.log('PASS: 每轮硬开局人设循环校验通过');
+
+console.log('=== 校验 6：后台学习任务工具直接豁免 ===');
+const resCorpus = guardFn({
+  name: 'mcp__napcat-host__qq_learning_corpus',
+  arguments: { limit: 100 }
+});
+assert.equal(resCorpus, undefined, '学习语料工具直接豁免放行');
+const resSubmit = guardFn({
+  name: 'mcp__napcat-host__qq_learning_submit',
+  arguments: { uid: '123456' }
+});
+assert.equal(resSubmit, undefined, '学习提交工具直接豁免放行');
+console.log('PASS: 学习任务工具豁免校验通过');
 
 console.log('>>> 全部 Tool Restrict Guard 门禁测试 100% 通过！');

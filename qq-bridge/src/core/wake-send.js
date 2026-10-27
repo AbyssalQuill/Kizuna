@@ -328,7 +328,7 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Call qq_send_message (multi-bubble messages array, pure spoken text, strictly NO bracket/action narration). Step 3: Reply literal "OK" to complete turn immediately without calling extra tools.`;
+  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Compose natural bubbles. Call qq_send_message (multi-bubble messages array, pure spoken text, strictly NO bracket/action narration). If meme/voice requested or dice HIT, also call qq_send_meme/qq_send_sticker/qq_send_voice. Step 3: Reply literal "OK" to complete turn immediately without calling extra tools.`;
 }
 
 /**
@@ -1711,7 +1711,16 @@ export async function sendWakePrompt(key, reason) {
      * 同一处还带上 [WakeRef]（用户配的插话概率）——见 wakeRefLine 的说明，它必须每轮都在。 */
     const diceLines = voiceTurnHint(key) + memeTurnHint(key);
     const wrSent = wakeRefLine(key);
-    const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '');
+    const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
+    let explicitMeme = '';
+    if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll) || /贴贴/i.test(unreadTextAll)) {
+      explicitMeme = '\n[Meme Directive] 对方明确期待表情交互，本轮请务必附带一张贴合语境的表情（调用 qq_send_meme / qq_send_sticker / qq_send_qq_face）！\n';
+    }
+    let explicitVoice = '';
+    if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(unreadTextAll)) {
+      explicitVoice = '\n[Voice Directive] 对方期待语音交流，本轮请调用 qq_send_voice 发送语音消息！\n';
+    }
+    const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
     /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，
      * 实测模型常常不调 get_time 就直接猜时刻/星期，所以基准行必须每轮都在；要更准再用 get_time 取一次。
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"

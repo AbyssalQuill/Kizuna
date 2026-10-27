@@ -142,7 +142,7 @@ export async function ensurePersonaLearnerSession() {
     try { await apiRef.workspace.rename({ workspaceId: wsValue.workspace.workspaceId, title: workspaceTitle }); } catch {}
   }
   const params = { workspaceId: wsValue.workspace.workspaceId };
-  const preset = cfgRef?.persona?.learnerPreset || cfgRef?.agentPreset || undefined;
+  const preset = cfgRef?.persona?.learnerPreset || undefined;
   if (preset) params.agentPreset = preset;
   const value = unwrap(await apiRef.sessions.create(params), 'persona session.create');
   personaLearnerSessionId = value.sessionId;

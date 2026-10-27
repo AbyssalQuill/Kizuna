@@ -79,7 +79,12 @@ export function apply(ctx) {
       return `"${innerName}" 是会话鉴权 Token 参数，不是工具名！请直接在工具参数内传 token 字段，禁止作为工具调用。`;
     }
 
-    // ② 白名单检查
+    // ② 后台学习任务工具豁免（离线分析与画像抽取无须遵循群聊会话流程）
+    if (/qq_learning_/.test(effectiveName) || /qq_learning_/.test(name)) {
+      return;
+    }
+
+    // ③ 白名单检查
     if (!SAFE_EXACT.has(name) && !SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
       return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`;
     }
@@ -89,24 +94,24 @@ export function apply(ctx) {
     const isSendTool = effectiveName === 'qq_send_message' || name.endsWith('__qq_send_message') ||
                        effectiveName === 'qq_send_voice' || name.endsWith('__qq_send_voice');
 
-    // ③ 记录人设加载标记
+    // ④ 记录人设加载标记
     if (isLoadPersona) {
       sessionLoadedPersona.set(sessId, Date.now());
       return; // 允许加载人设
     }
 
-    // ④ 物理硬门禁：发言前必须已调用 qq_load_persona
+    // ⑤ 物理硬门禁：每轮硬开局发言前必须已调用 qq_load_persona（loadedAt 必须大于上一次发送的 sentAt）
     if (isSendTool) {
       const loadedAt = sessionLoadedPersona.get(sessId) || 0;
-      // 未加载或超过 15 分钟失效时打回
-      if (!loadedAt || (Date.now() - loadedAt > 15 * 60 * 1000)) {
-        return '协议违规：在发送任何消息之前，必须严格执行 step_1，先调用 qq_load_persona 读取角色设定！请立即调用 qq_load_persona。';
+      const sentAt = sessionSentMessage.get(sessId) || 0;
+      if (!loadedAt || loadedAt <= sentAt) {
+        return '协议违规：每轮硬开局必须先执行 step_1，调用 qq_load_persona 读取角色设定！本轮尚未调用 qq_load_persona，禁止发送。请立即调用 qq_load_persona。';
       }
       sessionSentMessage.set(sessId, Date.now());
       return;
     }
 
-    // ⑤ 发言后防狂乱收敛：本轮已经调用过发言后，严禁继续盲调空间、定时、无目的搜图等无关工具
+    // ⑥ 发言后防狂乱收敛：本轮已经调用过发言后，严禁继续盲调空间、定时、无目的搜图等无关工具
     const sentAt = sessionSentMessage.get(sessId) || 0;
     if (sentAt && (Date.now() - sentAt < 30 * 1000)) {
       const isPostChatUnrelated = /^(qq_qzone_|qq_publish_qzone|qq_schedule_|qq_image_search)/.test(effectiveName);

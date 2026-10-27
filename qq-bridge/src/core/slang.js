@@ -137,7 +137,7 @@ export async function ensureSlangLearnerSession() {
     try { await apiRef.workspace.rename({ workspaceId: wsValue.workspace.workspaceId, title: workspaceTitle }); } catch {}
   }
   const params = { workspaceId: wsValue.workspace.workspaceId };
-  const preset = cfgRef.slang?.learnerPreset || cfgRef.agentPreset || undefined;
+  const preset = cfgRef?.slang?.learnerPreset || undefined;
   if (preset) params.agentPreset = preset;
   const value = unwrap(await apiRef.sessions.create(params), 'slang session.create');
   slangLearnerSessionId = value.sessionId;
