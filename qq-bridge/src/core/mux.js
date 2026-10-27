@@ -106,7 +106,7 @@ import {
   touchTurnTotalTimer,
   setTurnGuardApi, TURN_TIMEOUT_MS, TURN_TOTAL_TIMEOUT_MS,
 } from './turn-guard.js';
-import { pruneSessionEphemeralRecord } from './turn-pruner.js';
+import { pruneSessionEphemeralRecord, pruneSessionSchemaRecords, isSchemaToolName } from './turn-pruner.js';
 import {
   collectors, TurnStartAt, pendingWakeKeys, sessionPromises, promptQueues,
   agentRunningSessions,
@@ -119,6 +119,9 @@ import {
 } from './session-state.js';
 /* 2026-09-20："漏引号"的工具调用：原始参数串按 callId 暂存，等它真失败后由桥兜底发送。 */
 const unquotedArgsByCall = new Map();
+
+/* 2026-10-27：会话内单一 Schema 机制。一整个会话只允许存在一个有效 schema 调用；再次调用时自动去除上一次记录。 */
+const sessionSchemaHistory = new Map(); // sessionId -> { callId, tool, at }
 
 /* ── 2026-09-21：mcp-compressor 代理模式：把包装工具还原成真实工具名 ──────────────
  * 代理打开时，DSH 看到的工具表只有 `<server>_invoke_tool` 与 `<server>_get_tool_schema`
@@ -449,6 +452,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         TurnStartAt.delete(old);
         toolCallNames.delete(old);
         silentTurnQueue.delete(old);
+        sessionSchemaHistory.delete(old);
       }
       const pe = pending.get(key);
       if (pe) {
@@ -887,6 +891,15 @@ export async function pumpMux() {
               }
               nameMap.set(String(callId), toolName);
             }
+            // 2026-10-27 会话内单一 Schema 守卫：一整个对话只允许存在一个调用 schema，再次调用自动去除上一次调用记录
+            if (isSchemaToolName(rawToolName) || isSchemaToolName(toolName)) {
+              const prev = sessionSchemaHistory.get(frame.sessionId);
+              if (prev && prev.callId !== String(callId)) {
+                log(`[schema-guard] 会话 ${frame.sessionId} 检测到再次调用 schema (新callId=${callId}, 前次callId=${prev.callId})，自动去除上一次调用记录`);
+                void pruneSessionSchemaRecords(frame.sessionId, callId);
+              }
+              sessionSchemaHistory.set(frame.sessionId, { callId: String(callId), tool: rawToolName, at: Date.now() });
+            }
             touchTurnTotalTimer(frame.sessionId); // 工具开始执行：续期回合总时长，防长工具/长等待误判卡死
           }
           if (frame.event.type === 'tool/result') {
@@ -924,6 +937,11 @@ export async function pumpMux() {
                   sendToolSucceededSessions.add(frame.sessionId);
                 }
               }
+            }
+            // 2026-10-27 会话内单一 Schema 结果守卫：新结果到达后联动剔除前序旧 schema
+            const rawResultTool = String(frame.event.data?.name ?? frame.event.data?.message?.source?.name ?? '');
+            if (isSchemaToolName(toolName) || isSchemaToolName(rawResultTool)) {
+              void pruneSessionSchemaRecords(frame.sessionId, callId);
             }
             touchTurnTotalTimer(frame.sessionId); // 工具结果到达：回合仍活跃
           }
