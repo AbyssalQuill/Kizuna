@@ -634,18 +634,26 @@ const MISSING_ARG_HINT = '缺 token：唤醒正文第一行就是 `[Token] <值>
          * 模型手上一直有确切答案；所以这里缺 key 直接拒绝并指回那一行，绝不猜。
          * 只缺 token 仍然照旧补齐（token 不决定发到哪个会话，补错最多是鉴权失败，不会误导目标）。 */
         if (missingKey) {
-          console.error(`[napcat-safe] ${name} 缺 key，按新规矩拒绝（不猜会话）`);
-          return {
-            content: [{
-              type: 'text',
-              text: '缺 key。唤醒正文第一行区域有一行 `[Session] group:<群号>` 或 `[Session] private:<QQ>` —— '
-                + '把那一行里的值照抄进 key 即可（例如 [Session] group:123456 → key="group:123456"）。'
-                + '不要凭记忆或用别的会话的 key：桥以前会替你猜目标会话，结果把图片发到过别的群，所以现在缺 key 一律拒绝。'
-            }],
-            isError: true
-          };
+          // 若当前唯一在途会话确切，安全自动补齐 key 和 token，避免模型因漏传 key 导致发送失败与二次重复调用
+          const got = await resolveMissingSession(null);
+          if (got && !got.error && got.key) {
+            callArgs.key = got.key;
+            if (!callArgs.token && got.token) callArgs.token = got.token;
+            console.error(`[napcat-safe] ${name} 缺 key，已按唯一在途会话安全自动补齐: ${callArgs.key}`);
+          } else {
+            console.error(`[napcat-safe] ${name} 缺 key，且无唯一在途会话（${got?.error || got?.reason || '多个会话或无活跃会话'}），拒绝`);
+            return {
+              content: [{
+                type: 'text',
+                text: '缺 key。唤醒正文第一行区域有一行 `[Session] group:<群号>` 或 `[Session] private:<QQ>` —— '
+                  + '把那一行里的值照抄进 key 即可（例如 [Session] group:123456 → key="group:123456"）。'
+                  + '不要凭记忆或用别的会话的 key：桥以前会替你猜目标会话，结果把图片发到过别的群，所以现在缺 key 一律拒绝。'
+              }],
+              isError: true
+            };
+          }
         }
-        if (missingToken) {
+        if (missingToken && !callArgs.token) {
           const got = await resolveMissingSession(String(callArgs.key ?? ''));
           if (got && !got.error && got.token) {
             callArgs.token = got.token;

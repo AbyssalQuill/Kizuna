@@ -50,6 +50,8 @@ const SAFE_EXACT = new Set([
 // 会话人设加载与发言状态记录（基于 sessionId）
 export const sessionLoadedPersona = new Map();
 export const sessionSentMessage = new Map();
+export const sessionLoadedCount = new Map();
+export const sessionSentCount = new Map();
 
 export function apply(ctx) {
   // 1) 隐藏危险全局工具
@@ -90,6 +92,9 @@ export function apply(ctx) {
     }
 
     const sessId = String(exec.agent?.session?.id || 'default');
+    if (!sessionLoadedPersona.has(sessId)) sessionLoadedCount.delete(sessId);
+    if (!sessionSentMessage.has(sessId)) sessionSentCount.delete(sessId);
+
     const isLoadPersona = effectiveName === 'qq_load_persona' || name.endsWith('__qq_load_persona');
     const isSendTool = effectiveName === 'qq_send_message' || name.endsWith('__qq_send_message') ||
                        effectiveName === 'qq_send_voice' || name.endsWith('__qq_send_voice');
@@ -97,16 +102,18 @@ export function apply(ctx) {
     // ④ 记录人设加载标记
     if (isLoadPersona) {
       sessionLoadedPersona.set(sessId, Date.now());
+      sessionLoadedCount.set(sessId, (sessionLoadedCount.get(sessId) || 0) + 1);
       return; // 允许加载人设
     }
 
-    // ⑤ 物理硬门禁：每轮硬开局发言前必须已调用 qq_load_persona（loadedAt 必须大于上一次发送的 sentAt）
+    // ⑤ 物理硬门禁：每轮硬开局发言前必须已调用 qq_load_persona（loadedCount > sentCount）
     if (isSendTool) {
-      const loadedAt = sessionLoadedPersona.get(sessId) || 0;
-      const sentAt = sessionSentMessage.get(sessId) || 0;
-      if (!loadedAt || loadedAt <= sentAt) {
+      const loaded = sessionLoadedCount.get(sessId) || 0;
+      const sent = sessionSentCount.get(sessId) || 0;
+      if (loaded <= sent) {
         return '协议违规：每轮硬开局必须先执行 step_1，调用 qq_load_persona 读取角色设定！本轮尚未调用 qq_load_persona，禁止发送。请立即调用 qq_load_persona。';
       }
+      sessionSentCount.set(sessId, sent + 1);
       sessionSentMessage.set(sessId, Date.now());
       return;
     }

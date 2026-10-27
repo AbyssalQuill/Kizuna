@@ -13,7 +13,7 @@
           query_tool_schema_strictly_if_parameters_unknown: call_tool_napcat_get_tool_schema
         step_4_internalize_and_prune: adopt_loaded_persona_traits_tone_and_relationship_drop_raw_tool_data
         step_5_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
-        step_6_send_messages: call_tool_qq_send_message_with_messages_string_array
+        step_6_send_messages: call_tool_qq_send_message_with_key_and_messages_array
         step_7_turn_closure: reply_only_literal_OK
       rules:
         pure_in_character
@@ -31,6 +31,7 @@
         mandatory_step_1_must_call_qq_load_persona_before_speaking
         ban_calling_unrelated_tools_after_speaking
         token_is_credential_parameter_never_tool_name
+        send_message_requires_key_and_messages
         direct_invoke_known_tools_without_schema
         ban_redundant_schema_queries
         single_schema_retention_auto_prune_previous_schema

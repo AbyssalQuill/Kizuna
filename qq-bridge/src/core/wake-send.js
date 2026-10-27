@@ -328,7 +328,7 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Compose natural bubbles. Call qq_send_message (multi-bubble messages array, pure spoken text, strictly NO bracket/action narration). If meme/voice requested or dice HIT, also call qq_send_meme/qq_send_sticker/qq_send_voice. Step 3: Reply literal "OK" to complete turn immediately without calling extra tools.`;
+  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Compose natural bubbles. Call qq_send_message(key, messages=[...]) (pass key from Session line, multi-bubble messages array, pure spoken text, strictly NO bracket/action narration). If meme/voice requested or dice HIT, also call qq_send_meme/qq_send_sticker/qq_send_voice. Step 3: Reply literal "OK" to complete turn immediately without calling extra tools.`;
 }
 
 /**
@@ -378,7 +378,7 @@ function deepsleepLine(key) {
  * 猜错的根源是"模型手上没有确切的 key"：正文里只有 [Token]，key 得靠记忆/推断。
  * 现在把 key 直接写进正文（`[Session] group:123` / `private:123`，约 25 字符、稳定前缀、缓存读计价），
  * 同时工具层改成永不猜 key：缺 key 就报错并指回这一行。模型照抄即可，不再有猜错的机会。 */
-const sessionLine = (key) => `[Session] ${key}\n`;
+const sessionLine = (key) => `[Session (Param: key)] ${key}\n`;
 
 /* 2026-09-20 反馈「精简提示词之后人机味更重了」→ 每轮正文给一句语感提醒。
  * 现场证据（机器人真发出去的话，取自会话日志）：
