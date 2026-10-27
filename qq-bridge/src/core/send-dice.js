@@ -70,7 +70,7 @@ export function memeTurnHint(key) {
   if (!c.enabled) return '';
   const { p, cooling, hit } = dice('meme', key, c.probability, c.cooldownMs);
   if (hit) {
-    return `[Meme] dice HIT (p=${p}): Please attach ONE expressive sticker/meme matching your current mood/persona! Call qq_send_meme(query="傲娇/得意/摸头/无语/偷笑/害羞/委屈/叹气"), qq_send_sticker, or qq_send_qq_face to convey genuine emotion naturally. Never describe the sticker, just send it with your chat.\n`;
+    return `[Meme] dice HIT (p=${p}): Please attach ONE cute gallery meme! Call qq_send_meme(key, token, query="傲娇/开心/睡觉/害羞/委屈/摸头/得意/无语") to express genuine emotion (strictly use qq_send_meme for gallery images, ban default yellow-face qq_send_sticker). Never describe the sticker, just send it with your chat.\n`;
   }
   return '';
 }

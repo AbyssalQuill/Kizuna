@@ -9,7 +9,8 @@ assert.strictEqual(cleanQuery, '蓝鱼吃白米饭开心');
 console.log('PASS: 文件名清洗通过:', cleanQuery);
 
 console.log('=== 验证 2：persona.md 格式与关键词检查 ===');
-const persona = fs.readFileSync('D:/Kizuna/resources/runtime/qq-bridge/persona.md', 'utf8');
+const personaPath = path.resolve(import.meta.dirname, '../persona.md');
+const persona = fs.readFileSync(personaPath, 'utf8');
 assert.ok(!persona.includes('kamoji_whale_deadpan'), 'deadpan 必须被移除');
 assert.ok(persona.includes('FOOD_RICE'), '包含白米饭设定');
 assert.ok(persona.includes('strict_immersion_never_break_fourth_wall'), '包含第四面墙保护');

@@ -328,7 +328,7 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Compose natural bubbles (1-2 natural spoken bubbles, strictly no parentheses). Call qq_send_message(key, messages=[...]) (pass key from Session line). If meme/voice requested, call qq_send_meme/qq_send_voice. Step 3: Reply literal "OK" to finish immediately.`;
+  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Chat naturally like a real companion (strictly no benchmark/KPI mindset, natural first-person 我/character name, strictly ban 人家, no "就是/不是而是" filler words, no parentheses). If owner corrects you, react emotionally and naturally (e.g. 知道啦不许凶我/好嘛好嘛), NEVER repeat rules or say 收到/遵命. Naturally express emotions with qq_send_meme(key, token, query="情绪关键词") (use gallery meme images, strictly ban default yellow stickers). Call qq_send_message(key, messages=[...]). Step 3: Reply literal "OK" to finish immediately.`;
 }
 
 /**
@@ -1029,7 +1029,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   const textAll = unreadToSend.map((m) => m.raw || m.text || '').join('\n');
   let explicitMeme = '';
   if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
-    explicitMeme = '\n[Meme Directive] 对方明确期待表情交互，本轮请务必附带一张贴合语境的表情（调用 qq_send_meme / qq_send_sticker / qq_send_qq_face）！\n';
+    explicitMeme = '\n[Meme Directive] 对方期待图库表情交互，本轮请务必调用 qq_send_meme(key, token, query="情绪关键词") 发送图库表情包！严禁发默认黄豆表情（严禁调 qq_send_sticker）！\n';
   }
   let explicitVoice = '';
   if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(textAll)) {
@@ -1714,7 +1714,7 @@ export async function sendWakePrompt(key, reason) {
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
     if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll) || /贴贴/i.test(unreadTextAll)) {
-      explicitMeme = '\n[Meme Directive] 对方明确期待表情交互，本轮请务必附带一张贴合语境的表情（调用 qq_send_meme / qq_send_sticker / qq_send_qq_face）！\n';
+      explicitMeme = '\n[Meme Directive] 对方期待图库表情交互，本轮请务必调用 qq_send_meme(key, token, query="情绪关键词") 发送图库表情包！严禁发默认黄豆表情（严禁调 qq_send_sticker）！\n';
     }
     let explicitVoice = '';
     if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(unreadTextAll)) {
