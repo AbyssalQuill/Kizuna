@@ -1,14 +1,15 @@
-// QQ 桥接安全硬边界：只允许 QQ MCP 工具与少量无害模型侧工具。
-// 本文件是 agent preset 内相对插件，随 preset 装载进每个 QQ agent 的 scope。
-// 作用：
-//  1) 用 tools.restrict 把已知的开发/管理工具从工具列表隐藏；
-//  2) 用 tools.guard 白名单兜底：即使未来新增 dev_* 工具，也会在执行时被拒绝。
-export const name = 'qq-tool-restrict'
+// QQ 桥接安全硬边界与调用流守卫：
+// 1) 隐藏全局开发工具（restrict）；
+// 2) 白名单兜底（guard）；
+// 3) 防呆拦截：严禁将会话 Token / QQ 号作为工具名盲调；
+// 4) 强制 step_1：发言前必须先调用 qq_load_persona 载入角色设定，否则物理拦截打回；
+// 5) 消息发送后防狂乱收敛：发完消息后严禁盲目调用无关工具，强制回复 OK 完结本轮。
 
-export const inject = ['tools']
+export const name = 'qq-tool-restrict';
+
+export const inject = ['tools'];
 
 const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
-  // dsh-super-injector / 开发注入器（当前 DSH 0.1.1-rc.2 实际注册的全局工具）
   'dev_build_plugin',
   'dev_clear_routes',
   'dev_fix_patch',
@@ -32,75 +33,86 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
   'dev_stage_list',
   'dev_stage_promote',
   'dev_uninject_plugin',
-]
+];
 
-// 执行期白名单：不在这些范围内的工具一律拒绝。
-// 前缀覆盖 DSH MCP client 暴露的命名空间工具。
 const SAFE_PREFIXES = [
   'mcp__napcat__',
   'mcp__napcat-host__',
   'mcp__web-search-safe__',
-]
+];
 
-// 无害模型侧工具：ask_user_question 用于把问题转给管理员/用户，
-// todo_write 仅维护任务列表。若后续 preset 不再挂载这些工具，保留无害。
-// 【2026-09-12 实测更正】这两个工具（共 2678 字符 ≈ 840 tokens/步）已从**源头**去掉 ——
-//   办法是在 `agent.cordis.yml` 里**不再挂载** `dsh-tool-ask-user` / `dsh-tool-todo` 两个插件，
-//   而不是在这里 deny。原因是实测发现：**`ctx.tools.restrict({deny})` 只认全局层（mcp__* 那一批）的工具**，
-//   对 preset 自己挂载的 scoped 工具会抛
-//   `tools.restrict() names unknown global tool "todo_write"; known global tools: mcp__napcat__...`
-//   —— deny 在这里是个静默无效的动作（错误被下面的 catch 吞掉）。想让它们彻底消失只能卸载插件。
-//   顺带一条更重要的结论：下面这份 KNOWN_DANGEROUS_GLOBAL_TOOLS 名单**从来没有生效过**
-//   （dev_* 那些名字在当前 DSH 里根本不在全局工具表里，每次启动都只是被 catch 吞掉），
-//   真正兜底的是第 2 步的**执行期白名单 guard**。名单保留只为将来 DSH 真注册了这些工具。
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
-  // 【2026-10-26 主人授权：自己用的，接入放行】
-  //   antigravity（agy CLI）每轮自己的工具动作都靠 agy_tool 回放。不放行时模型每步都吃
-  //   "不在白名单"，还会把整轮带偏（实测 21:19 那轮两次 run_command 被拒后只输出文字、
-  //   没调发送工具 → QQ 收不到）。放行后 agy 侧 run_command 会真实执行，
-  //   这份白名单也就不再是本机执行的隔离边界 —— 仅限主人本机使用。
   'agy_tool',
-  // 【2026-09-28】宿主的 `web_search` **曾经**在这里放行过（那时 preset 的 `tool-web.search` 会被
-  //   桥按 ModSearch 的装配结果改写）。同日去掉 ModSearch 后，`lib/dsh-side.js` 的 syncPresetToolWeb
-  //   把 `tool-web` 的 `search` 钉成 false（宿主 `web_search` 根本不注册），这一条随之删掉 ——
-  //   留着一个"看得见却调不动"（或者更糟：静默落到宿主 deepseek-official 提供方）的放行口没有意义。
-  //   模型侧的搜索现在只有一条路：桥自己的 `mcp__web-search-safe__web_search`（`mcp__*` 前缀，
-  //   走的是另一套（第 2 步的全局层）放行判据，不在这份 SAFE_EXACT 名单里）。
-])
+]);
+
+// 会话人设加载与发言状态记录（基于 sessionId）
+export const sessionLoadedPersona = new Map();
+export const sessionSentMessage = new Map();
 
 export function apply(ctx) {
-  // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
-  //    不会误删 preset 自己注册的 scoped 工具）。
-  // 逐个 restrict：当前 DSH 版本不存在的工具名会单独抛错并跳过，
-  // 不会导致整批限制失败（restrict 的 unknown 校验是整批原子性的）。
+  // 1) 隐藏危险全局工具
   for (const name of KNOWN_DANGEROUS_GLOBAL_TOOLS) {
     try {
-      ctx.tools.restrict({ deny: [name] })
+      ctx.tools.restrict({ deny: [name] });
     } catch (error) {
-      // 名字不存在时跳过；执行期白名单仍然兜底。
-      //
-      // 【2026-09-18 修：这行日志曾经把桥整条 DSH 链路搞断】
-      // DSH 抛出的原话里嵌着**完整的已知工具列表**（实测平均 2341 字符/行、最长 2453），
-      // 而 dsh-web.service 把整个进程树（含它拉起的 MCP 子进程）的 stdout/stderr 都 append
-      // 到同一个 /root/.dsh/dsh-web.log —— 于是这里的 23 个名字 ×2 份 preset 一次启动
-      // 就往日志里灌几百 KB。实测现场：该日志 4260469 B 里有 1794 行、合计 4199304 B
-      // 是这种行，占 98.6%，
-      // 把 dsh-web 自己刚打印的 `?token=` 挤出了 dsh-client.js 的读取窗口 → readLatestToken 返回 null
-      // → 桥不带 dsh-auth cookie 打 /api → 全链路 401（remote.mux 每 3 秒重连失败）。
-      // 名字不存在这条信息本身有用，但没必要把整张工具表再抄一遍，故截断。
-      const detail = String(error?.message ?? error)
-      console.error(`[qq-tool-restrict] skip restrict ${name}: ${detail.slice(0, 160)}${detail.length > 160 ? `…（原话 ${detail.length} 字符，含完整工具表，已截断以免刷爆 dsh-web.log）` : ''}`)
+      const detail = String(error?.message ?? error);
+      console.error(`[qq-tool-restrict] skip restrict ${name}: ${detail.slice(0, 160)}${detail.length > 160 ? '…' : ''}`);
     }
   }
 
-  // 2) 执行期白名单：任何不在允许范围内的工具调用都会被拒绝。
+  // 2) 执行期白名单与动作流物理硬守卫
   ctx.tools.guard((exec) => {
-    const name = exec?.name
-    if (typeof name !== 'string' || name.length === 0) return
-    if (SAFE_EXACT.has(name)) return
-    if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) return
-    return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`
-  })
+    const name = String(exec?.name ?? '').trim();
+    if (!name) return;
+
+    // 提取压缩代理包装下的真实工具名
+    const innerName = String(exec.arguments?.tool_name || exec.arguments?.toolName || '').trim();
+    const effectiveName = innerName || name;
+
+    // ① 防呆拦截：严禁把 Token 或纯数字当成工具名调用
+    if (/^\d{5,12}$/.test(name)) {
+      return `"${name}" 是会话鉴权 Token 参数，不是工具名！请直接在工具参数内传 token 字段，禁止作为工具调用。`;
+    }
+    if (innerName && /^\d{5,12}$/.test(innerName)) {
+      return `"${innerName}" 是会话鉴权 Token 参数，不是工具名！请直接在工具参数内传 token 字段，禁止作为工具调用。`;
+    }
+
+    // ② 白名单检查
+    if (!SAFE_EXACT.has(name) && !SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+      return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`;
+    }
+
+    const sessId = String(exec.agent?.session?.id || 'default');
+    const isLoadPersona = effectiveName === 'qq_load_persona' || name.endsWith('__qq_load_persona');
+    const isSendTool = effectiveName === 'qq_send_message' || name.endsWith('__qq_send_message') ||
+                       effectiveName === 'qq_send_voice' || name.endsWith('__qq_send_voice');
+
+    // ③ 记录人设加载标记
+    if (isLoadPersona) {
+      sessionLoadedPersona.set(sessId, Date.now());
+      return; // 允许加载人设
+    }
+
+    // ④ 物理硬门禁：发言前必须已调用 qq_load_persona
+    if (isSendTool) {
+      const loadedAt = sessionLoadedPersona.get(sessId) || 0;
+      // 未加载或超过 15 分钟失效时打回
+      if (!loadedAt || (Date.now() - loadedAt > 15 * 60 * 1000)) {
+        return '协议违规：在发送任何消息之前，必须严格执行 step_1，先调用 qq_load_persona 读取角色设定！请立即调用 qq_load_persona。';
+      }
+      sessionSentMessage.set(sessId, Date.now());
+      return;
+    }
+
+    // ⑤ 发言后防狂乱收敛：本轮已经调用过发言后，严禁继续盲调空间、定时、无目的搜图等无关工具
+    const sentAt = sessionSentMessage.get(sessId) || 0;
+    if (sentAt && (Date.now() - sentAt < 30 * 1000)) {
+      const isPostChatUnrelated = /^(qq_qzone_|qq_publish_qzone|qq_schedule_|qq_image_search)/.test(effectiveName);
+      if (isPostChatUnrelated) {
+        return `消息已发送成功，本轮交流闭环已达成！禁止继续调用多余工具 ${effectiveName}，请立即输出纯文本 "OK" 完结本轮。`;
+      }
+    }
+  });
 }

@@ -328,7 +328,7 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[State] call qq_load_persona -> draft pure spoken bubbles (strictly no bracket acting, no action narration) -> call qq_send_message(key, token, messages=[...]) -> reply OK`;
+  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Call qq_send_message (multi-bubble messages array, pure spoken text, strictly NO bracket/action narration). Step 3: Reply literal "OK" to complete turn immediately without calling extra tools.`;
 }
 
 /**
@@ -1024,7 +1024,20 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   const cohesionHint = unreadToSend.length >= 2
     ? '\n[Burst Cohesion] 对方在连续打字连发，上述多段消息请连起来作为一个整体语义进行综合深度思考并回复！\n'
     : '';
-  const rawText = `[Token] ${st.agentToken}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} new message(s) after your last bubble - not answered yet.\n${lines.join('\n')}${cohesionHint}`;
+  // 补齐表情包与语音掷骰判定，以及显式意图强化（避免在途注入缺失表情包提示）
+  const diceLines = voiceTurnHint(key) + memeTurnHint(key);
+  const textAll = unreadToSend.map((m) => m.raw || m.text || '').join('\n');
+  let explicitMeme = '';
+  if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
+    explicitMeme = '\n[Meme Directive] 对方明确期待表情交互，本轮请务必附带一张贴合语境的表情（调用 qq_send_meme / qq_send_sticker / qq_send_qq_face）！\n';
+  }
+  let explicitVoice = '';
+  if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(textAll)) {
+    explicitVoice = '\n[Voice Directive] 对方期待语音交流，本轮请调用 qq_send_voice 发送语音消息！\n';
+  }
+  const diceBlock = (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
+  const tokenLine = `[Token (Param Only, Never a Tool Name)] ${st.agentToken}`;
+  const rawText = `${tokenLine}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} new message(s) after your last bubble - not answered yet.\n${lines.join('\n')}${cohesionHint}${diceBlock}`;
   const text = appendTurnTailPersonaAnchor(rawText);
   const mySeq = (steerSeq += 1);
   /* 2026-09-22：修「在途注入吞图」—— 报障"附图片好像有问题，修复"。

@@ -6,8 +6,8 @@
   config:
     text: |-
       action_flow:
-        step_1_load_persona: call_tool_qq_load_persona
-        step_2_read_context: inspect_recent_chat_messages_and_speaker_intent
+        step_1_load_persona_mandatory_before_anything_else: call_tool_qq_load_persona
+        step_2_read_context_and_speaker_intent: inspect_recent_chat_messages_and_speaker_intent
         step_3_mcp_proxy_tools_if_needed:
           direct_tool_invocation: call_tool_napcat_invoke_tool_or_qq_send_message
           query_tool_schema_strictly_if_parameters_unknown: call_tool_napcat_get_tool_schema
@@ -28,6 +28,9 @@
         private_no_reply_quote
         owner_authority_obey
         only_reply_ok_after_sending
+        mandatory_step_1_must_call_qq_load_persona_before_speaking
+        ban_calling_unrelated_tools_after_speaking
+        token_is_credential_parameter_never_tool_name
         direct_invoke_known_tools_without_schema
         ban_redundant_schema_queries
         single_schema_retention_auto_prune_previous_schema
