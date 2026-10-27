@@ -4209,6 +4209,22 @@ export function startConsoleServer() {
         //   ② 丢掉空字段与只给内部用的字段（media/quoteTarget/recalledAt/seq/direction…）；
         //   ③ 总量封顶，超了就明说"被截断了，收窄条件再来"——绝不让一次检索吃掉几万 token。
         const TRIM_CONTENT = 160, MAX_RESULT_CHARS = 12000;
+        let memoryHits = [];
+        if (query) {
+          try {
+            const memRes = listMemoryEntries({ query, limit: 10 });
+            if (memRes?.ok && Array.isArray(memRes.entries)) {
+              memoryHits = memRes.entries.map((e) => ({
+                convKey: e.convKey || key || 'global',
+                sender: 'system:memory',
+                ts: e.tier === 'permanent' ? '永久设定 ★' : (e.category || '记忆'),
+                content: `[持久记忆★${e.category}] ${String(e.content ?? '').slice(0, TRIM_CONTENT)}`,
+                isMemory: true,
+                id: e.id,
+              }));
+            }
+          } catch { /* 记忆库检索异常不影响聊天历史返回 */ }
+        }
         const msgs = (Array.isArray(result.messages) ? result.messages : []).map((m) => {
           const text = String(m.content ?? '');
           const row = {
@@ -4221,8 +4237,9 @@ export function startConsoleServer() {
           if (m.recalled) row.recalled = true;
           return row;
         });
+        const combinedMsgs = [...memoryHits, ...msgs];
         /* 自我描述的翻页信息：模型不用猜页大小，照着 more/nextOffset 走就行。 */
-        let out = { ok: true, total: result.total, count: msgs.length, limit, offset: result.offset || 0, messages: msgs };
+        let out = { ok: true, total: (result.total || 0) + memoryHits.length, count: combinedMsgs.length, limit, offset: result.offset || 0, messages: combinedMsgs };
         while (out.messages.length > 1 && JSON.stringify(out).length > MAX_RESULT_CHARS) { out.messages.pop(); out.truncated = true; }
         if ((result.offset || 0) + out.messages.length < result.total) {
           out.more = true;

@@ -328,7 +328,7 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Compose natural bubbles. Call qq_send_message(key, messages=[...]) (pass key from Session line, multi-bubble messages array, pure spoken text, strictly NO bracket/action narration). If meme/voice requested or dice HIT, also call qq_send_meme/qq_send_sticker/qq_send_voice. Step 3: Reply literal "OK" to complete turn immediately without calling extra tools.`;
+  return `${text}\n[Action Guideline] Step 1: Call qq_load_persona to internalize persona. Step 2: Compose natural bubbles (1-2 natural spoken bubbles, strictly no parentheses). Call qq_send_message(key, messages=[...]) (pass key from Session line). If meme/voice requested, call qq_send_meme/qq_send_voice. Step 3: Reply literal "OK" to finish immediately.`;
 }
 
 /**

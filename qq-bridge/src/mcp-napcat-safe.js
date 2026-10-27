@@ -332,13 +332,31 @@ async function firstMemeByQuery(packs, query, tag, onlyPack) {
     let db;
     try { db = new DatabaseSync(path.join(p.dir, 'index.db'), { readOnly: true }); } catch { continue; }
     try {
+      // 1. 全词精确/前缀检索（包含文件名、说明、关键词）
       let sql = 'SELECT file_name, tag, caption FROM memes WHERE 1=1';
       const params = [];
       if (tg) { sql += ' AND tag = ?'; params.push(tg); }
-      if (q) { sql += ' AND (caption LIKE ? OR keywords LIKE ?)'; params.push('%' + q + '%', '%' + q + '%'); }
+      if (q) {
+        sql += ' AND (file_name LIKE ? OR caption LIKE ? OR keywords LIKE ?)';
+        params.push('%' + q + '%', '%' + q + '%', '%' + q + '%');
+      }
       sql += ' LIMIT 1';
-      const r = db.prepare(sql).get(...params);
+      let r = db.prepare(sql).get(...params);
       if (r?.file_name) return { file: String(r.file_name), tag: String(r.tag ?? ''), caption: String(r.caption ?? ''), packId: p.id };
+
+      // 2. 分词模糊兜底（如果整句没匹配上，尝试提取 >=2 字的关键词模糊匹配）
+      if (q && q.length > 2) {
+        const words = q.split(/[\s,，。、_—\-]+/).filter((w) => w.length >= 2);
+        for (const w of words) {
+          const wParams = [];
+          let wSql = 'SELECT file_name, tag, caption FROM memes WHERE 1=1';
+          if (tg) { wSql += ' AND tag = ?'; wParams.push(tg); }
+          wSql += ' AND (file_name LIKE ? OR caption LIKE ? OR keywords LIKE ?) LIMIT 1';
+          wParams.push('%' + w + '%', '%' + w + '%', '%' + w + '%');
+          r = db.prepare(wSql).get(...wParams);
+          if (r?.file_name) return { file: String(r.file_name), tag: String(r.tag ?? ''), caption: String(r.caption ?? ''), packId: p.id };
+        }
+      }
     } catch { /* 坏包跳过 */ } finally { try { db.close(); } catch { /* 只读句柄 */ } }
   }
   return null;
@@ -1141,8 +1159,9 @@ registerTool(
   async () => {
     try {
       const personaFile = path.join(ROOT, 'persona.md');
-      const text = fs.existsSync(personaFile) ? fs.readFileSync(personaFile, 'utf8') : '';
-      return { content: [{ type: 'text', text: `【persona_load】\n${text}` }] };
+      const text = fs.existsSync(personaFile) ? fs.readFileSync(personaFile, 'utf8').trim() : '';
+      const body = text.startsWith('【persona_load】') ? text : `【persona_load】\n${text}`;
+      return { content: [{ type: 'text', text: body }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `读取人设失败：${error?.message ?? error}` }], isError: true };
     }
@@ -2311,6 +2330,26 @@ if (cfg.social?.meme?.enabled !== false) {
             if (rel) hits.push({ pack: p, rel });
           } catch { /* 坏包跳过：一个包读不出来不该让发图整个失败 */ } finally { try { db.close(); } catch { /* 只读句柄，关不掉不影响发图 */ } }
         }
+        if (!hits.length) {
+          // 模糊兜底：如果模型传了文件名但精确匹配不到（例如传了「蓝鱼吃白米饭开心.webp」，而库里叫「蓝发女仆鲸鱼娘端白饭.webp」）
+          // 去除扩展名与特殊符号作为 query 检索表情包库，绝不报错
+          const cleanQuery = wantFile.replace(/\.(webp|gif|png|jpe?g)$/i, '').replace(/[_\-\s]+/g, ' ').trim();
+          const fallbackMeme = await firstMemeByQuery(packs, cleanQuery || query, tag, wantPack || '');
+          if (fallbackMeme) {
+            wantFile = fallbackMeme.file;
+            if (!wantPack) wantPack = fallbackMeme.packId;
+            pickedByQuery = fallbackMeme;
+            for (const p of packs) {
+              if (wantPack && p.id !== wantPack) continue;
+              let db;
+              try { db = new DatabaseSync(path.join(p.dir, 'index.db'), { readOnly: true }); } catch { continue; }
+              try {
+                const rel = queryMemePath(db, wantFile);
+                if (rel) hits.push({ pack: p, rel });
+              } catch {} finally { try { db.close(); } catch {} }
+            }
+          }
+        }
         if (!hits.length) return { content: [{ type: 'text', text: `找不到表情 ${file}${wantPack ? `（包 ${wantPack}）` : ''}，请先用 qq_meme_search 搜索` }], isError: true };
         // 多份包都有同名文件时按优先级取第一份（角色专属包排在最前），并把这件事如实告诉模型
         const hit = hits[0];
@@ -3154,6 +3193,32 @@ if (cfg.social?.tools?.memoryRemember !== false) {
         return { content: [{ type: 'text', text: JSON.stringify(data) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `写长期记忆失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  /* 2026-10-28 补全：持久记忆与规则直接查询工具（对准 /api/social/memory-notes，读 memory_entries 表） */
+  registerTool(
+    'qq_memory_notes',
+    'Search durable long-term memories (rules, facts, user standing preferences, birthdays, identity promises). Omit query to list recent pinned rules/facts.',
+    {
+      key: z.string().optional().describe('Session key: group:ID or private:QQ'),
+      token: z.string().describe('Session token'),
+      query: z.string().optional().describe('Keyword to search in durable memory (e.g. 生日, 规矩, 偏好)'),
+      category: z.string().optional().describe('Optional category filter: rule / fact / owner / identity / note'),
+      limit: z.number().optional().describe('Max records, default 20')
+    },
+    async ({ key, token, query, category, limit }) => {
+      try {
+        const q = new URLSearchParams();
+        if (key) q.set('key', key);
+        if (query) q.set('query', query);
+        if (category) q.set('category', category);
+        if (limit) q.set('limit', String(limit));
+        const data = await agentApi(`/api/social/memory-notes?${q.toString()}`, { headers: { 'x-agent-token': token }, timeoutMs: 15000 });
+        return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `读取持久记忆失败：${error?.message ?? error}` }], isError: true };
       }
     }
   );
