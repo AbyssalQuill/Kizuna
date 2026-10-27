@@ -328,7 +328,7 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[State] call qq_load_persona, then call qq_send_message(messages=[...]), reply OK`;
+  return `${text}\n[State] call qq_load_persona -> draft pure spoken bubbles (strictly no bracket acting, no action narration) -> call qq_send_message(key, token, messages=[...]) -> reply OK`;
 }
 
 /**

@@ -2248,7 +2248,11 @@ export function startConsoleServer() {
         }
         const isRawString = typeof rawMessages === 'string';
         const messages = Array.isArray(rawMessages)
-          ? rawMessages.map((m) => String(m ?? '').trim()).filter(Boolean)
+          ? rawMessages.map((m) => {
+              if (typeof m === 'string') return m.trim();
+              if (m && typeof m === 'object') return String(m.text ?? m.content ?? m.message ?? '').trim();
+              return String(m ?? '').trim();
+            }).filter(Boolean)
           : (isRawString ? [String(rawMessages).trim()].filter(Boolean) : []);
         const replyToMessageId = body.replyToMessageId;
         const atUserId = body.atUserId ?? null;

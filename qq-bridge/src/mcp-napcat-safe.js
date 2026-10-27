@@ -1438,7 +1438,7 @@ registerTool(
   {
     key: z.string().describe('Session key: group:ID or private:QQ'),
     token: z.string().describe('Session token (from the wake prompt)'),
-    messages: z.union([z.string(), z.array(z.string()).min(1)]).optional().describe('string = one message; array = several; empty array = images only'),
+    messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('string = one message; array = several; empty array = images only'),
     message: z.string().optional().describe('Alias of messages (string; kept only for typos). Prefer messages.'),
     images: z.array(z.string()).optional().describe('Absolute local paths of static images (e.g. C:\\\\path\\\\xx.webp; meme/ sticker files work too), one per sent item or a single one. Never send animated GIFs by path - QQ shows a flickering static preview; find those with qq_meme_search (GIF set) or qq_list_stickers and send via qq_send_sticker. Only static png/jpg/webp go by path.'),
     replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, may be negative, optional)'),
@@ -1473,6 +1473,15 @@ registerTool(
             else if (Array.isArray(parsed)) finalMessages = parsed.map(String);
           } catch {}
         }
+      }
+      if (Array.isArray(finalMessages)) {
+        finalMessages = finalMessages.map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object') {
+            return String(item.text ?? item.content ?? item.message ?? JSON.stringify(item));
+          }
+          return String(item ?? '');
+        });
       }
       const imgList = Array.isArray(images) ? images.map(String).filter(Boolean) : [];
       const data = await agentApi('/api/social/send-message', {

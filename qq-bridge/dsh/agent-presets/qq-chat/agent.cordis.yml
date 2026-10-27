@@ -6,13 +6,21 @@
   config:
     text: |-
       action_flow:
-        step_1: call_tool_qq_load_persona
-        step_2: call_tool_qq_send_message_multi_bubble_messages_array
-        step_3: reply_literal_OK
+        step_1_load_persona: call_tool_qq_load_persona
+        step_2_read_context: inspect_recent_chat_messages_and_speaker_intent
+        step_3_internalize_persona: adopt_loaded_persona_traits_tone_and_relationship
+        step_4_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
+        step_5_send_messages: call_tool_qq_send_message_with_messages_string_array
+        step_6_turn_closure: reply_only_literal_OK
       rules:
         pure_in_character
-        no_bracket_acting
-        no_action_narration
+        ban_action_narration
+        ban_bracket_acting
+        ban_asterisk_actions
+        ban_stage_directions
+        ban_parentheses_emotions_or_movements
+        pure_spoken_text_only
+        natural_instant_messaging_bubbles
         no_external_text_reply
         private_no_reply_quote
         owner_authority_obey
