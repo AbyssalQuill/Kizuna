@@ -17,7 +17,7 @@
   - [2.4 DeepSeek Harness 隔离运行环境（推理宿主）](#24-deepseek-harness-隔离运行环境推理宿主)
 - [3. 通用分发级三层拟人与角色扮演引擎](#3-通用分发级三层拟人与角色扮演引擎)
   - [3.1 三层解耦架构设计理念](#31-三层解耦架构设计理念)
-  - [3.2 第一层：角色无关的通用协议底座（90/10 黄金比例）](#32-第一层角色无关的通用协议底座9010-黄金比例)
+  - [3.2 第一层：角色无关的通用协议底座（90/10 黄金法则与纯短语动作流）](#32-第一层角色无关的通用协议底座9010-黄金法则与纯短语动作流)
   - [3.3 第二层：通用发言与打字拟人规则](#33-第二层通用发言与打字拟人规则)
   - [3.4 第三层：当前激活角色卡与通用分发切换](#34-第三层当前激活角色卡与通用分发切换)
   - [3.5 消息唤醒判定矩阵与事件过滤](#35-消息唤醒判定矩阵与事件过滤)
@@ -47,7 +47,7 @@
   - [5.16 运行时动态配置与管理（9 条）](#516-运行时动态配置与管理9-条)
   - [5.17 MCP 宿主服务工具（5 条）](#517-mcp-宿主服务工具5-条)
   - [5.18 MCP 全网安全检索服务（2 条）](#518-mcp-全网安全检索服务2-条)
-  - [5.19 工具名单档位裁剪与压缩代理机制](#519-工具名单档位裁剪与压缩代理机制)
+  - [5.19 工具名单档位裁剪、压缩代理与单一 Schema 机制](#519-工具名单档位裁剪压缩代理与单一-schema-机制)
 - [6. 多媒体与特色能力实现](#6-多媒体与特色能力实现)
   - [6.1 22 平台并发全网聚合检索与 SSRF 防护](#61-22-平台并发全网聚合检索与-ssrf-防护)
   - [6.2 Pixiv 插画原图投递与防缩放校验](#62-pixiv-插画原图投递与防缩放校验)
@@ -199,6 +199,10 @@ Kizuna Pro 专为解决大模型接入 QQ 生态时常见的“回复像人机�
   - `src/lib/web-search.js`：全网并发搜索内核。
 - **热加载（Hot-Reload）**：
   - `config.json` 的修改采用原地合并策略，配合目录监听与轮询双路探测，修改任何配置后即时在内存生效，无需重启桥接进程。
+- **Reset 会话重置与内存级彻底清空**：
+  - 当触发会话重置（QQ 指令 `/reset`、`/new` 或控制台 API）时，桥接层不仅重新映射会话代际，还会**彻底清空会话内存数据**（清空 `recentMessages`、`unread`、`pendingUndeliveredText`、`activeTopics` 等）；
+  - **跨代保留回复幂等账本**：持久保留 `answeredMessageIds` 与各关键水位计数器（`lastUnreadSeq` / `lastDeliveredSeq` / `_wakeIntendedSeq`），确保重置前后的同一批历史消息绝不被重新唤醒重复回复；
+  - **精准时间戳截断过滤**：打上 `_resetAt = Date.now()` 与 `lastAiSeenAt = Date.now()`，在 SQLite 恢复与上下文滑动窗口拼接时严格拦截重置之前的旧历史，保证新回合上下文 100% 干净清爽。
 
 ### 2.4 DeepSeek Harness 隔离运行环境（推理宿主）
 - **定位**：专属于机器人的隔离推理框架，通过 HTTP 协议暴露 Agent 运行时接口。
@@ -218,7 +222,7 @@ Kizuna Pro 专为解决大模型接入 QQ 生态时常见的“回复像人机�
 
 Kizuna Pro 创新性地采用**三层解耦与高密度正向权重**架构，确立角色扮演与底层机制的完全分离。
 
-### 3.2 第一层：角色无关的通用协议底座（90/10 黄金比例）
+### 3.2 第一层：角色无关的通用协议底座（90/10 黄金法则与纯短语动作流）
 定义在 `qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml` 顶部：
 - **100% 角色无关（Persona-Agnostic）**：
   - 不包含任何“鲸鱼”、“海洋”、“猫娘”等专有人格词汇。
@@ -227,6 +231,26 @@ Kizuna Pro 创新性地采用**三层解耦与高密度正向权重**架构，�
   - **90%** 采用自然、松弛、真实的人类日常口语交流。
   - **10%** 仅作角色特质的点缀。
   - **禁止说教**：绝不解释自己的设定背景，绝不使用“根据我的设定”、“作为你的助手”等 AI 腔调。
+- **纯短语下划线动作流（Action Flow）**：
+  摒弃传统的散文式人设示范，采用高约束、纯下划线标记的 7 步调用闭环，杜绝注意力稀释与模板照抄：
+  ```yaml
+  action_flow:
+    step_1_load_persona: call_tool_qq_load_persona
+    step_2_read_context: inspect_recent_chat_messages_and_speaker_intent
+    step_3_mcp_proxy_tools_if_needed:
+      direct_tool_invocation: call_tool_napcat_invoke_tool_or_qq_send_message
+      query_tool_schema_strictly_if_parameters_unknown: call_tool_napcat_get_tool_schema
+    step_4_internalize_and_prune: adopt_loaded_persona_traits_tone_and_relationship_drop_raw_tool_data
+    step_5_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
+    step_6_send_messages: call_tool_qq_send_message_with_messages_string_array
+    step_7_turn_closure: reply_only_literal_OK
+  ```
+- **核心规约（Rules）**：
+  - `pure_in_character` / `pure_spoken_text_only`：全角色拟真，仅输出纯口语。
+  - `ban_action_narration` / `ban_bracket_acting` / `ban_asterisk_actions` / `ban_stage_directions`：严禁括号动作描写、星号动作、旁白与舞台指示。
+  - `direct_invoke_known_tools_without_schema` / `ban_redundant_schema_queries`：已知参数的动作直接通过 `napcat_invoke_tool` 传参调用，严禁无谓反复查询 Schema。
+  - `single_schema_retention_auto_prune_previous_schema`：会话内单 Schema 保留规则，多次查询自动剔除历史旧记录。
+  - `only_reply_ok_after_sending`：通过工具发完消息后，当前轮次仅需返回字面量 `OK` 即可完结，禁止在外部文本中多余复读。
 
 ### 3.3 第二层：通用发言与打字拟人规则（底座系统级融合）
 原独立维护的发言规范已全量沉淀并固化至底层系统提示词（`[SPEECH RULES]`）：
@@ -490,8 +514,8 @@ Kizuna Pro 创新性地采用**三层解耦与高密度正向权重**架构，�
 
 ---
 
-### 5.19 工具名单档位裁剪与压缩代理机制
-由于 101 个 MCP 工具的完整 Schema（参数定义与说明）体积高达 **95,000+ 字符（约 31,000 Tokens）**，如果每一轮对话都向大模型发送全量 Schema，会导致极高昂的 Token 费用与严重的端到端延迟。为此系统提供两套优化机制：
+### 5.19 工具名单档位裁剪、压缩代理与单一 Schema 机制
+由于 101 个 MCP 工具的完整 Schema（参数定义与说明）体积高达 **95,000+ 字符（约 31,000 Tokens）**，如果每一轮对话都向大模型发送全量 Schema，会导致极高昂的 Token 费用与严重的端到端延迟。为此系统提供三层递进的极致优化机制：
 
 1. **白名单档位裁剪（`social.slimTools`）**：
    - `off`（全量）：注册全部 94 个 NapCat 工具。
@@ -500,8 +524,15 @@ Kizuna Pro 创新性地采用**三层解耦与高密度正向权重**架构，�
    - `high`（高剪）：保留核心协议、被调用过、以及成员识别类工具，共 33 个（约 33,000 字符）。
    - `extreme`（极简）：仅保留 9 个最不可或缺的基础工具（发消息、引用、读未读、标已读、看时间、查状态等），体积骤降至 **6,400 字符（0.068 份额）**。
 2. **MCP 压缩代理（`social.toolCompressor`）**：
-   - 默认开启。在 DSH 与 MCP Server 之间架设代理网关，将整个 `mcp-napcat` 的数十个工具折叠压缩为两个包装工具（`<server>_invoke_tool` 与 `<server>_get_tool_schema`）。
-   - 提示词只展示简短索引，模型按需发起调用，由桥接层 `mux.js` 在后端无缝解包执行，使首字响应延迟（TTFT）大幅缩短 60% 以上。
+   - 默认开启。在 DSH 与 MCP Server 之间架设代理网关，将整个 `mcp-napcat` 的数十个工具折叠压缩为两个包装工具：`<server>_invoke_tool`（直接调用指定工具）与 `<server>_get_tool_schema`（查询指定工具参数结构）。
+   - 系统底座不再罗列任何具体底层工具明细，已知参数的动作直接通过 `napcat_invoke_tool` 传参触发；桥接层 `mux.js` 统一透明解包并对账执行，使首字响应延迟（TTFT）大幅缩短 60% 以上。
+3. **会话内单一 Schema 机制（Single Schema Retention）**：
+   - **痛点根治**：大模型偶发调用 `get_tool_schema` 查询工具时，单次返回的 JSON Schema 往往长达数千至数万字符。若会话持续进行，历史上的多次 Schema 查询结果将呈阶梯状叠加，瞬间挤占 80% 以上的上下文窗口。
+   - **单 Schema 守卫与自动剪除**：
+     - 一整个会话历史中**最多只允许存在最新 1 条有效的 Schema 查询记录**；
+     - **运行时监听（`src/core/mux.js`）**：实时追踪会话内 `get_tool_schema` 的调用记录，检测到模型产生新的 Schema 查询时，自动预警并将上一次调用的记录标记为废弃；
+     - **持久化与落盘剪枝（`src/core/turn-pruner.js`）**：在结果到达及每轮结束（`turn/end`）时，自动扫描并对会话存储执行结构化与正则双重剪除，将前序历史 Schema 的庞大返回数据抹平为轻量占位符 `[previous schema result pruned: single-schema rule enforced]`，仅保留最新一次调用；
+     - 彻底切断多次 Schema 累积导致的上下文膨胀，永久保持轻量。
 
 ---
 
@@ -612,7 +643,7 @@ node server/index.js
 
 | 指令 | 语法参数 | 详细作用 |
 | :--- | :--- | :--- |
-| `/reset` 或 `/new` | 无 | 立即重置当前会话的上下文记忆，清除当前滑动窗口（保留回复对账防止重复）。 |
+| `/reset` 或 `/new` | 无 | 立即重置当前会话，清空桥内存消息与未读队列、打上时间戳截断旧历史，跨代保留回复幂等账本阻断复读。 |
 | `/status` | 无 | 查看当前会话 ID、白名单验证状态、激活人设包、运行模式与网关在线状态。 |
 | `/token` | `[天数]` (如 `/token 7`) | 查询过去 N 天内各会话的模型 Token 消耗量、缓存命中率与折合花费金额。 |
 | `/op` | `<QQ号或昵称>` | 将指定账号添加为特权管理员。 |

@@ -43,7 +43,7 @@
 - [35. 验证方法与实验口径](#35-验证方法与实验口径)
 - [36. 标定边界、适用条件与未核验项](#36-标定边界适用条件与未核验项)
 - [37. 速查与复现命令](#37-速查与复现命令)
-- [附录 A MCP 工具全表（napcat，94 条）](#附录-A-mcp-工具全表napcat94-条)
+- [附录 A MCP 工具全表（napcat，103 条）](#附录-A-mcp-工具全表napcat103-条)
 - [附录 B MCP 宿主服务与联网检索工具表（7 条）](#附录-B-mcp-宿主服务与联网检索工具表7-条)
 - [附录 C 管理端路由表（93 条）](#附录-C-管理端路由表93-条)
 - [附录 D 核验范围、缺陷与未核验清单](#附录-D-核验范围缺陷与未核验清单)
@@ -2180,11 +2180,11 @@ node qq-bridge/tools/compaction-threshold.mjs <stateDir> 1000000
 node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限 / 余量 / YAML 形状
 ```
 
-## 附录 A MCP 工具全表（napcat，94 条）
+## 附录 A MCP 工具全表（napcat，103 条）
 
-数据取自 MCP 协议 `tools/list` 的实取结果：以 stdio 传输启动 `qq-bridge/src/mcp-napcat-safe.js`，完成 `initialize` 握手后发送 `tools/list`，取每项工具的 `name` 与 `inputSchema`，`inputSchema.required` 记为必填参数、其余属性记为可选参数，导出结果字段为 `name`、`description`、`required[]`、`optional[]`、`minTier`【已核验】。该启动过程须注入环境变量 `QQB_SLIM_TOOLS_OFF=1`（语义为本次启动忽略压缩档、全部注册，`qq-bridge/src/mcp-napcat-safe.js:687-693`）；不注入时 `tools/list` 返回本机 `config.json` 中 `social.slimTools` 所选档位的子集，得不到完整的九十四项注册表。参考实现见 `qq-bridge/tests/character-tools-mcp.test.js:31-70` 的 `startServer` 与 `:83-89` 的调用处。
+数据取自 MCP 协议 `tools/list` 的实取结果：以 stdio 传输启动 `qq-bridge/src/mcp-napcat-safe.js`，完成 `initialize` 握手后发送 `tools/list`，取每项工具的 `name` 与 `inputSchema`，`inputSchema.required` 记为必填参数、其余属性记为可选参数，导出结果字段为 `name`、`description`、`required[]`、`optional[]`、`minTier`【已核验】。该启动过程须注入环境变量 `QQB_SLIM_TOOLS_OFF=1`（语义为本次启动忽略压缩档、全部注册，`qq-bridge/src/mcp-napcat-safe.js:687-693`）；不注入时 `tools/list` 返回本机 `config.json` 中 `social.slimTools` 所选档位的子集，得不到完整的一百零三项注册表。参考实现见 `qq-bridge/tests/character-tools-mcp.test.js:31-70` 的 `startServer` 与 `:83-89` 的调用处。
 
-列口径：`工具名` 为 MCP 服务注册的裸名，不含 `mcp__napcat__` 前缀；`必填参数`与`可选参数`取自工具输入 schema，无参数记 `—`；`最低保留档位`为该工具仍被注册的最低档位，按裁剪强度由强到弱为 `extreme`、`high`、`medium`、`low`、`off`，由 `toolAllowedByTier`（`qq-bridge/src/lib/tool-tiers.js:223`）逐档试算取首个判定为真的档位，`qq_status` 在该函数首行恒真（`:224`）故恒为 `extreme`，各档位名单定义见 `TOOL_TIERS`（`:125`），档位中文标签为极限、高、中、低、不裁剪【已核验】。共 94 行，按功能分为 16 组。
+列口径：`工具名` 为 MCP 服务注册的裸名，不含 `mcp__napcat__` 前缀；`必填参数`与`可选参数`取自工具输入 schema，无参数记 `—`；`最低保留档位`为该工具仍被注册的最低档位，按裁剪强度由强到弱为 `extreme`、`high`、`medium`、`low`、`off`，由 `toolAllowedByTier`（`qq-bridge/src/lib/tool-tiers.js:223`）逐档试算取首个判定为真的档位，`qq_status` 在该函数首行恒真（`:224`）故恒为 `extreme`，各档位名单定义见 `TOOL_TIERS`（`:125`），档位中文标签为极限、高、中、低、不裁剪【已核验】。共 103 行，按功能分为 17 组。
 
 ### A.G1 状态、时间与运行时信息（5 条）
 
@@ -2359,6 +2359,20 @@ node qq-bridge/tools/test-dsh-compaction.mjs                   # 门禁：下限
 | `qq_config_get` | `key`，`token` | `target`，`path` | `extreme` | 读取桥配置：`target=voice` 读语音页（含发送概率、默认音色等，密钥只回掩码）、`social` 读 default Agent 段、缺省读 `config.json` 其余全部；给 `path` 只取一条点路径。仅所有者与管理员在其发言会话内可执行。 |
 | `qq_config_set` | `key`，`token`，`path`，`value` | `target` | `extreme` | 改一条配置：服务端读真实配置后只改该点路径再整份落盘，避免把读到的掩码密钥回写；密钥类字段（apiKey/token/password）一律拒绝；`target=social` 转发到按字段校验的 `POST /api/social/config`。 |
 | `qq_voice_manage` | `key`，`token`，`action` | `name`，`description`，`fromVoiceId`，`id` | `high` | 音色库管理：列出内置与自定义音色、按文字描述新建设计音色、按 `fromVoiceId` 复刻已有音色（含文字设计的音色）、删除、设为默认。 |
+
+### A.G17 算法学习、动态加载与扩展渲染（9 条）
+
+| 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 功能 |
+| --- | --- | --- | --- | --- |
+| `qq_load_persona` | — | `key`，`token` | `extreme` | 动态读取当前会话绑定的专属人设卡数据（步末自动剪除，保持极轻量上下文）。 |
+| `qq_render_markdown_image` | `markdown` | `key`，`token` | `medium` | 将富文本 Markdown 排版代码直接渲染为高清图片发送，防止长格式刷屏。 |
+| `qq_send_excel` | `sheets` | `key`，`token`，`replyToMessageId` | `low` | 动态构建多 Sheet 的 Excel 电子表格文件并直接发送到会话。 |
+| `qq_publish_qzone` | `content` | `key`，`token`，`images` | `low` | 发布一条全新的 QQ 空间公开说说动态。 |
+| `qq_group_history` | `groupId` | `key`，`token`，`limit` | `high` | 读取指定 QQ 群的历史漫游消息记录（`qq_get_group_history` 快捷调用别名）。 |
+| `qq_luogu_problem` | `pid` | `token` | `low` | 查询洛谷算法竞赛题库题目（题面、时空限制、输入输出格式）。 |
+| `qq_luogu_daily` | — | `token` | `low` | 获取洛谷每日打卡题目推荐与挑战内容。 |
+| `qq_luogu_solution` | `pid` | `token` | `low` | 检索指定题目的高赞题解思路与算法解析。 |
+| `qq_luogu_user` | `uid` | `token` | `low` | 查询洛谷平台用户的做题统计与天梯积分信息。 |
 
 ## 附录 B MCP 宿主服务与联网检索工具表（7 条）
 
