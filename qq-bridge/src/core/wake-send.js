@@ -1687,19 +1687,9 @@ export async function sendWakePrompt(key, reason) {
     } else if (key.startsWith('private:')) {
       unreadLine = '\n[Unread 0] nothing new to answer - close with qq_mark_read unless you deliberately want to open a topic.';
     }
-    /* 2026-10-28：哨兵轮以前只有 [Unread N] —— 每轮只看到最新那一条，前面聊了什么全靠猜
-     * （现场投诉"上下文理解没落地"）。补一条极短的最近对话尾巴：只带已经回过的几条，
-     * 每条截 90 字、私聊 4 条 / 群聊 6 条，≈200~400 token/轮，换回"知道刚才在说什么"。
-     * 明写 context only：这些不用再答一遍，避免把旧话题重答。 */
-    const tailN = 30; // 2026-10-28 主人要求：每轮都带最近 30 条
-    const unreadIds = new Set((Array.isArray(unreadAll) ? unreadAll : []).map((m) => String(m.messageId || m.seq)));
-    const tailMsgs = (Array.isArray(st.recentMessages) ? st.recentMessages : [])
-      .filter((m) => m && !unreadIds.has(String(m.messageId || m.seq)))
-      .slice(-tailN);
-    const recentTailLine = tailMsgs.length
-      ? '\n[Recent tail - context only, do NOT answer these again]\n'
-        + tailMsgs.map((m) => `${m.isSelf ? 'me' : speakerTag(m)}: ${String(m.plain || m.text || '').slice(0, 90)}`).join('\n')
-      : '';
+    /* 2026-10-28 主人第二次明确：**正文不许注入对话转录**。
+     * 转录是 user/message，剪枝只作用于 tool/result —— 注进去就永远留在历史里，每步重发。
+     * 所以这里只留状态位，细节一律走工具（qq_get_recent_messages / qq_memory_search），读完回合末被剪掉。 */
     const nagRe = /(何意味|啥意思|什么意思|回复我|回我|说话啊|理我|快点|快回|人呢|别装死|这?智能|你读读|没回(复|应)?|怎么不(回|理|说)|没看到|还没回)/;
     let nagLine = '';
     if ((st.unread || []).length >= 1 && [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().filter((m) => m && !m.isSelf).slice(0, 6).some((m) => nagRe.test(String(m.plain || m.text || '')))) {
@@ -1757,7 +1747,7 @@ export async function sendWakePrompt(key, reason) {
     if (!hasAnyTool) {
       const unread = (st.unread || []).length;
       const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck', afterthought: 'afterthought' };
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${recentTailLine}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     } else {
       // 哨兵轮 prompt 每轮都带当前令牌：模型不必凭记忆/跨轮次查找 token，
       // 杜绝"上下文轮换后 token 抄错 → 工具全 403 → 模型看不到消息 → 空唤醒乱回"链路。
@@ -1777,7 +1767,7 @@ export async function sendWakePrompt(key, reason) {
       const notOwnerTag = (!ownerWakeBranch && key.startsWith('private:'))
         ? `[NOT-OWNER]\n`
         : '';
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${recentTailLine}${unreadLine}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${unreadLine}`;
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。
@@ -1794,8 +1784,10 @@ export async function sendWakePrompt(key, reason) {
     // 所以：正常首轮 12 条、轮换首轮 24 条（都能用 config 调）；更早的历史交给
     // `qq_memory_search` 按需从 SQLite 翻（唤醒正文里已明确允许且鼓励这么做；读记录的工具是它）。
     // 依据见交接文档 §4.9 的 token 经济账：缓存读约占账单 61%，且随步数线性放大。
-    const ctxN = 30; // 2026-10-28 主人要求：开局与哨兵轮统一 30 条最近消息
-    const recentBlock = formatRecentWindow(st, key, ctxN);
+    /* 2026-10-28 主人：一轮只带简单状态，不注入对话转录（转录剪不掉，工具结果才剪得掉）。
+    * 首轮也不再预塞窗口：要哪段就调 qq_get_recent_messages / qq_memory_search。 */
+    const ctxN = 0;
+    const recentBlock = ctxN > 0 ? formatRecentWindow(st, key, ctxN) : '';
     promptText = buildWakePrompt(key, reason) + recentBlock;
     st._promptInjected = true;
     /* 2026-09-18：落点只认"当前映射"，不能再回退到 liveSid：轮换走"没有预热会话"的兜底路径时
