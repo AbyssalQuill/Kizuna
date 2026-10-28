@@ -1681,6 +1681,19 @@ export async function sendWakePrompt(key, reason) {
     } else if (key.startsWith('private:')) {
       unreadLine = '\n[Unread 0] nothing new to answer - close with qq_mark_read unless you deliberately want to open a topic.';
     }
+    /* 2026-10-28：哨兵轮以前只有 [Unread N] —— 每轮只看到最新那一条，前面聊了什么全靠猜
+     * （现场投诉"上下文理解没落地"）。补一条极短的最近对话尾巴：只带已经回过的几条，
+     * 每条截 90 字、私聊 4 条 / 群聊 6 条，≈200~400 token/轮，换回"知道刚才在说什么"。
+     * 明写 context only：这些不用再答一遍，避免把旧话题重答。 */
+    const tailN = key.startsWith('private:') ? 4 : 6;
+    const unreadIds = new Set((Array.isArray(unreadAll) ? unreadAll : []).map((m) => String(m.messageId || m.seq)));
+    const tailMsgs = (Array.isArray(st.recentMessages) ? st.recentMessages : [])
+      .filter((m) => m && !unreadIds.has(String(m.messageId || m.seq)))
+      .slice(-tailN);
+    const recentTailLine = tailMsgs.length
+      ? '\n[Recent tail - context only, do NOT answer these again]\n'
+        + tailMsgs.map((m) => `${m.isSelf ? 'me' : speakerTag(m)}: ${String(m.plain || m.text || '').slice(0, 90)}`).join('\n')
+      : '';
     const nagRe = /(何意味|啥意思|什么意思|回复我|回我|说话啊|理我|快点|快回|人呢|别装死|这?智能|你读读|没回(复|应)?|怎么不(回|理|说)|没看到|还没回)/;
     let nagLine = '';
     if ((st.unread || []).length >= 1 && [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().filter((m) => m && !m.isSelf).slice(0, 6).some((m) => nagRe.test(String(m.plain || m.text || '')))) {
@@ -1738,7 +1751,7 @@ export async function sendWakePrompt(key, reason) {
     if (!hasAnyTool) {
       const unread = (st.unread || []).length;
       const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck', afterthought: 'afterthought' };
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${recentTailLine}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     } else {
       // 哨兵轮 prompt 每轮都带当前令牌：模型不必凭记忆/跨轮次查找 token，
       // 杜绝"上下文轮换后 token 抄错 → 工具全 403 → 模型看不到消息 → 空唤醒乱回"链路。
@@ -1758,7 +1771,7 @@ export async function sendWakePrompt(key, reason) {
       const notOwnerTag = (!ownerWakeBranch && key.startsWith('private:'))
         ? `[NOT-OWNER]\n`
         : '';
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${unreadLine}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${recentTailLine}${unreadLine}`;
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。
