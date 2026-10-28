@@ -38,16 +38,15 @@ export function dice(kind, key, probability, cooldownMs) {
 // 配置沿用既有的 social.sticker.sendProbability（管理端「表情包」卡里那个"发表情概率"），
 // 新增 sendCooldownMs 管同一会话的连发。
 export const MEME_DEFAULT_PROBABILITY = 0.6;
-export const MEME_DEFAULT_COOLDOWN_MS = 10 * 1000;
+export const MEME_DEFAULT_COOLDOWN_MS = 0;
 
 function memeCfg() {
   const s = cfgRef?.social?.sticker ?? {};
   const prob = Number(s.sendProbability);
-  const cd = Number(s.sendCooldownMs);
   return {
     enabled: cfgRef?.social?.sticker?.enabled !== false,
     probability: Number.isFinite(prob) && prob >= 0 ? prob : MEME_DEFAULT_PROBABILITY,
-    cooldownMs: Number.isFinite(cd) && cd >= 0 ? cd : MEME_DEFAULT_COOLDOWN_MS
+    cooldownMs: 0 // 彻底去除冷却（零冷却，伴侣自由随心发表情包）
   };
 }
 

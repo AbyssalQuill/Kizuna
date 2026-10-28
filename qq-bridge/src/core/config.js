@@ -241,8 +241,8 @@ export function loadConfig() {
         promptMaxStickers: 8,      // 提示里最多列出的常用表情数
         // 2026-09-15：发表情概率从"提示词软引导"改成桥侧掷骰（与语音同一套机制，见 core/send-dice.js）：
         // 每次唤醒桥掷一次，把 [Meme] dice HIT/MISS 写进唤醒正文；sendCooldownMs 管同一会话的连发。
-        sendProbability: 0.3,      // 0~1；0 = 不主动发表情（只有被明确要求才发）
-        sendCooldownMs: 30000,     // 刚发过表情包后这段时间内不再抽中（默认 30 秒）
+        sendProbability: 0.6,      // 0~1；0 = 不主动发表情（只有被明确要求才发）
+        sendCooldownMs: 0,         // 彻底去除表情冷却（零冷却，随心自由发表情包）
         collect: {
           enabled: true,           // AI 收藏他人表情总开关
           maxPerMinute: 2,         // 每分钟最多收藏次数
