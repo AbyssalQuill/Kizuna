@@ -26,6 +26,8 @@
 | 13 | GUI 每次重启后又弹「预览版说明」 | ack 存在 `ui-settings-general.welcomeNoticeVersion`，而 DSH 回写这条 ack 时正好落在桥托管的 preset 声明块内部，`syncPresetDeclaration21` 每次启动整块替换 → ack 消失 → 版本比对不过就弹窗 | 生成器新增 `readWelcomeNoticeVersion()`：从已装 DSH 的 `dsh-client-ui-settings-models/lib/client.js` 读 `WELCOME_NOTICE_VERSION`（读不到用 `2026-09-28.1` 兜底），每次重启把 ack 行写进声明块；DSH 升级自动跟版本 | `b80dd96` | 重启后 `profiles/web/cordis.patch.yml` 有 `welcomeNoticeVersion: 2026-09-28.1`；PyYAML `safe_load` 7 个顶层项、`has ui-settings-general: True`、值为字符串 |
 | 14 | 服务器 GUI 工作区堆着实验目录 | `persona-agent-probe` 是零引用探针工作区；`SlangAgent` 只是显示名，路径本来就是 `state/slang-agent` | 停 `dsh-web` → 改 `storages/workspace.json`（删行 + 同步 `global.workspaceIds` + 改标题）→ 起服务；`agents` / `persona-agent` / `slang-agent` 保留（机器人自己在写） | —（数据操作，无代码提交） | `tables.workspaces` 与 `global.workspaceIds` 一致（4 条、`ids_ok: True`）；3080 在听；备份 `workspace.json.bak-wsclean-20261028-124604` |
 | 15 | 本地 commit 推不上 GitHub | CLI `git push` 走本机 HTTPS，连 GitHub 超时 | 改走 GitHub MCP `push_files` 直接推文件；本地 `git fetch && git reset --hard origin/main` 对齐 | `05d2910` | 本地与远端 `git log` 同为 `05d2910`、`## main...origin/main` 无差异；`wake-send.js` 里 `[Action Flow]` 只剩一行注释 |
+| 16 | 图片投递后只收到「这张图没能投递给你」占位 | ① NapCat 给的图是绝对路径（`C:\…\xx.png`），而 `resolveOneMedia` 调 `get_image` 的前置闸门 `isProbablySafeImageFileRef()` 只放行 `[\w.+=@-]+`，判定失败；② 失败就直接返回 null 走上层占位，`fetchOneBotImage` 返回 null 前一行日志都没有 → 线上无从定位 | ① 闸门放宽为「绝对路径 + `isSafeLocalMediaPath(…, cfg.napcat.homeDir)` 通过」也放行；② 返回 null 前补一行 `[media] 图片拿不到内容：file=… url=… kind=…` | `bc7adac` | 服务器 `media-pipe.js` 18986 字节、`md5sum` = `a7f02cb642406cbca0b7d16b69a2112f`（与本地一致）、`node --check` 通过、`grep -c canAskGateway`=2 / `图片拿不到内容`=1；按序重启后三服务 active，近 3 分钟日志无 `MODULE_NOT_FOUND` / `SyntaxError` |
+| 17 | 上传「失败」两小时，实际把线上文件清空了 | `ssh_upload` 的写入是「先 `open` 截断、再灌流」，握手超时时截断已经发生、内容没到 → 线上 `media-pipe.js` 变成 0 字节（`md5` = `d41d8cd98f00b204e9800998ecf8427e`）；而我用 `grep -c` 判断「没传上去」，恰好和「文件是空的」同一个结果，连错两轮都没发现 | ① 判定一律看 `stat -c %s` + `md5sum`，不看内容 grep；② 改走分段 base64：本地切 6KB 段 → `printf` 落 `/tmp/mpchunks/` → `cat … | base64 -d` 拼到 `/tmp` 先校验 md5，一致才 `cp`+`mv` 原子替换上线 | `bc7adac` | 拼接产物 md5 与本地一致后才替换；替换后 `md5sum`/字节数/`node --check` 三项齐全 |
 
 ---
 
@@ -71,6 +73,17 @@ ssh root@202.61.72.79 'systemctl restart dsh-web'     # MCP 子进程只随 dsh 
 - 定时任务库：`state/scheduled-tasks.json`（当前 0 条）。
 - 推送 GitHub：本机 `git push` 常超时，改走 GitHub MCP `push_files`（owner `AbyssalQuill` / repo `Kizuna` / branch `main`）；推完本地 `git fetch && git reset --hard origin/main` 对齐，避免两套 sha 打架。
 - 服务器 `/root/qq-bridge` 不是 git 仓库，上线一直是 scp 覆盖文件；查线上版本只能比对内容。
+- **上传会先截断**：`ssh_upload` / `scp` 都是「先 open 截断、再灌流」。链路是跨境长途（约 170ms、ICMP 被墙），握手随时可能超时，超时那一刻线上文件已经是 0 字节。所以：
+  - 判断有没有传上去，只看 `stat -c %s` 和 `md5sum`，不要看内容 grep（空文件和旧版本对 grep 一样是 0）。
+  - 传丢了、或者文件已被清空，用分段 base64 补：
+```bash
+# 本地：base64 -w0 file > file.b64，按 6000 字符切段；逐段 printf 上传
+printf '%s' '<段内容>' > /tmp/mpchunks/c000
+cat /tmp/mpchunks/c* | base64 -d > /tmp/staged.js
+md5sum /tmp/staged.js   # 与本地一致才继续
+cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/src/core/<file>.js
+```
+  - 单条 `ssh_exec` 串行执行、失败重试 3~5 次基本都能过；并发开多条 SSH 会加剧握手超时。
 
 ---
 

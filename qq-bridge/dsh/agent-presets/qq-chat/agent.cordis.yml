@@ -18,6 +18,8 @@
           memory_and_cross_session: Proactively call qq_memory_search when encountering member names, past events, owner preferences, or shared memories.
           slang_and_subtext: Accurately parse online slang/subtext (e.g. 🍬 means silly/blunder, never literal sweets). Search or infer context; never take banter literally.
           web_knowledge: Call web search on demand whenever the topic touches real-time news, trivia, facts, or unfamiliar terms.
+          session_key: 'Every QQ tool that declares a key parameter must receive it verbatim from the [Session] line at the top of the wake body: [Session] group:123456 -> key="group:123456"; [Session] private:10001 -> key="private:10001". A missing key is rejected - the bridge never guesses which chat you mean, because it once posted into the wrong group.'
+
           ephemeral_promise: Everything read by tools is pruned at turn end; query freely with zero token bloat.
         step_4_context_logic_and_critique:
           intent_and_subtext: Analyze conversation flow, dialogue targets, and underlying motives.

@@ -77,7 +77,15 @@ export async function fetchOneBotImage(media, opts = {}) {
   const raw = opts.raw === true;
   const asIs = (buf, mime) => (raw ? { buffer: buf, mimeType: mime, compressed: false } : finalizeImageBuffer(buf, mime));
   // 优先使用 OneBot get_image 获取网关侧信息；只有 file 是安全缓存文件名时才允许交给网关。
-  if (media.kind === 'image' && media.file && isProbablySafeImageFileRef(media.file)) {
+  /* 2026-10-28 修「图还没加载出来」：NapCat 有些版本把 file 直接给成绝对路径
+   * （/root/.config/QQ/nt_data/Pic/....jpg），旧的「只认简单文件名」判据会把这类图整条跳过 ——
+   * 连 get_image 都不问，最后静默退化成 [图片（获取失败）]，日志里什么都没有。
+   * 绝对路径只要能通过 isSafeLocalMediaPath（仍在 QQ 缓存目录内）就照样问网关：这一步只读元数据。 */
+  const fileRefRaw = media.kind === 'image' && media.file ? String(media.file) : '';
+  const fileRefIsAbs = /^([a-zA-Z]:[\\/]|\/)/.test(fileRefRaw);
+  const canAskGateway = !!fileRefRaw
+    && (isProbablySafeImageFileRef(fileRefRaw) || (fileRefIsAbs && isSafeLocalMediaPath(fileRefRaw, cfgRef?.napcat?.homeDir)));
+  if (canAskGateway) {
     try {
       // 留足 25 秒给 NapCat 下载/落盘超大摄影级图片，避免因过早超时而拿不到本地原图
       const info = await botRef.getImage({ file: String(media.file) }, { timeoutMs: 25000 });
@@ -153,6 +161,8 @@ export async function fetchOneBotImage(media, opts = {}) {
       log(`图片 URL 抓取失败: ${error?.message ?? error}`);
     }
   }
+  /* 失败必须留痕：否则线上只看到 [图片（获取失败）]，分不清是没文件、没 URL 还是下载挂了。 */
+  log(`[media] 图片拿不到内容：file=${fileRefRaw ? fileRefRaw.slice(0, 96) : '(空)'} url=${media.url ? String(media.url).slice(0, 60) : '(空)'} kind=${media.kind ?? '(空)'}`);
   return null;
 }
 
