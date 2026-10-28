@@ -1752,9 +1752,9 @@ export function voiceTurnHint(key) {
   const { p, cooling, hit } = dice('voice', key, cfg.send?.probability ?? defaultVoiceProb, cfg.send?.cooldownMs ?? 0);
   const cap = Math.min(60, Number(cfg.maxChars) || 60);
   if (hit) {
-    return `[Voice] HIT: send voice (qq_send_voice, voice=${voiceName}, <${cap} chars). Voice alone or text+voice (never repeat text).\n`;
+    return `[Voice] HIT: send voice (qq_send_voice, voice=${voiceName}, <${cap} chars). PREFER VOICE ALONE (no text bubble, like a real voice note). If text+voice: voice MUST have a COMPLETELY DIFFERENT meaning (STRICTLY FORBIDDEN to repeat, paraphrase, or re-say sleep/time reminders).\n`;
   }
-  return `[Voice Freedom] Spontaneous qq_send_voice (voice=${voiceName}, <${cap} chars) allowed anytime.\n`;
+  return `[Voice Freedom] Spontaneous qq_send_voice allowed anytime. Prefer voice alone, and never duplicate text meaning.\n`;
 }
 
 // ── 发送：把音频作为 QQ 语音发出去 ───────────────────────────────────────────

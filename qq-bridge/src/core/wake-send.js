@@ -478,7 +478,10 @@ export function buildWakePrompt(key, reason) {
    * 或由 DSH 内部取；正文不再每轮带一个会变的时间戳。 */
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
   const diceLines = voiceTurnHint(key) + memeTurnHint(key);
-  const diceBlock = diceLines ? `\n${diceLines.replace(/\n+$/, '')}\n` : '';
+  const diceRand = Math.random();
+  const targetBubbles = diceRand < 0.68 ? 1 : (diceRand < 0.92 ? 2 : 3);
+  const bubbleLine = `\n[Bubbles] Target ${targetBubbles} bubble(s). Speak naturally, no mechanical patterns.`;
+  const diceBlock = (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + bubbleLine + '\n';
   return tokenLine + wakeLine + diceBlock;
 }
 
@@ -1748,14 +1751,17 @@ export async function sendWakePrompt(key, reason) {
     const wrSent = wakeRefLine(key);
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
-    if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)|贴贴|抱抱|傲娇|大肥鱼/i.test(unreadTextAll)) {
+    if (/(?:多发|发点|来个|发个|要|想看)(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll)) {
       explicitMeme = '\n[Meme Directive] Send 1 gallery meme (qq_send_meme).\n';
     }
     let explicitVoice = '';
-    if (/(?:发语音|说句话|音色|语音|听听声音|voice|连麦|叫一声|晚安|去睡|困了|想听)/i.test(unreadTextAll)) {
+    if (/(?:发语音|说句话|音色|语音|听听声音|voice|连麦|叫一声|想听)/i.test(unreadTextAll)) {
       explicitVoice = '\n[Voice Directive] Send a voice note (qq_send_voice).\n';
     }
-    const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
+    const diceRand = Math.random();
+    const targetBubbles = diceRand < 0.68 ? 1 : (diceRand < 0.92 ? 2 : 3);
+    const bubbleLine = `\n[Bubbles] Target ${targetBubbles} bubble(s). Speak naturally, no mechanical patterns.`;
+    const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + bubbleLine + explicitMeme + explicitVoice;
     /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，
      * 实测模型常常不调 get_time 就直接猜时刻/星期，所以基准行必须每轮都在；要更准再用 get_time 取一次。
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
