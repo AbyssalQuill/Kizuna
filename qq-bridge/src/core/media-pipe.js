@@ -12,8 +12,8 @@ import { visionSplitEnabled as useVisionSplit, describeImageWithVisionModel } fr
 // 2026-09-21 表情包理解：收到 QQ 原生表情、又拿不到在线描述时，用本地 id→中文名表兜底
 import { faceNameById } from '../qq-faces.js';
 
-export const MAX_MEDIA_BYTES = 25 * 1024 * 1024; // 单条消息图片总字节上限（调大以支持收藏大图/大 gif；safeFetchBuffer 调用处显式传参）
-export const MAX_MEDIA_PIXELS = 64_000_000; // 单张图片像素上限，防止“图片炸弹”解码拖垮 DSH
+export const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 单条消息图片总字节上限（调大至50MB以支持摄影级超高清大图与RAW导出）
+export const MAX_MEDIA_PIXELS = 150_000_000; // 单张图片像素上限（1.5亿像素，支持高像素单反与全景摄影图）
 export const MAX_MEDIA_STORE_PER_KEY = 500; // 每个会话最多缓存多少条消息的媒体元数据，防止无限增长
 
 let cfgRef = null;
@@ -79,11 +79,8 @@ export async function fetchOneBotImage(media, opts = {}) {
   // 优先使用 OneBot get_image 获取网关侧信息；只有 file 是安全缓存文件名时才允许交给网关。
   if (media.kind === 'image' && media.file && isProbablySafeImageFileRef(media.file)) {
     try {
-      /* 2026-09-16：NapCat 侧内核下载图片有时会超时（现场 napcat.log 里的
-       * `Timeout: NTEvent NodeIKernelMsgService/downloadRichMedia`）——那是 NapCat 去 QQ CDN 拉文件失败。
-       * 以前这里要等满 12 秒才会落到"直接用消息段 URL 自己抓"这条兜底上，一张图就把唤醒拖十几秒。
-       * 现在 6 秒就放弃 get_image，马上走 URL 直连（桥自己抓通常更快，也不受 QQ 客户端下载队列影响）。 */
-      const info = await botRef.getImage({ file: String(media.file) }, { timeoutMs: 6000 });
+      // 留足 25 秒给 NapCat 下载/落盘超大摄影级图片，避免因过早超时而拿不到本地原图
+      const info = await botRef.getImage({ file: String(media.file) }, { timeoutMs: 25000 });
       const obj = info && typeof info === 'object' ? info : {};
 
       // 1. 本地缓存文件优先策略（0 延迟、免受网络 CDN/DNS 超时影响）
@@ -125,7 +122,8 @@ export async function fetchOneBotImage(media, opts = {}) {
       // 3. 兜底尝试通过 URL 网络下载（独立 try-catch，防止 DNS/CDN 超时阻断后续）
       if (obj.url) {
         try {
-          const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES);
+          const qqHeaders = String(obj.url).includes('qq.com') ? { referer: 'https://im.qq.com/', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QQ/9.7.21' } : {};
+          const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES, qqHeaders);
           const dims = getImageDimensions(fetched.buffer);
           if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
             log(`get_image URL 图片像素超限，已跳过（${dims.width}x${dims.height}）`);
@@ -143,7 +141,8 @@ export async function fetchOneBotImage(media, opts = {}) {
   // 其次直接用消息段里的 URL
   if (media.url) {
     try {
-      const fetched = await safeFetchBuffer(String(media.url), MAX_MEDIA_BYTES);
+      const qqHeaders = String(media.url).includes('qq.com') ? { referer: 'https://im.qq.com/', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QQ/9.7.21' } : {};
+      const fetched = await safeFetchBuffer(String(media.url), MAX_MEDIA_BYTES, qqHeaders);
       const dims = getImageDimensions(fetched.buffer);
       if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
         log(`图片 URL 像素超限，已跳过（${dims.width}x${dims.height}）`);
