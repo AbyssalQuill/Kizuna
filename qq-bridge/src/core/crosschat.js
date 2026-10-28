@@ -119,7 +119,8 @@ export function buildCrossChatBlock(key) {
     for (const r of recentMessagesAcrossSessions(key, { windowMs: CROSS_HOUR_MS, limit: 2 })) {
       const label = describeCrossKey(r.key).slice(0, CROSS_LABEL_MAX);
       const who = (r.isSelf ? 'you' : String(r.sender || '').trim().slice(0, CROSS_WHO_MAX)) || r.key;
-      const head = `${CROSS_HEAD}${label}: ${who}: `;
+      const mediaHint = r.hasMedia && r.messageId ? ` [带图 id:${r.messageId}]` : (r.messageId ? ` (id:${r.messageId})` : '');
+      const head = `${CROSS_HEAD}${label}: ${who}${mediaHint}: `;
       const body = String(r.text ?? '').replace(/\s+/g, ' ').slice(0, CROSS_BODY_MAX);
       const cap = Math.min(legacyLineMax(label), 170);
       let line = head + body + CROSS_SUFFIX;

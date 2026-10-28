@@ -116,7 +116,7 @@ export async function resolveSafeHost(hostname) {
   }
   let addresses;
   try {
-    addresses = await withTimeout(dnsLookup(h, { all: true, verbatim: true }), 5000, `DNS 解析 ${h}`);
+    addresses = await withTimeout(dnsLookup(h, { all: true, verbatim: true }), 10000, `DNS 解析 ${h}`);
   } catch (error) {
     throw new Error(`域名解析失败：${error?.message ?? error}`);
   }

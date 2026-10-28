@@ -376,7 +376,7 @@ export function resolveNameToUid(name) {
  * 末尾三个（chatCounters / chatConvList / chatDbStats）是管理端「聊天记录」页要的总量计数。 */
 export {
   persistChatMessage, markMessagesRead, markChatRecalled, markOutboundRecalled,
-  fetchUnreadChatMessages, recentChatMessages, recentMessagesAcrossSessions,
+  fetchUnreadChatMessages, recentChatMessages, recentMessagesAcrossSessions, findChatMessageMedia,
   searchChatMessages, deleteChatMessages, clearChatHistory, loadGroupChatMessagesForLearning,
   chatCounters, chatConvList, chatDbStats, tokenUsageSummary, recountChatCounters,
   // rebuildChatFts 也要透出：控制台的 /api/social/chat-reindex 与测试从 './memory.js' import 它

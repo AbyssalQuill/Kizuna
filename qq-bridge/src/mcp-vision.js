@@ -40,11 +40,16 @@ function allowedRoots() {
   const cfg = getConfig();
   const list = [
     String(cfg?.napcat?.tmpDir ?? '').trim() || path.join(ROOT, 'state', 'image-tmp'),
+    String(cfg?.napcat?.homeDir ?? '').trim(),
     path.join(ROOT, 'state', 'image-tmp'),
     '/root/.dsh/attachments',
+    '/home/qq/.config/QQ',
+    '/root/.config/QQ',
+    '/opt/napcat',
   ];
   const out = [];
   for (const p of list) {
+    if (!p) continue;
     try { out.push(fs.realpathSync(p)); } catch {}
   }
   return out;
@@ -53,6 +58,11 @@ function allowedRoots() {
 function withinRoots(target) {
   let real;
   try { real = fs.realpathSync(target); } catch { return null; }
+  const normalized = real.replace(/\\/g, '/');
+  // 严格匹配 NTQQ 原图/缩略图特征路径
+  if (/\/nt_data\/Pic\//i.test(normalized) || /\/nt_data\/Thumb\//i.test(normalized)) {
+    return real;
+  }
   for (const root of allowedRoots()) {
     const withSep = root.endsWith(path.sep) ? root : root + path.sep;
     if (real === root || real.startsWith(withSep)) return real;

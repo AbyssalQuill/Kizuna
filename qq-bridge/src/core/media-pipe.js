@@ -85,9 +85,28 @@ export async function fetchOneBotImage(media, opts = {}) {
        * 现在 6 秒就放弃 get_image，马上走 URL 直连（桥自己抓通常更快，也不受 QQ 客户端下载队列影响）。 */
       const info = await botRef.getImage({ file: String(media.file) }, { timeoutMs: 6000 });
       const obj = info && typeof info === 'object' ? info : {};
-      const base64 = base64FromMaybe(obj.data) || base64FromMaybe(obj.base64) || base64FromMaybe(obj.file);
+
+      // 1. 本地缓存文件优先策略（0 延迟、免受网络 CDN/DNS 超时影响）
+      if (typeof obj.file === 'string' && !obj.file.startsWith('base64://') && fs.existsSync(obj.file) && isSafeLocalMediaPath(obj.file, cfgRef.napcat?.homeDir)) {
+        const stat = fs.statSync(obj.file);
+        if (stat.size > MAX_MEDIA_BYTES) {
+          log(`本地图片文件超限，已跳过（${Math.round(stat.size / 1024)}KB）`);
+        } else {
+          const buf = fs.readFileSync(obj.file);
+          const dims = getImageDimensions(buf);
+          if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
+            log(`本地图片像素超限，已跳过（${dims.width}x${dims.height}）`);
+          } else if (!looksLikeImageBuffer(buf)) {
+            log(`本地缓存文件不是可识别的图片格式，已跳过（${Math.round(buf.length / 1024)}KB）`);
+          } else {
+            return await asIs(buf, mimeFromBuffer(buf));
+          }
+        }
+      }
+
+      // 2. 网关直接回传 base64 数据
+      const base64 = base64FromMaybe(obj.data) || base64FromMaybe(obj.base64);
       if (base64) {
-        // 粗略估计 base64 解码后大小，超限直接拒绝，避免超大字符串撑爆内存
         if (base64.length * 3 / 4 <= MAX_MEDIA_BYTES) {
           const buf = Buffer.from(base64, 'base64');
           if (buf.length > 0 && looksLikeImageBuffer(buf)) {
@@ -102,34 +121,19 @@ export async function fetchOneBotImage(media, opts = {}) {
           log(`get_image 返回的图片 base64 超限，已跳过（${Math.round(base64.length * 3 / 4 / 1024)}KB）`);
         }
       }
+
+      // 3. 兜底尝试通过 URL 网络下载（独立 try-catch，防止 DNS/CDN 超时阻断后续）
       if (obj.url) {
-        const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES);
-        const dims = getImageDimensions(fetched.buffer);
-        if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
-          log(`get_image URL 图片像素超限，已跳过（${dims.width}x${dims.height}）`);
-        } else {
-          return await asIs(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(obj.url));
-        }
-      }
-      if (typeof obj.file === 'string' && !obj.file.startsWith('base64://') && fs.existsSync(obj.file) && isSafeLocalMediaPath(obj.file, cfgRef.napcat?.homeDir)) {
-        const stat = fs.statSync(obj.file);
-        if (stat.size > MAX_MEDIA_BYTES) {
-          log(`本地图片文件超限，已跳过（${Math.round(stat.size / 1024)}KB）`);
-        } else {
-          const buf = fs.readFileSync(obj.file);
-          const dims = getImageDimensions(buf);
+        try {
+          const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES);
+          const dims = getImageDimensions(fetched.buffer);
           if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
-            log(`本地图片像素超限，已跳过（${dims.width}x${dims.height}）`);
-          } else if (!looksLikeImageBuffer(buf)) {
-            // 字节魔术字校验：与上面的 base64 分支对齐。缺这一步时，NapCat 缓存里若出现
-            // 非 PNG/JPEG/GIF/WebP 的文件（BMP/AVIF/TIFF…），会带着猜出来的 mime 直送 DSH，
-            // 触发 INVALID_IMAGE 把整条 prompt（含文字）拒收。
-            log(`本地缓存文件不是可识别的图片格式，已跳过（${Math.round(buf.length / 1024)}KB）`);
+            log(`get_image URL 图片像素超限，已跳过（${dims.width}x${dims.height}）`);
           } else {
-            // 本机缓存文件同样必须过压缩/降采样（投递给模型那条路）：此前这条分支直接返回原图，
-            // 长截图等单边 > DSH per-side 上限的图会被整条 prompt 拒收。转发（raw）时按字节原样给。
-            return await asIs(buf, mimeFromBuffer(buf));
+            return await asIs(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(obj.url));
           }
+        } catch (fetchErr) {
+          log(`get_image 内部 URL 抓取失败: ${fetchErr?.message ?? fetchErr}`);
         }
       }
     } catch (error) {

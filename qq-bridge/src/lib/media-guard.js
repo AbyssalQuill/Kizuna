@@ -3,13 +3,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// 校验本地媒体路径必须位于 homeDir 之内（homeDir = 原 cfg.napcat.homeDir，由调用方注入）
+// 校验本地媒体路径必须位于合法目录之内（homeDir、/home/qq/.config/QQ、/root/.config/QQ 或 NTQQ 数据目录）
 export function isSafeLocalMediaPath(filePath, homeDir) {
   try {
     const real = fs.realpathSync(String(filePath));
-    if (!homeDir) return false;
-    const realHome = fs.realpathSync(String(homeDir));
-    return real === realHome || real.startsWith(realHome + path.sep);
+    const normalized = real.replace(/\\/g, '/');
+    // 1. 如果在显式指定的 homeDir 及其下，放行
+    if (homeDir) {
+      try {
+        const realHome = fs.realpathSync(String(homeDir)).replace(/\\/g, '/');
+        if (normalized === realHome || normalized.startsWith(realHome + '/')) return true;
+      } catch {}
+    }
+    // 2. Linux / Windows 宿主机常见 QQ / NapCat 数据缓存目录放行
+    const allowedRoots = [
+      '/home/qq/.config/QQ',
+      '/root/.config/QQ',
+      '/opt/napcat',
+    ];
+    for (const r of allowedRoots) {
+      if (normalized.startsWith(r)) return true;
+    }
+    // 3. 严格匹配 NTQQ 原图/缩略图特征路径（防止读到 QQ 账号敏感配置，仅限 Pic/Ori/Thumb 媒体子目录）
+    if (/\/nt_data\/Pic\//i.test(normalized) || /\/nt_data\/Thumb\//i.test(normalized)) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }

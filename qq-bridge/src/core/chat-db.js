@@ -806,7 +806,7 @@ export function recentMessagesAcrossSessions(excludeKey, opts = {}) {
   const scan = Math.min(200, Math.max(limit * 8, 16));
   try {
     const rows = db.prepare(
-      `SELECT conv_key, sender_uid, sender_name, is_self, content, ts, ts_ms
+      `SELECT conv_key, sender_uid, sender_name, is_self, message_id, content, media, ts, ts_ms
        FROM chat_messages WHERE ${where.join(' AND ')}
        ORDER BY ts_ms DESC, id DESC LIMIT ?`
     ).all(...params, scan);
@@ -821,6 +821,8 @@ export function recentMessagesAcrossSessions(excludeKey, opts = {}) {
         sender: String(r.sender_name ?? ''),
         senderUid: String(r.sender_uid ?? ''),
         isSelf: !!r.is_self,
+        messageId: String(r.message_id ?? ''),
+        hasMedia: !!(r.media && String(r.media).length > 2),
         tsMs: Number(r.ts_ms) || 0,
         ts: String(r.ts ?? ''),
         text: String(r.content ?? '').slice(0, 200),
@@ -832,6 +834,35 @@ export function recentMessagesAcrossSessions(excludeKey, opts = {}) {
     log(`[chat-db] 跨会话最近消息查询失败（忽略）: ${error?.message ?? error}`);
     return [];
   }
+}
+
+/** 按 message_id / msg_seq 从数据库查单条消息的 media 媒体附件（跨会话查图兜底） */
+export function findChatMessageMedia(ref) {
+  const db = initChatDb();
+  if (!db || !ref) return null;
+  const s = String(ref).trim();
+  if (!s) return null;
+  const num = Number(s);
+  const isPositiveInt = Number.isInteger(num) && num > 0;
+  try {
+    let row;
+    if (isPositiveInt) {
+      row = db.prepare(
+        "SELECT conv_key, media, quote_target FROM chat_messages WHERE (message_id = ? OR msg_seq = ? OR qq_seq = ?) AND media != '' ORDER BY id DESC LIMIT 1"
+      ).get(s, num, num);
+    } else {
+      row = db.prepare(
+        "SELECT conv_key, media, quote_target FROM chat_messages WHERE message_id = ? AND media != '' ORDER BY id DESC LIMIT 1"
+      ).get(s);
+    }
+    if (row && row.media) {
+      const parsed = JSON.parse(row.media);
+      if (Array.isArray(parsed) && parsed.length) {
+        return { media: parsed, quoteTarget: row.quote_target, foundIn: row.conv_key };
+      }
+    }
+  } catch {}
+  return null;
 }
 
 /** chat_messages 行 → 检索结果的统一形状（搜索分支与 FTS 分支共用，避免两处漂移）。 */

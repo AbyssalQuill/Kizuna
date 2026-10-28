@@ -2,7 +2,7 @@
 import { redactKnownTokensOnly } from '../lib/outbound-text.js';
 import { log } from '../lib/log.js';
 import { sanitizeForwardId } from '../forward.js';
-import { persistChatMessage, recentChatMessages, rememberContactName } from './memory.js';
+import { persistChatMessage, recentChatMessages, rememberContactName, findChatMessageMedia } from './memory.js';
 import { getSocialState, saveSocialState, social, seenForwardIds } from './social-state.js';
 import { messageMediaStore } from './session-state.js';
 import { currentMode } from './mode.js';
@@ -339,6 +339,11 @@ export function findMessageMedia(key, ref, opts = {}) {
       const h = lookupIn(k, r);
       if (h) return { entry: h, foundIn: k };
     }
+    // 内存未命中（跨会话 / 历史消息）→ 查 SQLite chat.db 兜底，彻底解决跨会话图片丢失问题
+    try {
+      const dbHit = findChatMessageMedia(r);
+      if (dbHit) return { entry: { media: dbHit.media, quoteTarget: dbHit.quoteTarget }, foundIn: dbHit.foundIn };
+    } catch {}
     return null;
   };
 
