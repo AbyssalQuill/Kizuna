@@ -477,7 +477,9 @@ export function buildWakePrompt(key, reason) {
   /* 2026-10-28 主人：时间行也不要了 —— 需要时间就调 get_time（工具返回北京时间，分钟精度），
    * 或由 DSH 内部取；正文不再每轮带一个会变的时间戳。 */
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
-  return tokenLine + wakeLine;
+  const diceLines = voiceTurnHint(key) + memeTurnHint(key);
+  const diceBlock = diceLines ? `\n${diceLines.replace(/\n+$/, '')}\n` : '';
+  return tokenLine + wakeLine + diceBlock;
 }
 
 /**
@@ -1746,11 +1748,11 @@ export async function sendWakePrompt(key, reason) {
     const wrSent = wakeRefLine(key);
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
-    if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll) || /贴贴/i.test(unreadTextAll)) {
+    if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)|贴贴|抱抱|傲娇|大肥鱼/i.test(unreadTextAll)) {
       explicitMeme = '\n[Meme Directive] The peer expects a gallery meme. Call qq_send_meme(key, token, query="emotion keyword"); never send a default yellow-face sticker (no qq_send_sticker).\n';
     }
     let explicitVoice = '';
-    if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(unreadTextAll)) {
+    if (/(?:发语音|说句话|音色|语音|听听声音|voice|连麦|叫一声|晚安|去睡|困了|想听)/i.test(unreadTextAll)) {
       explicitVoice = '\n[Voice Directive] The peer expects a voice reply. Call qq_send_voice.\n';
     }
     const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
@@ -1794,7 +1796,7 @@ export async function sendWakePrompt(key, reason) {
       const notOwnerTag = (!ownerWakeBranch && key.startsWith('private:'))
         ? `[NOT-OWNER]\n`
         : '';
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${clockLine}${unreadLine}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${clockLine}${diceBlock}${recallLine}${unreadLine}`;
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。

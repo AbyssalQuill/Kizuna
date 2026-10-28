@@ -1755,7 +1755,7 @@ export function voiceTurnHint(key) {
     // 2026-10-22：允许纯语音回复，或文字+语音；但发语音绝不能与文字同义复述（情绪/娇憨/反应/补充而非复读）
     return `[Voice] dice HIT (p=${p}, default voice=${voiceName}): SEND A SHORT VOICE BUBBLE (qq_send_voice, under ${cap} chars). You can reply with VOICE ALONE (no text bubble needed, like a real person speaking a voice note), OR send both text and voice. If sending both: voice MUST NEVER repeat or paraphrase the text (never the same words or meaning twice); let voice add emotion, a tease, a murmur, or a fresh reaction instead.\n`;
   }
-  return '';
+  return `[Voice Freedom] You have full freedom to spontaneously send a short voice note (qq_send_voice, default voice=${voiceName}, under ${cap} chars) whenever you want to whisper tenderly, tease, murmur, comfort, say goodnight, or express vivid spoken emotion! You may send voice alone or alongside text.\n`;
 }
 
 // ── 发送：把音频作为 QQ 语音发出去 ───────────────────────────────────────────
