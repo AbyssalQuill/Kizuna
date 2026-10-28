@@ -337,7 +337,8 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 否则模型会以为多读一次就要多背一辈子上下文。 */
   const ctxNote = '[Context] Persona text and any messages you read are removed from history at turn end. '
     + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search(query=...) for older topics, '
-    + 'qq_memory_search(direction=out) for your own past lines. Reading is cheap - it gets pruned at turn end.';
+    + 'qq_memory_search(direction=out) for your own past lines. Reading is cheap - it gets pruned at turn end. '
+    + 'Need the current time? Call get_time (Beijing time, minute precision) - the wake body no longer carries a [Now] line.';
   return `${lead}\n${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".\n${ctxNote}`;
 }
 
@@ -468,10 +469,10 @@ export function buildWakePrompt(key, reason) {
     ? `[NOT-OWNER]\n`
     : '';
   const tokenLine = `[Token] ${st.agentToken}\n[Session] ${key}\n${ownerMark}${notOwnerMark}`;
-  const nowMs = Date.now();
-  const nowLine = `[Now] ${fmtBeijing(nowMs)}\n`;
+  /* 2026-10-28 主人：时间行也不要了 —— 需要时间就调 get_time（工具返回北京时间，分钟精度），
+   * 或由 DSH 内部取；正文不再每轮带一个会变的时间戳。 */
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
-  return tokenLine + nowLine + wakeLine;
+  return tokenLine + wakeLine;
 }
 
 /**
@@ -1739,7 +1740,7 @@ export async function sendWakePrompt(key, reason) {
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
      * 只能再花一步调 qq_get_recent_messages；而 [Now] 每轮都变，但这份正文本身就是本轮新增的 user 消息，
      * 本来就不在前缀缓存里，所以不影响缓存命中。 */
-    const nowSentinel = `[Now] ${fmtBeijing(Date.now())}\n`;
+    const nowSentinel = ''; // 2026-10-28：不再注入时间行，需要就调 get_time
 
     // 工具全关的兜底（几乎不会发生）：没有 unread 工具就回退到两行说明版，避免哨兵悬空。
     const tools = cfgRef.social?.tools;
