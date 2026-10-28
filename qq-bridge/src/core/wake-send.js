@@ -1658,10 +1658,24 @@ export async function sendWakePrompt(key, reason) {
     // 哨兵轮直接带上未读正文（私聊 + 群聊）：省掉一整次模型往返（≈4 秒、以及那一次
     // 会把整个 8 万字符的 prompt 再发一遍的开销），这是「第一条回复」快不快的最大变量。
     // 既然带上了，就必须明说「这一步不用再读」，否则模型照旧先读一遍，白花一次往返。
-    // 体积控制：只带最近 UNC_MAX 条、每条截断 UNC_TEXT，超出的部分提示用工具按需取。
-    const UNC_MAX = key.startsWith('private:') ? 10 : 15;
-    const UNC_TEXT = key.startsWith('private:') ? 200 : 120;
+    // 体积控制：根据群聊/私聊活跃度动态调整上下文携带数，防止高频刷屏时上下文断裂
     const unreadAll = Array.isArray(st.unread) ? st.unread : [];
+    let UNC_MAX = key.startsWith('private:') ? 10 : 15;
+    let groupActivityLine = '';
+    if (!key.startsWith('private:')) {
+      const recentList = Array.isArray(st.recentMessages) ? st.recentMessages : [];
+      const now = Date.now();
+      const count2m = recentList.filter((m) => m && m.time && (now - m.time * 1000 < 120000)).length;
+      if (count2m >= 12 || unreadAll.length >= 10) {
+        UNC_MAX = Math.min(35, Math.max(25, unreadAll.length));
+        groupActivityLine = '\n[Group Dynamic] Fast-paced multi-threaded burst detected. People are chatting simultaneously across multiple topics. Identify who is talking to whom. If replying to an earlier thought rather than the latest line, quote it using replyToMessageId or @mention.';
+      } else if (count2m <= 2 && unreadAll.length <= 2) {
+        UNC_MAX = 8;
+      } else {
+        UNC_MAX = 16;
+      }
+    }
+    const UNC_TEXT = key.startsWith('private:') ? 200 : 120;
     const unreadMsgs = unreadAll.slice(-UNC_MAX);
     let unreadLine = '';
     if (unreadMsgs.length) {
@@ -1685,7 +1699,7 @@ export async function sendWakePrompt(key, reason) {
       const burstGuidance = unreadMsgs.length >= 2
         ? '\n[Burst Cohesion] The peer is typing in bursts - these messages are one continuous intent: think about them together and answer in a single bubble, never split them up.'
         : '';
-      unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}`
+      unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}${groupActivityLine}`
         + (omitted > 0 ? `\n(${omitted} older unread not shown)` : '');
     } else if (key.startsWith('private:')) {
       unreadLine = '\n[Unread 0] nothing new to answer - close with qq_mark_read unless you deliberately want to open a topic.';
