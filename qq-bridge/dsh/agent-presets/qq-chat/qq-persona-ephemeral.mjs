@@ -58,7 +58,11 @@ export function prunePersonaResults(session) {
         sourceEventSeqs: [seq],
       });
       replaced += 1;
-    } catch { /* 单条替换失败不影响其它条 */ }
+    } catch (e) {
+      /* 2026-10-28：以前这里是纯 catch —— 剪枝悄悄失效过一次（旧 turn-pruner 走错路径、零日志），
+       * 白吃了大量 token。失败必须留一行痕迹，别再来第二次静默。 */
+      try { console.error(`[qq-persona-ephemeral] 替换失败 seq=${seq}: ${String(e?.message ?? e).slice(0, 160)}`); } catch { /* ignore */ }
+    }
   }
   return replaced;
 }
