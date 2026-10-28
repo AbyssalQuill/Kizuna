@@ -331,13 +331,13 @@ export function appendTurnTailPersonaAnchor(promptText) {
   /* 2026-10-28：硬开局那行现在**同时打在正文最前面**。
    * 现场：模型先 qq_send_message、被守卫打回「协议违规…」才回头补 qq_load_persona —— 一步白烧。
    * 尾部的 [Action Flow] 在长上下文末尾容易被忽略，挪一行到开头，模型读到的第一句就是它。 */
-  const lead = '[HARD OPEN] 本回合第一个工具调用必须是 qq_load_persona（PTC 模式下是 run_code 程序里的第一句）。没加载人设就发消息会被桥物理拦截，白烧一步。';
+  const lead = '[HARD OPEN] Rule: the first tool call of every turn MUST be qq_load_persona (in PTC mode: the first call inside run_code). A send before it is rejected by the bridge guard and wastes a step.';
   /* 2026-10-28：主人定的用法 —— 每轮现取现用，用完就剪。
    * 人设与读过的对话在回合末都会被移出历史（qq-persona-ephemeral），所以这里明说"可以放心调"，
    * 否则模型会以为多读一次就要多背一辈子上下文。 */
-  const ctxNote = '[Context] 上一轮读过的人设/对话已移出历史。需要就现取：qq_get_recent_messages、'
-    + 'qq_memory_search(query=关键词) 翻旧话题、qq_memory_search(direction=out) 查自己说过的；'
-    + '这些结果回合末自动剪掉，放心调。';
+  const ctxNote = '[Context] Persona text and any messages you read are removed from history at turn end. '
+    + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search(query=...) for older topics, '
+    + 'qq_memory_search(direction=out) for your own past lines. Reading is cheap - it gets pruned at turn end.';
   return `${lead}\n${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".\n${ctxNote}`;
 }
 
@@ -1032,18 +1032,18 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   // 实测同批 2 条时正文 690 → 约 230 字符；规则一条没丢，只是不再随每次注入重复。
   // 2026-10-27：在途注入末梢同样追加高优先级人设锚，彻底防止在途交互导致模型人设漂移
   const cohesionHint = unreadToSend.length >= 2
-    ? '\n[Burst Cohesion] 对方在连续打字连发，上述多段消息请连起来作为一个整体语义进行综合深度思考并回复！\n'
+    ? '\n[Burst Cohesion] The peer is typing in bursts - treat the messages above as one continuous intent and answer in a single bubble.\n'
     : '';
   // 补齐表情包与语音掷骰判定，以及显式意图强化（避免在途注入缺失表情包提示）
   const diceLines = voiceTurnHint(key) + memeTurnHint(key);
   const textAll = unreadToSend.map((m) => m.raw || m.text || '').join('\n');
   let explicitMeme = '';
   if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
-    explicitMeme = '\n[Meme Directive] 对方期待图库表情交互，本轮请务必调用 qq_send_meme(key, token, query="情绪关键词") 发送图库表情包！严禁发默认黄豆表情（严禁调 qq_send_sticker）！\n';
+    explicitMeme = '\n[Meme Directive] The peer expects a gallery meme. Call qq_send_meme(key, token, query="emotion keyword"); never send a default yellow-face sticker (no qq_send_sticker).\n';
   }
   let explicitVoice = '';
   if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(textAll)) {
-    explicitVoice = '\n[Voice Directive] 对方期待语音交流，本轮请调用 qq_send_voice 发送语音消息！\n';
+    explicitVoice = '\n[Voice Directive] The peer expects a voice reply. Call qq_send_voice.\n';
   }
   const diceBlock = (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
   const tokenLine = `[Token (Param Only, Never a Tool Name)] ${st.agentToken}`;
@@ -1680,7 +1680,7 @@ export async function sendWakePrompt(key, reason) {
       // qq_get_recent_messages 翻"的规则散文（每轮都注入、步步重发，owner 会话实测 47 次注入≈48KB）。
       // 现在这些规则都在系统提示词 [WAKE TYPES] 第 1/9/10 条，这里只留数据：未读正文 + 省略条数。
       const burstGuidance = unreadMsgs.length >= 2
-        ? '\n[Burst Cohesion] 对方在连续打字连发，上述多段消息属于同一意图的连贯表达。请将这几段连起来作为一个完整语义进行综合思考并单气泡统一作答，严禁割裂分开回复！'
+        ? '\n[Burst Cohesion] The peer is typing in bursts - these messages are one continuous intent: think about them together and answer in a single bubble, never split them up.'
         : '';
       unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}`
         + (omitted > 0 ? `\n(${omitted} older unread not shown)` : '');
@@ -1737,11 +1737,11 @@ export async function sendWakePrompt(key, reason) {
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
     if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll) || /贴贴/i.test(unreadTextAll)) {
-      explicitMeme = '\n[Meme Directive] 对方期待图库表情交互，本轮请务必调用 qq_send_meme(key, token, query="情绪关键词") 发送图库表情包！严禁发默认黄豆表情（严禁调 qq_send_sticker）！\n';
+      explicitMeme = '\n[Meme Directive] The peer expects a gallery meme. Call qq_send_meme(key, token, query="emotion keyword"); never send a default yellow-face sticker (no qq_send_sticker).\n';
     }
     let explicitVoice = '';
     if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(unreadTextAll)) {
-      explicitVoice = '\n[Voice Directive] 对方期待语音交流，本轮请调用 qq_send_voice 发送语音消息！\n';
+      explicitVoice = '\n[Voice Directive] The peer expects a voice reply. Call qq_send_voice.\n';
     }
     const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
     /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，

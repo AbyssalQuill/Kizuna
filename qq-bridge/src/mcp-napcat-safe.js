@@ -630,8 +630,8 @@ async function resolveMissingSession(wantKey) {
  * 带 key 的调用，白烧一步（用户看到的"老是多一步工具调用"）。这些工具直接放行。 */
 const KEYLESS_TOOLS = new Set(['qq_load_persona']);
 
-const MISSING_ARG_HINT = '缺 token：唤醒正文第一行就是 `[Token] <值>`，照抄即可；同一区域的 `[Session] group:<群号>` / '
-  + '`[Session] private:<QQ>` 就是本次要发的 key。两者照常传就行。如果这一轮确实没有在途会话可推断，就先别发，下一条消息进来时再处理。';
+const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <value>` - copy it verbatim. The same block carries '
+  + '`[Session] group:<id>` / `[Session] private:<QQ>`, which is the key to send with. If no in-flight session can be inferred this turn, do not send; handle it when the next message arrives.';
 
 {
   const rawTool = server.tool.bind(server);
@@ -694,9 +694,9 @@ const MISSING_ARG_HINT = '缺 token：唤醒正文第一行就是 `[Token] <值>
             return {
               content: [{
                 type: 'text',
-                text: '缺 key。唤醒正文第一行区域有一行 `[Session] group:<群号>` 或 `[Session] private:<QQ>` —— '
-                  + '把那一行里的值照抄进 key 即可（例如 [Session] group:123456 → key="group:123456"）。'
-                  + '不要凭记忆或用别的会话的 key：桥以前会替你猜目标会话，结果把图片发到过别的群，所以现在缺 key 一律拒绝。'
+                text: 'Missing key. The wake body has a line `[Session] group:<id>` or `[Session] private:<QQ>` - '
+                  + 'copy that value into key (e.g. [Session] group:123456 -> key="group:123456"). '
+                  + 'Never guess or reuse another session key: the bridge used to guess the target chat and once posted an image into the wrong group, so a missing key is now always rejected.'
               }],
               isError: true
             };

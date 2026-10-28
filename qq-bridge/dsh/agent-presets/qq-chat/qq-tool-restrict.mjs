@@ -82,10 +82,10 @@ export function apply(ctx) {
 
     // ① 防呆拦截：严禁把 Token 或纯数字当成工具名调用
     if (/^\d{5,12}$/.test(name)) {
-      return `"${name}" 是会话鉴权 Token 参数，不是工具名！请直接在工具参数内传 token 字段，禁止作为工具调用。`;
+      return `"${name}" is a session auth token, not a tool name. Pass it in the token field of a tool call, never as the tool itself.`;
     }
     if (innerName && /^\d{5,12}$/.test(innerName)) {
-      return `"${innerName}" 是会话鉴权 Token 参数，不是工具名！请直接在工具参数内传 token 字段，禁止作为工具调用。`;
+      return `"${innerName}" is a session auth token, not a tool name. Pass it in the token field of a tool call, never as the tool itself.`;
     }
 
     // ② 后台学习任务工具豁免（离线分析与画像抽取无须遵循群聊会话流程）
@@ -95,7 +95,7 @@ export function apply(ctx) {
 
     // ③ 白名单检查
     if (!SAFE_EXACT.has(name) && !SAFE_PREFIXES.some((prefix) => name.startsWith(prefix)) && !SAFE_BARE_NAME.test(name)) {
-      return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`;
+      return `Tool "${name}" is not on the QQ bridge whitelist and was rejected (only QQ MCP tools and harmless model-side tools are allowed).`;
     }
 
     const sessId = String(exec.agent?.session?.id || 'default');
@@ -118,7 +118,7 @@ export function apply(ctx) {
       const loaded = sessionLoadedCount.get(sessId) || 0;
       const sent = sessionSentCount.get(sessId) || 0;
       if (loaded <= sent) {
-        return '协议违规：每轮硬开局必须先执行 step_1，调用 qq_load_persona 读取角色设定！本轮尚未调用 qq_load_persona，禁止发送。请立即调用 qq_load_persona。';
+        return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called in this turn, so sending is blocked. Call qq_load_persona now, then retry the send.';
       }
       sessionSentCount.set(sessId, sent + 1);
       sessionSentMessage.set(sessId, Date.now());
@@ -130,7 +130,7 @@ export function apply(ctx) {
     if (sentAt && (Date.now() - sentAt < 30 * 1000)) {
       const isPostChatUnrelated = /^(qq_qzone_|qq_publish_qzone|qq_schedule_|qq_image_search)/.test(effectiveName);
       if (isPostChatUnrelated) {
-        return `消息已发送成功，本轮交流闭环已达成！禁止继续调用多余工具 ${effectiveName}，请立即输出纯文本 "OK" 完结本轮。`;
+        return `The message was sent - this turn's goal is met. Do not call more tools (${effectiveName}); reply literal "OK" to close the turn.`;
       }
     }
   });

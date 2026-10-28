@@ -140,7 +140,7 @@ await t('只传 messages：**直接拒绝**（绝不猜会话）—— 契约是
    *   mcp-napcat-safe.js 里 schema 声明了 key → hasKeyField=true → 不传 key 命中 missingKey 分支。 */
   assert.ok(!/Invalid input|Invalid arguments|-32602/.test(okCall.text), '不该是 schema 校验失败：' + okCall.text.slice(0, 200));
   assert.equal(okCall.isError, true, '缺 key 必须是错误：' + okCall.text.slice(0, 200));
-  assert.ok(/缺\s*key|缺 key/i.test(okCall.text), '应提示缺 key：' + okCall.text.slice(0, 200));
+  assert.ok(/missing\s*key|缺\s*key/i.test(okCall.text), '应提示缺 key：' + okCall.text.slice(0, 200));
   assert.equal(seen.sendMessage.length, 0, '缺 key 时**不该**向桩桥发任何请求（不能猜会话）');
 });
 

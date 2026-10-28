@@ -21,7 +21,7 @@
 export const name = 'qq-persona-ephemeral';
 
 const PERSONA_MARK = '【persona_load】';
-const STUB = '【context: ephemeral_turn_pruned】本轮读过的上下文已移出历史（省 token）；需要时再调一次对应工具。';
+const STUB = '[context: ephemeral_turn_pruned] This turn\'s loaded context was removed from history to save tokens. Re-read with the same tool when needed.';
 
 /** 这些工具的结果是「本轮读进来的上下文」，转瞬即逝，回合末一律剪掉 */
 const EPHEMERAL_TOOLS = new Set([
