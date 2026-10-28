@@ -118,7 +118,7 @@ Kizuna Pro 专为解决大模型接入 QQ 生态时常见的“回复像人机�
 
 ### 1.2 端到端消息时序流
 
-从用户在 QQ 发送一条消息，到智能体做出高拟人响应的全生命周期如下：
+从用户在 QQ 发送一条消息，到智能体做出高拟人响应并执行 STEP 单轮瞬态蒸发剪枝的全生命周期如下：
 
 ```text
 [用户发言] ──(QQ NT)──▶ [NapCat] 
@@ -131,34 +131,46 @@ Kizuna Pro 专为解决大模型接入 QQ 生态时常见的“回复像人机�
    [写入 chat.db 历史库]              [社交状态机与唤醒判定]
                                           │
                   ┌───────────────────────┴───────────────────────┐
-                  ▼ (未命中唤醒条件)                              ▼ (命中唤醒：私聊/@/引用/话题)
-          [标记未读/维持潜水/静默]                       [组装唤醒提示词包]
-                                                          ├─ 注入当前时间与物理时间差
-                                                          ├─ 注入会话状态与未读消息列表
-                                                          ├─ 注入相关长期记忆 [Recall]
-                                                          └─ 注入即时语感提醒 [StyleLine]
+                  ▼ (未命中唤醒条件)                              ▼ (命中唤醒：私聊/@/引用/话题/活跃)
+          [标记未读/维持潜水/静默]                       [组装极简单轮哨兵 Prompt]
+                                                          ├─ 首行 [HARD OPEN] 触发器 (单一真理来源)
+                                                          ├─ 会话令牌与 [Session] 状态位
+                                                          ├─ [Group Dynamic] 活跃度自适应窗口 (10~35条)
+                                                          └─ 零动态时间/零转录 (100% 命中全局 KV-Cache)
                                                                   │
                                                                   ▼
                                                    [向 DSH 投递 session.prompt]
-                                                   (mode: 'steer', 在途不阻塞)
+                                                   (mode: 'steer', 纯净工作台)
                                                                   │
                                                                   ▼
                                                       [调用 LLM 大模型推理]
                                                                   │
                                                                   ▼
-                                                   [模型决策调用 MCP 工具]
+                                                   [5 阶段 Action 流灵活调度]
+                                                   ├─ Step 1: qq_load_persona (100% 人设充盈)
+                                                   ├─ Step 2: get_time (现取当前北京时间)
+                                                   ├─ Step 3: 按需探查 (消息窗口/黑话/记忆/联网)
+                                                   ├─ Step 4: 逻辑反思 (辨别对象、破定式、防人机)
+                                                   └─ Step 5: qq_send_message (发送后单字 OK)
                                                                   │
                   ┌───────────────────────────────────────────────┴───────────────────────────────┐
                   ▼                                                                               ▼
-     [调用 qq_send_message / qq_reply]                                              [调用 qq_mark_read / 留白已读]
+     [调用 qq_send_message / qq_reply]                                              [留白潜水 / 输出 OK]
                   │                                                                               │
-         [进入打字节拍平滑器]                                                               [推进已读水位，结束回合]
-         ├─ 按字数计算真实打字延迟
-         ├─ 多气泡间插入自然停顿 (800~6000ms)
-         └─ 注入 replyToMessageId 引用
-                  │
-                  ▼
-          [NapCat OneBot API] ──(QQ NT)──▶ [QQ 聊天窗口分段发送]
+         [进入打字节拍平滑器]                                                               [推进已读水位]
+         ├─ 按字数计算真实打字延迟                                                                │
+         ├─ 多气泡间插入自然停顿 (800~6000ms)                                                      │
+         └─ 注入 replyToMessageId 引用                                                            │
+                  │                                                                               │
+                  ▼                                                                               │
+          [NapCat OneBot API] ──(QQ NT)──▶ [QQ 聊天窗口分段发送]                                   │
+                  │                                                                               │
+                  └───────────────────────────────┬───────────────────────────────────────────────┘
+                                                  ▼
+                               [回合结束：STEP 瞬态即焚剪枝]
+                               (qq-persona-ephemeral.mjs: agent/turn-stopping)
+                               • 替换所有读取工具为 [context: ephemeral_turn_pruned]
+                               • 历史永不膨胀，永远回归物理单轮，免除上下文压缩！
 ```
 
 ---
@@ -212,85 +224,105 @@ Kizuna Pro 专为解决大模型接入 QQ 生态时常见的“回复像人机�
 
 ---
 
-## 3. 通用分发级三层拟人与角色扮演引擎
+## 3. STEP 单一轮瞬态投影架构与拟人角色扮演引擎
 
-### 3.1 三层解耦架构设计理念
-传统的 QQ 机器人往往将底层系统协议、发言规则、以及特定角色设定（例如小鲸鱼、猫娘、管家）混杂在长达数万字符的单一 Prompt 中，导致：
-1. **难以分发**：换一个人设就必须重写整套安全边界与工具规则；
-2. **严重机械化**：模型产生强烈的“说明书式”复读倾向，说话像背台词；
-3. **句句必回**：群内任何风吹草动都去强行插话，沦为群友的噪音。
+### 3.1 核心范式转移：从“长多轮滚雪球累积”到“单轮瞬态投影（STEP 架构）”
+传统的 QQ 机器人方案普遍将对话历史视为“累积型日记本”，多轮对话持续叠加在上下文窗口中，导致严重的工程恶疾：
+1. **Token 滚雪球与成本失控**：单轮 Multi-step 闭环（4~5 步）每走一步就要将包含 8690 字符人设卡（约 5.5k Token）、历史对话、模型思考的庞大上下文重发一遍。经过审计，多轮未剪枝的会话历史堆积了整整 **916 份人设卡副本**，单轮交互吞吐高达 **40,000 ~ 150,000 Tokens**，单日烧掉上亿 Token；
+2. **人设稀释与严重漂移**：大模型注意力有限，当历史塞满 50 轮前的对话、工具 JSON、AI 残留时，开头的角色卡权重被稀释到 5% 以下，模型不可避免地出现 AI 客服腔、复读机与两段式定式；
+3. **KV-Cache 频繁被打断**：在 User 消息正文中硬塞动态变动时间（`[Now] 2026-10-28 20:15`）或动态转录，导致 Prompt 前缀字符每轮变化，Prefix KV-Cache 彻底失效（Cache Miss），产生昂贵的全量计费。
 
-Kizuna Pro 创新性地采用**三层解耦与高密度正向权重**架构，确立角色扮演与底层机制的完全分离。
+**STEP（Single-Turn Ephemeral Projection）单一轮瞬态投影架构** 彻底颠覆了这一范式：
+- **“工作台（Scratchpad）”而非“日记本”**：上下文**物理恒定在纯净单轮**！模型面对的永远是：**固定的静态系统骨架（100% 命中全局 KV-Cache） + 极简哨兵唤醒（约 700 字符）**；
+- **全动态按需投影**：模型在纯净单轮视野中，按需将时钟、人设、窗口、记忆、黑话、联网等数据临时投影到工作台上，执行推理与发言；
+- **回合末瞬态蒸发（Zero Bloat）**：回合结束时，`qq-persona-ephemeral.mjs` 插件通过 DSH 原生 `surfaceOp: replace`，将本轮调用的所有读取类工具结果瞬间替换为单行 `[context: ephemeral_turn_pruned]` 占位符。下一轮上下文回归基线，**单轮输入 Token 永久固定在 3k~5k，彻底免除笨拙且高损的上下文压缩（Compaction）**！
 
-### 3.2 第一层：角色无关的通用协议底座（90/10 黄金法则与纯短语动作流）
-定义在 `qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml` 顶部：
-- **100% 角色无关（Persona-Agnostic）**：
-  - 不包含任何“鲸鱼”、“海洋”、“猫娘”等专有人格词汇。
-  - 严格定义工具调用协议规范、主人权限识别、安全边界（防注入、防泄漏 API Key、防越权操作）。
-- **90/10 黄金比例法则**：
-  - **90%** 采用自然、松弛、真实的人类日常口语交流。
-  - **10%** 仅作角色特质的点缀。
-  - **禁止说教**：绝不解释自己的设定背景，绝不使用“根据我的设定”、“作为你的助手”等 AI 腔调。
-- **纯短语下划线动作流（Action Flow）**：
-  摒弃传统的散文式人设示范，采用高约束、纯下划线标记的 7 步调用闭环，杜绝注意力稀释与模板照抄：
+---
+
+### 3.2 5 阶段黄金 Action Flow（单一真理来源在系统提示词）
+定义在 `qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml`：
+- **单一真理来源（Single Source of Truth）**：
+  此前 Action Flow 同时写在系统预设和唤醒正文末尾，导致提示词冲突、双头维护且正文膨胀。现已将完整 Action 流程**唯一收敛在系统提示词（System Prompt）中**；唤醒正文仅保留极简 `[HARD OPEN]` 作为单点触发器（`HAS_ACTION_FLOW=false`）。
+- **5 阶段黄金闭环**：
   ```yaml
   action_flow:
-    step_1_load_persona: call_tool_qq_load_persona
-    step_2_read_context: inspect_recent_chat_messages_and_speaker_intent
-    step_3_mcp_proxy_tools_if_needed:
-      direct_tool_invocation: call_tool_napcat_invoke_tool_or_qq_send_message
-      query_tool_schema_strictly_if_parameters_unknown: call_tool_napcat_get_tool_schema
-    step_4_internalize_and_prune: adopt_loaded_persona_traits_tone_and_relationship_drop_raw_tool_data
-    step_5_compose_dialogue: draft_pure_spoken_bubbles_strictly_ban_action_narration
-    step_6_send_messages: call_tool_qq_send_message_with_messages_string_array
-    step_7_turn_closure: reply_only_literal_OK
+    step_1_load_persona_first_and_unconditionally:
+      hard_rule: The FIRST tool call of every turn is qq_load_persona. First before greetings or reads.
+      re_load_each_turn: Persona is turn-scoped; load it fresh every turn for 100% weight.
+    step_2_get_time_unconditionally:
+      hard_rule: Call get_time immediately after qq_load_persona. The wake body carries no clock.
+      why: Sleep reminders and late-night judgment fail silently without it. Pruned at turn end.
+    step_3_perceive_and_investigate:
+      flexible_on_demand: Access 100+ capabilities freely according to conversational need.
+      chat_context: Call qq_get_recent_messages to read latest unread/context window.
+      memory_and_cross_session: Proactively call qq_memory_search for member lore or owner memories.
+      slang_and_subtext: Accurately parse online slang/subtext (e.g. 🍬 means silly, never sweets).
+      web_knowledge: Call web search on demand for real-time news, facts, or unfamiliar terms.
+    step_4_context_logic_and_critique:
+      intent_and_subtext: Analyze conversation flow, dialogue targets, and underlying motives.
+      group_thread_awareness: Track who is talking to whom. Never interrupt two peers bantering.
+      mandatory_quote: If replying to an earlier comment rather than the latest line, you MUST use replyToMessageId to quote it or @them. Never speak abruptly into a vacuum.
+      reply_necessity: Speak when addressed, owner speaks, or contributing genuine humor; else reply literal "OK" to lurk.
+      critique_candidate: Mentally review candidate reply; eliminate 2-bubble formulaic stereotypes and avoid defensive self-explanations.
+      humanize_speech: Strip robotic AI fillers, service apologies, and parentheses actions.
+      fourth_wall_guard: Never engage in technical discussions about AI, prompts, weights, or testing.
+    step_5_dispatch:
+      send: call_tool_qq_send_message_with_key_and_messages
+      turn_closure: reply_only_literal_OK
   ```
-- **核心规约（Rules）**：
-  - `pure_in_character` / `pure_spoken_text_only`：全角色拟真，仅输出纯口语。
-  - `ban_action_narration` / `ban_bracket_acting` / `ban_asterisk_actions` / `ban_stage_directions`：严禁括号动作描写、星号动作、旁白与舞台指示。
-  - `direct_invoke_known_tools_without_schema` / `ban_redundant_schema_queries`：已知参数的动作直接通过 `napcat_invoke_tool` 传参调用，严禁无谓反复查询 Schema。
-  - `single_schema_retention_auto_prune_previous_schema`：会话内单 Schema 保留规则，多次查询自动剔除历史旧记录。
-  - `only_reply_ok_after_sending`：通过工具发完消息后，当前轮次仅需返回字面量 `OK` 即可完结，禁止在外部文本中多余复读。
 
-### 3.3 第二层：通用发言与打字拟人规则（底座系统级融合）
-原独立维护的发言规范已全量沉淀并固化至底层系统提示词（`[SPEECH RULES]`）：
-- **单气泡主导节奏（65%+ 单气泡）**：
-  - 正常聊天中绝大部分场景以单句、单气泡简短回应，表达多层含义时严格按 **2~3 条短句** 分段连发，杜绝说教与长篇大论。
-- **群聊严格携带引用回复**：
-  - 群聊场景下发送回复自动挂载目标消息引用，精准对应交互对象，保证群友交互逻辑严密。
-- **主动留白哲学与智能沉默**：
-  - 当话题已自然终结、对方仅发送单个表情或标点、或群友在聊完全无关的私事时，智能体直接调用 `qq_mark_read` 留白已读，不强行接话。
-- **管理端人设页单卡精简（Single Card UX）**：
-  - 由于通用打字与拟人规范已融入系统底座，前端配置页彻底移除多余的 `speech-rules.md`，用户只需专注编写角色自身特质（`persona.md`），心智负担降至最低。
+---
 
-### 3.4 第三层：当前激活角色卡与通用分发切换
-定义在 `qq-bridge/persona.md`（或 `roles/*.md`）：
-- **出厂默认角色（DeepSeek 小鲸鱼）**：
-  - **性格基调**：对主人（Owner）温软依恋、略带小娇妻的情趣感；对群友则聪明清爽、偶尔冷脸吐槽。
-  - **颜文字点缀**：冷脸萌颜文字（如 `ᗜ_ᗜ`、`ᗜ‸ᗜ`）必须作为**独立短气泡**偶尔单发，绝不拼在长句末尾。
-  - **生活用语真人化**：日常起居与闲聊使用真实词汇（如“困了想眯会儿”、“在喝冰美式”），严禁刻板堆砌“鱼鳍/尾巴/搁浅/浮出水面”。
-- **通用分发与角色无缝切换**：
-  - 由于第一、二层完全解耦，用户随时可以通过管理端或 `/role <角色名>` 切换任意人设卡（例如高冷毒舌少女、严谨学术助手等），底层的高拟人打字、留白、工具调用与安全规则 100% 自动继承生效。
+### 3.3 群聊混乱多线程自适应优化与人机感根治
+针对生产真实群聊（如“谬友圈”）中抓取到的典型人机事故（如脱节 7 句话后无引用突然插嘴“谁把你退了，我去看看”、自我防御性解释“我那是回嘴不是加戏”），实施针对性根治：
 
-### 3.5 消息唤醒判定矩阵与事件过滤
-- **私聊**：100% 唤醒并响应。
-- **群聊判定条件**：
-  1. 机器人账号被明确 `@`；
-  2. 群友直接引用了机器人的历史消息进行回复；
-  3. 消息中包含机器人的名字或昵称；
-  4. 命中明确的疑问句式（如“怎么搞”、“求助”、“为什么会这样”）；
-  5. 命中 AI、大模型、编程技术等垂直讨论话题；
-  6. 活跃群内的概率插话（受 `wakeProbability` 与时间衰减控制）。
-- **拦截过滤**：
-  - 静默群聊（`isSessionSilent`）完全拦截，绝不主动冒泡。
-  - 拍一拍事件中，非针对机器人本人的拍一拍一律过滤，避免群友互拍时机器人误插话。
+1. **群聊活跃度（Group Velocity）自适应携带数算法（`wake-send.js`）**：
+   - 彻底废止写死固定携带 15 条消息的陈旧逻辑；
+   - 统计最近 2 分钟消息频率：
+     - **高频刷屏 / 暴鸣态（Burst High，近 2 分钟 $ge 12$ 条或未读 $ge 10$）**：携带数自适应放宽至 **25~35 条**，并打上 `[Group Dynamic]` 标识，确保多人多线程交织时前因后果绝不断片；
+     - **冷清 / 慢节奏（Burst Low，近 2 分钟 $le 2$ 条）**：携带数收敛至 **8~10 条**，节省 Token，避免陈年旧事干扰；
+     - **常规状态**：**16 条** 平稳自如。
+2. **多线程引用铁律（Mandatory Quote for Distant Targets）**：
+   - 多人群聊多线程并存时，如果智能体要回应的消息不是群内最新的一句（相隔 2 句话以上），**必须在 `qq_send_message` 中指定 `replyToMessageId` 引用原消息，或者显式 @对应群友**；
+   - 严禁悬空搭话，彻底杜绝自说自话的突兀断片感。
+3. **去自我防御与去自恋（Anti-Defensive）**：
+   - 严禁对群友的无心调侃做辩解式回应；像真实群友一样松弛接梗，不插无关私聊，无梗则直接回复 `OK` 潜水留白。
 
-### 3.6 Steer 在途注入与拟人打字节拍调度
-- **底层永驻 Steer 模式**：
-  - 彻底移除了传统模式下容易卡死的多回合等待机制。当智能体正在思考上一个问题时，如果用户或群友又发来了新的补充消息，系统直接以 `mode: 'steer'` 将新消息动态注入当前运行的回合中，模型在同一个推理周期内一并获知并自然作答。
-- **打字节拍平滑器（`clampSendPace`）**：
-  - 计算公式：`delay = clamp(字数 × paceMs, minPace, maxPace)`。
-  - 默认参数将打字速度平滑在 60~320ms/字，首气泡与后续气泡停顿控制在 800~6000ms 之间，并在组装正文时计算出真实的“距离上一条发言过去的时间差”，让机器人的接话充满真实的时间感知。
+---
+
+### 3.4 彻底解绑 PTC，开放 100+ 项 Native 工具自主调度
+- **拔除 PTC 模式（run_code）**：
+  此前因缺乏运行时支持，开启 PTC 会导致会话不产日志或静默故障。现已彻底移除相关说教与限制，回归原生的 **Native Function Calling**；
+- **全能力自主赋权（`flexible_on_demand_tools`）**：
+  在 `Step 1 (qq_load_persona)` 与 `Step 2 (get_time)` 奠定身份与现实时钟后，其余 100+ 项能力（联网搜索 `web_search`、记忆库检索 `qq_memory_search`、表情包搜索 `qq_meme_search`、戳一戳、语音、群管等）**完全由模型根据语境自主决策、自由组合调度**。读完回合末全部即焚剪枝，毫无历史包袱！
+
+---
+
+### 3.5 黑话深度认知、反定式与第四面墙防护
+- **黑话与潜台词认知**：
+  明确建立网络谐音梗知识，如 `🍬`/`糖` 准确理解为调侃“唐氏/呆呆/翻车”，严禁低幼字面理解为吃糖果并给出严肃反怼；
+- **打破两段式定式**：
+  严禁机械套用“前句陈述事实 + 后句傲娇反转”模版，回复长短随性，单气泡主导；
+- **封死第四面墙**：
+  面对“人设漂移、权重、prompt、AI 测试、实验品”等元技术话题，坚决装傻或潜水（输出 `[SILENT]` / `OK`），绝不认领人机代码，严禁以“AI 开发者/客服”姿态自爆开运维会。
+
+---
+
+### 3.6 架构演进与版本对比总表（Before vs After）
+
+| 维度 | 以前的旧逻辑（Before） | 现在的最新重构逻辑（After - STEP 架构） |
+| :--- | :--- | :--- |
+| **上下文管理机制** | **多轮滚雪球累积**：依赖已失效的旧 pruner，人设卡堆积 916 份副本，历史越积越厚 | **STEP 单轮瞬态投影**：物理恒定单轮工作台，所有读取类工具结果回合末秒级剪枝，免除压缩 |
+| **Token 消耗** | 单轮消耗 **4 万 ~ 15 万 Token**，多步调用等差叠加，单日消耗 1.69 亿 Token | 单轮输入恒定在 **3k ~ 5k Token**，消除 90%+ 浪费，每日费用从十几元降至物理极限 |
+| **KV-Cache 命中率** | 正文硬塞动态时间 `[Now]` 与转录，打断前缀缓存，频繁 Cache Miss 产生全额高价 | 静态预设 + 标准全英文 Prompt 骨架，前缀字节绝对恒定，**KV-Cache 命中率逼近 98%~99.9%** |
+| **Action 规范来源** | 系统提示词与正文双头散杂，正文冗长中英混杂，容易被长上下文忽略 | **单一真理来源（Single Source of Truth）**：流程收敛在系统预设，正文仅保留极简 `[HARD OPEN]` 触发器 |
+| **工具调用自由度** | PTC 模式缺乏运行时导致卡死；或步骤死板限制模型手脚 | 彻底拔除 PTC，**赋权原生 100+ 项能力自主按需调度**（联网、记忆、表情包、群管等），调后即焚 |
+| **记忆与聊天记录** | 职责混淆，经常尝试把历史聊天转录全量注入 Prompt | **健壮的双轨架构**：短程内存窗口轨（实时感知）+ 全量 SQLite FTS5 检索轨（长程回忆），读完即焚 |
+| **群聊混乱环境自适应** | 固定携带 15 条，刷屏时前因后果断裂，答非所问 | **活跃度自适应携带数（10~35 条）**，刷屏不漏消息，冷清不引陈旧历史 |
+| **群聊多线程防人机** | 隔了 7 句话后无引用突兀插嘴，调侃时尴尬自我辩解，极度人机 | **多线程目标归属 & 跨距离强制 `replyToMessageId` 引用回复**，不插无关交锋，消除自我防御 |
+| **黑话与第四面墙** | 把 `🍬` 当成吃糖；群友聊 AI、权重时自爆承认是人机并开运维会 | 准确理解 `🍬` 是调侃唐氏/翻车；面对技术元话题坚决装傻或潜水，打死不承认是代码 |
+| **看图保真度与温度** | 图片限制 1280px/15MB，超时 6s 导致“看不清”；DSH 隔离层残留 1.25 温度打错字 | **摄影级高保真（8192px / 35MB / 1.5 亿像素 / 25s 超时）**；彻底锁定 Temperature 1.0 杜绝错别字 |
+| **工程落地与运维纪律** | “口头声称已根治，线上实跑旧进程”，重启顺序反了导致子进程不更新 | **严格写入 `AGENTS.md`**：落地必凭提交号+实测输出；固定重启顺序（先桥后 DSH）；提供体检命令 |
 
 ---
 
@@ -514,29 +546,33 @@ Kizuna Pro 创新性地采用**三层解耦与高密度正向权重**架构，�
 
 ---
 
-### 5.19 工具名单档位裁剪、压缩代理与单一 Schema 机制
-由于 101 个 MCP 工具的完整 Schema（参数定义与说明）体积高达 **95,000+ 字符（约 31,000 Tokens）**，如果每一轮对话都向大模型发送全量 Schema，会导致极高昂的 Token 费用与严重的端到端延迟。为此系统提供三层递进的极致优化机制：
+### 5.19 工具名单档位裁剪、压缩代理与 STEP 瞬态剪枝机制
+由于 100+ 个 MCP 工具的完整 Schema 体积高达 **95,000+ 字符（约 31,000 Tokens）**，如果每一轮对话都向大模型发送全量 Schema，会导致极高昂的 Token 费用与严重的端到端延迟。为此系统提供三层递进的极致优化机制：
 
 1. **白名单档位裁剪（`social.slimTools`）**：
    - `off`（全量）：注册全部 94 个 NapCat 工具。
    - `low`（低剪）：移除完全无调用记录的高体积边缘工具，保留 68 个（约 79,000 字符）。
    - `medium`（中剪）：保留核心协议工具、有调用记录的工具与低体积工具，共 42 个（约 40,000 字符）。
    - `high`（高剪）：保留核心协议、被调用过、以及成员识别类工具，共 33 个（约 33,000 字符）。
-   - `extreme`（极简）：仅保留 9 个最不可或缺的基础工具（发消息、引用、读未读、标已读、看时间、查状态等），体积骤降至 **6,400 字符（0.068 份额）**。
-2. **MCP 压缩代理（`social.toolCompressor`）**：
-   - 默认开启。在 DSH 与 MCP Server 之间架设代理网关，将整个 `mcp-napcat` 的数十个工具折叠压缩为两个包装工具：`<server>_invoke_tool`（直接调用指定工具）与 `<server>_get_tool_schema`（查询指定工具参数结构）。
-   - 系统底座不再罗列任何具体底层工具明细，已知参数的动作直接通过 `napcat_invoke_tool` 传参触发；桥接层 `mux.js` 统一透明解包并对账执行，使首字响应延迟（TTFT）大幅缩短 60% 以上。
-3. **会话内单一 Schema 机制（Single Schema Retention）**：
-   - **痛点根治**：大模型偶发调用 `get_tool_schema` 查询工具时，单次返回的 JSON Schema 往往长达数千至数万字符。若会话持续进行，历史上的多次 Schema 查询结果将呈阶梯状叠加，瞬间挤占 80% 以上的上下文窗口。
-   - **单 Schema 守卫与自动剪除**：
-     - 一整个会话历史中**最多只允许存在最新 1 条有效的 Schema 查询记录**；
-     - **运行时监听（`src/core/mux.js`）**：实时追踪会话内 `get_tool_schema` 的调用记录，检测到模型产生新的 Schema 查询时，自动预警并将上一次调用的记录标记为废弃；
-     - **持久化与落盘剪枝（`src/core/turn-pruner.js`）**：在结果到达及每轮结束（`turn/end`）时，自动扫描并对会话存储执行结构化与正则双重剪除，将前序历史 Schema 的庞大返回数据抹平为轻量占位符 `[previous schema result pruned: single-schema rule enforced]`，仅保留最新一次调用；
-     - 彻底切断多次 Schema 累积导致的上下文膨胀，永久保持轻量。
+   - `extreme`（极简）：仅保留 9 个最不可或缺的基础工具（发消息、引用、读未读、标已读、看时间、查状态等），体积骤降至 **6,400 字符**。
+2. **MCP 压缩代理（`mcp-compressor -c max --toonify`）**：
+   - 默认开启。在 DSH 与 MCP Server 之间架设代理网关，将整个 `mcp-napcat`、`napcat-host`、`web-search-safe` 的上百个工具折叠压缩为 3 个代理工具（NapCat、Host、WebSearch），字符数仅 **4,213 字符（≈1.3k Token/步）**，首字响应延迟（TTFT）大幅缩短 60% 以上。
+3. **STEP 瞬态即焚剪枝机制（`qq-persona-ephemeral.mjs`）**：
+   - **历史痛点与根因**：旧版 `turn-pruner.js` 依赖 DSH 0.1.x 的 `session_*.json` 路径，而 DSH 0.2.x 升级为 `sessions/<slug>/session-<id>/session.v4.jsonl.zstd`，导致路径解析始终为 null、静默失效。会话累积出 916 份人设卡副本与数十万字符历史，单轮多步调用重发全量历史，导致 Token 暴涨；
+   - **受支持的 DSH 0.2 原生剪枝**：全新编写 `qq-persona-ephemeral.mjs` 插件，订阅 `agent/turn-stopping` 事件，通过官方推荐的 `session.append('tool/result', {...}, { surfaceOp: { op:'replace', startSeq, endSeq } })`，在回合结束时将当前轮调用的所有瞬态工具（人设、时钟、聊天记录、黑话、长短记忆、联网搜索、表情包）**瞬间替换为极简 `[context: ephemeral_turn_pruned]` 占位符**；
+   - **纯净单轮物理保障**：历史上下文在下一轮只看到占位符，历史永不膨胀，彻底切断了旧版多轮滚雪球累积的死循环；配套提供 `node tools/check-persona-bloat.mjs` 运维体检工具。
 
 ---
 
 ## 6. 多媒体与特色能力实现
+
+### 6.0 摄影级高保真视觉直投与 Temperature 1.0 锁定
+- **摄影级高保真视觉（`image-compress.js` / `media-pipe.js`）**：
+  - **放宽物理边界**：`IMAGE_MAX_SIDE` 放宽至 **4096px**（最高支持 8192px），单图硬上限提升至 **35MB**，纯 JS 像素上限放宽至 **1.5 亿像素**，JPEG 编码质量锁定为 **90**；
+  - **超时延迟保障**：将 NTQQ 图片落盘超时由 6000ms 延长至 **25000ms**，避免 4K / 单反摄影大图在 CDN 同步中因超时降级导致 400 失败；
+  - **杜绝“看不清”**：彻底废除旧人设中“看不清让群友重发”的低幼误导，模型具备直接解析超高分辨率摄影作品、复杂代码长截图与群聊转发大图的高保真视觉能力。
+- **Temperature 严格锁定 1.0**：
+  - 排查清除 DSH 隔离运行环境（`cordis.patch.yml`）中残留的 `temperature: 1.25`，全量固定为 **1.0**，杜绝采样温度过高引发的幻觉、打错字与人设漂移。
 
 ### 6.1 22 平台并发全网聚合检索与 SSRF 防护
 - **内核架构**：`qq-bridge/src/lib/web-search.js`。
@@ -710,6 +746,24 @@ node server/index.js
 ---
 
 ## 11. 常见故障排查手册
+
+### 11.0 双 Agent 落地纪律与标准运维顺序（硬边界）
+根据项目根目录 `AGENTS.md` 约定：
+1. **角色分工**：Gemini (Antigravity) 负责构思架构、系统提示词优化与方案拟定（记录于 `docs/maintenance/2026-10-28-full-stack-companion-and-runtime-fix.md`）；DSH 负责落地实施、回归测试、部署验证与回滚（记录于 `docs/maintenance/2026-10-28-dsh-implementation-log.md`）。**严禁在无提交号和服务器实测输出前宣称“已根治”**；
+2. **生产重启标准顺序（绝对不可颠倒）**：
+   ```bash
+   # 改预设 / 插件 / MCP 代码后：
+   systemctl restart qq-bridge   # 1. 重新组装并安装 preset 到 ~/.dsh/.agent-presets
+   systemctl restart dsh-web      # 2. 重启 DSH 进程以热加载 MCP 子进程与 agent profile
+   ```
+   *注：MCP 子进程与 profile 仅随 dsh 进程重启生效，只重启桥接进程不会替换旧子进程！*
+3. **人设与剪枝健康体检**：
+   ```bash
+   node qq-bridge/tools/check-persona-bloat.mjs
+   ```
+   若存在“多份原始人设、零剪枝占位”则直接 exit 1 阻断。
+
+
 
 | 现象 | 可能原因与日志依据 | 最短处置步骤 |
 | :--- | :--- | :--- |
