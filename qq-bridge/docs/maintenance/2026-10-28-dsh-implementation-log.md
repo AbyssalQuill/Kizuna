@@ -18,6 +18,7 @@
 | 5 | 正文时间戳 | `[Now]` 每轮变、且与 get_time 重复 | 删 `[Now]`（首轮 + 哨兵轮），`get_time` 写进每轮流程（`[HARD OPEN]` 第 2 条 + `[Action Flow]` Step 2），主动唤醒不再带 `[Clock]` 而只留 `[Proactive]` 提示 | `fde3e91` `4216a0e` | 唤醒正文无 `[Now]`；`get_time` 实调返回 `Asia/Shanghai` |
 | 6 | 提示词风格 | 注入文本中英混杂、散文式 | `[HARD OPEN]/[Context]/[Meme]/[Voice]/[Burst]/[Proactive]`、守卫回执、剪枝占位、缺 key/token 提示全部改英文短规则 | `16b82ec` | 新唤醒正文全英文；`tests/persona-ephemeral.test.js` 15/15、`tool-restrict-guard` 全通过 |
 | 7 | PTC（run_code）批量调用 | 需要 `ctx.ptcRuntime` | 预设已加 `tool-presentation: mode: ptc`（默认 `disabled: true`），守卫放行 `run_code` 与裸 `qq_*` 名 | `0bf285b` | **未落地**：打开后新建会话不产 `run_code` 日志（疑似缺运行时），已回滚 native |
+| 8 | 沉浸式 Action 流程规范与 KV-Cache 增益保障 | ① 唤醒词中英文散杂，流程跳转不严格；② 时钟结果若保留将持续膨胀，时钟硬写 prompt 破坏 prefix cache；③ 双 Agent 缺乏硬纪律约束 | ① 规范 5 步严谨 Action 流程（`qq_load_persona` 首调 → `get_time` 必调 → 按需查消息/记忆 → 去机械化与反定式反思 → `qq_send_message` + 纯文本 `OK`）；② `get_time` 正式纳入回合末剪枝；③ 确立 `AGENTS.md` 双 Agent 落地纪律与重启顺序 | `a930eb2` | 服务器实测：`tests/persona-ephemeral.test.js` 15/15 PASS（含 get_time 剪枝测试）；`tests/universal-prompts.test.js` 6 项 100% PASS；服务严格按序重启，活跃会话已产生 107 个剪枝占位 |
 
 ---
 
