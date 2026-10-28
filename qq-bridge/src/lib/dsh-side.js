@@ -417,6 +417,32 @@ function readIsolatedDshVersion() {
   } catch { return ''; }
 }
 
+/** 已装 DSH 的「预览版说明」版本号。GUI 那个弹窗按这个常量做**精确比对**：
+ *  ui-settings-general.welcomeNoticeVersion 不等于它就弹，等于才静默。
+ *  为什么由桥来写：DSH 自己写回这条 ack 时会落到本文件管理的声明块里面，
+ *  每次启动整块替换 → ack 消失 → 下次开 GUI 弹窗又回来（2026-10-28 实测）。
+ *  拿不到常量就用已知的 FALLBACK：宁可多写一个已知值，也别让 ack 缺失。 */
+const WELCOME_NOTICE_VERSION_FALLBACK = '2026-09-28.1';
+function readWelcomeNoticeVersion() {
+  const rel = path.join('@deepseek-ai', 'dsh-client-ui-settings-models', 'lib', 'client.js');
+  const roots = [];
+  try {
+    const p = path.join(os.homedir(), '.qq-bridge-manager', 'config.json');
+    const cli = JSON.parse(fs.readFileSync(p, 'utf8'))?.instances?.dshIsolated?.dshCli;
+    if (cli) roots.push(path.resolve(path.dirname(cli), '..', '@deepseek-ai', 'dsh'));
+  } catch { /* 配置读不到就退回固定候选 */ }
+  roots.push('/usr/lib/node_modules/@deepseek-ai/dsh', '/usr/local/lib/node_modules/@deepseek-ai/dsh');
+  for (const root of roots) {
+    for (const cand of [path.join(root, 'node_modules', rel), path.resolve(root, '..', rel), path.join(root, rel)]) {
+      try {
+        const m = /WELCOME_NOTICE_VERSION\s*=\s*"([^"]+)"/.exec(fs.readFileSync(cand, 'utf8'));
+        if (m) return m[1];
+      } catch { /* 换下一个候选 */ }
+    }
+  }
+  return WELCOME_NOTICE_VERSION_FALLBACK;
+}
+
 /** 0.2.1 起 preset 才是"profile patch 里的内联声明"；0.1.x 走目录扫描
  *  （<home>/.agent-presets/<id>/），内联声明会以 $.default 缺值在启动阶段硬失败。 */
 function supportsInlinePresetDeclaration(version) {
@@ -476,7 +502,14 @@ export async function syncPresetDeclaration21(target) {
     plugins,
   };
   const blockText = yaml.dump([{ insert: [{ id: 'preset-qq-chat', name: '@deepseek-ai/dsh-agent-preset', config: decl }] }], { lineWidth: 200, noRefs: true });
-  const block = `${PRESET_DECL_BEGIN}\n# 由 dsh-side.syncPresetDeclaration21 从 .agent-presets/qq-chat 生成，手改会被启动覆盖。\n${blockText.trimEnd()}\n${PRESET_DECL_END}\n`;
+  /* 2026-10-28：这条 ack 必须由桥每次启动重写（理由见 readWelcomeNoticeVersion）。
+   * 放进声明块内部是有意的：换块时旧行一起消失，天然不会重复。 */
+  const ackRow = yaml.dump([{
+    id: 'ui-settings-general',
+    name: '@deepseek-ai/dsh-client-ui-settings-general',
+    config: { welcomeNoticeVersion: readWelcomeNoticeVersion() },
+  }], { lineWidth: 200, noRefs: true });
+  const block = `${PRESET_DECL_BEGIN}\n# 由 dsh-side.syncPresetDeclaration21 从 .agent-presets/qq-chat 生成，手改会被启动覆盖。\n${blockText.trimEnd()}\n${ackRow.trimEnd()}\n${PRESET_DECL_END}\n`;
 
   const patchFile = path.join(target.profileDir, 'cordis.patch.yml');
   if (!fs.existsSync(patchFile)) return { ok: false, reason: 'profile patch 不存在' };

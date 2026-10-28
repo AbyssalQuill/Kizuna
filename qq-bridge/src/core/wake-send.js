@@ -341,7 +341,10 @@ export function appendTurnTailPersonaAnchor(promptText) {
     + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search (slang/topics/members/owner memories), '
     + 'web search (facts/news). Reading is cheap - zero persistent bloat. '
     + 'Need current time? get_time is Beijing time (minute precision).';
-  return `${lead}\n${text}\n[Action Flow] Step 1: qq_load_persona. Step 2: get_time (clock anchor). Step 3: read context/memories/slang as needed. Step 4: critique logic & speech, then qq_send_message (or lurk with OK). Step 5: reply literal "OK".\n${ctxNote}`;
+  /* 2026-10-28（主人定）：五步流程的唯一出处是系统提示词的 action_flow
+   * （dsh/agent-presets/qq-chat/agent.cordis.yml → persona.text），属于静态前缀、天然命中 KV-Cache。
+   * 正文只留 [HARD OPEN] 两行做「靠近光标」的触发器，不再复述整张流程表 —— 复述部分既重复又每轮全价计费。 */
+  return `${lead}\n${text}\n${ctxNote}`;
 }
 
 /**
