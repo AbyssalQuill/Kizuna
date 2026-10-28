@@ -1,7 +1,9 @@
 # 生产环境综合优化与隐性 Bug 根除维护日志
 
 - **维护时间**：2026-10-28 09:20 (UTC+8)
-- **维护人员**：Antigravity Agent
+- **作者**：Antigravity Agent（Gemini）—— 本文件是**方案与想法**的记录，不是落地证据
+- **落地实现 / 验证 / 回滚**：DeepSeek Harness（DSH），见同目录 `2026-10-28-dsh-implementation-log.md`。
+  分工约定：Gemini 主想法，DSH 负责实现、修复与落地状态验证；本文件里"根治措施"只有在那份日志里有提交号与实测输出的才算真正落地。
 - **涉及服务**：`qq-bridge.service`、`dsh`、`NapCat`
 - **代码仓库**：`Kizuna`（分支：`main`，最新提交：`c995665`）
 - **验证范围**：本地工作区、Git 远程仓库、生产服务器三端全面一致性校验与回归测试
