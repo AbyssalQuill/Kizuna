@@ -331,7 +331,9 @@ export function appendTurnTailPersonaAnchor(promptText) {
   /* 2026-10-28：硬开局那行现在**同时打在正文最前面**。
    * 现场：模型先 qq_send_message、被守卫打回「协议违规…」才回头补 qq_load_persona —— 一步白烧。
    * 尾部的 [Action Flow] 在长上下文末尾容易被忽略，挪一行到开头，模型读到的第一句就是它。 */
-  const lead = '[HARD OPEN] Rule: the first tool call of every turn MUST be qq_load_persona (in PTC mode: the first call inside run_code). A send before it is rejected by the bridge guard and wastes a step.';
+  const lead = '[HARD OPEN] Rules for every turn, in order: (1) qq_load_persona first - a send before it is rejected by the bridge guard and wastes a step; '
+    + '(2) get_time right after it, before any other tool - the wake body carries no clock, so this is how you know the time; '
+    + '(3) then read context with tools if you need it, then reply.';
   /* 2026-10-28：主人定的用法 —— 每轮现取现用，用完就剪。
    * 人设与读过的对话在回合末都会被移出历史（qq-persona-ephemeral），所以这里明说"可以放心调"，
    * 否则模型会以为多读一次就要多背一辈子上下文。 */
@@ -339,7 +341,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
     + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search(query=...) for older topics, '
     + 'qq_memory_search(direction=out) for your own past lines. Reading is cheap - it gets pruned at turn end. '
     + 'Need the current time? Call get_time (Beijing time, minute precision) - the wake body no longer carries a [Now] line.';
-  return `${lead}\n${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".\n${ctxNote}`;
+  return `${lead}\n${text}\n[Action Flow] Step 1: qq_load_persona. Step 2: get_time (every turn - it is the only clock). Step 3: read context with tools if needed (pruned at turn end). Step 4: qq_send_message with the reply, then literal "OK".\n${ctxNote}`;
 }
 
 /**
@@ -1741,13 +1743,12 @@ export async function sendWakePrompt(key, reason) {
      * 只能再花一步调 qq_get_recent_messages；而 [Now] 每轮都变，但这份正文本身就是本轮新增的 user 消息，
      * 本来就不在前缀缓存里，所以不影响缓存命中。 */
     const nowSentinel = ''; // 2026-10-28：普通唤醒不再注入时间行，需要就调 get_time
-    /* 2026-10-28 晚：只有「自己主动开口」的唤醒（proactiveCheck/replyCheck/timeout…）带一行极短的时钟。
-     * 原因：这类唤醒没有对方消息，模型既不知道几点、也没有上下文，实测 363 次主动机会几乎全部
-     * 判成 "no-topic" 不开口 —— 想说"这么晚了还不睡"根本无从判断。普通唤醒不加，保持精简。 */
+    /* 2026-10-28：时间改由每轮的 get_time 现取（[HARD OPEN] 第 2 条），正文不再带 [Clock]。
+     * 自发唤醒（没有对方消息）额外给一句"你可以主动开话题"，其余情形一律不加。 */
     const reasonBase = String(reason ?? '').split(':')[0];
     const selfInitiated = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/.test(reasonBase);
     const clockLine = selfInitiated
-      ? `\n[Clock] ${fmtBeijing(Date.now()).slice(-5)} Asia/Shanghai - this is a self-initiated opening: you may start a topic. If you need context, call qq_get_recent_messages first (it gets pruned at turn end).`
+      ? '\n[Proactive] This is a self-initiated opening: you may start a topic. If you need context, call qq_get_recent_messages first (it gets pruned at turn end).'
       : '';
 
     // 工具全关的兜底（几乎不会发生）：没有 unread 工具就回退到两行说明版，避免哨兵悬空。

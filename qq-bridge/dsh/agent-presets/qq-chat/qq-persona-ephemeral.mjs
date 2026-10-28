@@ -26,6 +26,7 @@ const STUB = '[context: ephemeral_turn_pruned] This turn\'s loaded context was r
 /** 这些工具的结果是「本轮读进来的上下文」，转瞬即逝，回合末一律剪掉 */
 const EPHEMERAL_TOOLS = new Set([
   'qq_load_persona',
+  'get_time',
   'qq_get_prompt',
   'qq_get_recent_messages',
   'qq_get_my_recent_messages',
@@ -99,7 +100,9 @@ export function prunePersonaResults(session) {
     const toolName = names.get(callId) || '';
     const isEphemeral = EPHEMERAL_TOOLS.has(toolName) || text.includes(PERSONA_MARK);
     if (!isEphemeral) continue;
-    if (text.length <= STUB.length + 40) continue; // 已经剪过
+    /* 用 marker 判断"剪过没有"，别用长度：get_time 这类短结果本来就没几百字，
+     * 用 STUB.length+40 当门槛会把它们当成已剪过，永远不动。 */
+    if (text.includes('ephemeral_turn_pruned')) continue;
     try {
       session.append('tool/result', { ...event.data, message: { ...message, content: stubContent(message) } }, {
         surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq },

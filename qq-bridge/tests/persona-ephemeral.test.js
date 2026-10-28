@@ -67,6 +67,14 @@ ok('只剪上下文读取那条', n4 === 1, 'got ' + n4);
 ok('剪的是 qq_get_recent_messages 的结果', s4.appended[0]?.opts?.surfaceOp?.startSeq === 11);
 ok('发送结果不动', s4.appended.every((a) => a.opts?.surfaceOp?.startSeq !== 13));
 
+console.log('== ③c get_time 的结果也剪（每轮现取的时钟，下一轮就过期） ==');
+const clockEvents = [
+  { seq: 20, type: 'tool/call', data: { callId: 'c-clock', name: 'get_time', arguments: '{}' } },
+  { seq: 21, type: 'tool/result', data: { toolCallId: 'c-clock', message: { role: 'tool', source: { kind: 'tool', callId: 'c-clock' }, content: [{ type: 'text', text: 'time=20:05 timezone=Asia/Shanghai epochMs=1793' }] } } }
+];
+const s5 = fakeSession(clockEvents);
+ok('get_time 结果被剪', mod.prunePersonaResults(s5) === 1 && s5.appended[0]?.opts?.surfaceOp?.startSeq === 21);
+
 console.log('== ④ 接线 ==');
 const yml = fs.readFileSync(path.join(PRESET_DIR, 'agent.cordis.yml'), 'utf8');
 ok('预设挂了 qq-persona-ephemeral', /- id: qq-persona-ephemeral[\s\S]{0,80}qq-persona-ephemeral\.mjs/.test(yml));

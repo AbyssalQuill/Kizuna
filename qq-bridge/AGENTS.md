@@ -27,6 +27,26 @@
    预设类改动还要确认 `profile patch` 里那份内联副本跟着变了（见 `docs/memory/dsh-021-preset-dual-source.md`）。
 4. **别信注释，信代码**：这份代码里过期的注释不少（比如某处写"宿主抓取没有 SSRF 加固"，0.2.1 早就不成立）。判断行为前先看实现。
 
+## 双 Agent 分工与落地纪律（硬边界）
+
+| 角色 | 维护文档 | 核心职责与边界 |
+| --- | --- | --- |
+| **Gemini** (Antigravity) | `docs/maintenance/2026-10-28-full-stack-companion-and-runtime-fix.md` | **方案与想法稿**。负责构思架构、系统提示词优化、诊断推演与代码起草。**严禁**在无线上实测输出时空口声称“已根治” |
+| **DSH** | `docs/maintenance/2026-10-28-dsh-implementation-log.md` | **实现与落地记录**。负责最终代码实施、回归测试、线上部署验证与回滚。**判定措施是否落地的唯一标准**：文档必须给出 git 提交号 + 服务器实测输出，缺一不算 |
+
+### 生产重启标准顺序
+修改预设（preset）、插件或 MCP 代码后，顺序**绝对不能反**：
+1. `systemctl restart qq-bridge`：重新组装并安装 preset 到 `~/.dsh/.agent-presets`。
+2. `systemctl restart dsh-web`：MCP 子进程与 agent profile 仅随 dsh 进程重启生效，只重启桥不会换掉旧子进程。
+
+### 体检与回滚锚点
+- **人设膨胀体检**：`node qq-bridge/tools/check-persona-bloat.mjs`。检查是否存在多份人设却零占位；若有则直接 exit 1。
+- **回滚锚点**：
+  - 角色卡：`persona.md.bak-tokenlist-20261028`
+  - 社交状态：`state/social-state.json.bak-reset-20261028-1905`
+  - 表情包隔离区：`/root/_meme-quarantine-20261028/`
+
+
 ## 记忆怎么用
 
 **两套记忆，别混：**
