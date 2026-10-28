@@ -253,7 +253,9 @@ function findGlobalMemePacks() {
 {
   const initial = findGlobalMemePacks();
   if (initial.length) {
-    console.error(`[mcp-napcat-safe] 内置表情包已加载 ${initial.length} 份：${initial.map((p) => `${p.id}(${p.source})`).join(', ')}`);
+    // 2026-10-28：启动日志带上**每份包的真实目录**。上一轮"搜得到、发不出"排查里最大的坑就是
+    // 日志只说"加载了 2 份 whale-fanart-001"，看不出其中一份是 /root/meme 下的乱码残留包。
+    console.error(`[mcp-napcat-safe] 内置表情包已加载 ${initial.length} 份：${initial.map((p) => `${p.id}(${p.source}) @ ${p.dir}`).join(' | ')}`);
   } else {
     console.error(`[mcp-napcat-safe] 未找到内置表情包（meme-packs）：qq_meme_search / qq_send_meme 将不可用。已尝试 ${MEME_ROOT_CANDIDATES.length} 条路径：${MEME_ROOT_CANDIDATES.join(' | ')}`);
   }
@@ -316,6 +318,28 @@ function queryMemePath(db, fileName) {
 }
 
 /**
+ * 表里的相对路径在磁盘上到底还在不在。
+ * 2026-10-28 修「表情包图库搜得到、发不出」：服务器上留着一份 9 月的乱码包（文件名被按 GBK 解码落盘，
+ * memes/<tag>/<中文名>.webp 全对不上），它的 index.db 还完整留着 162 行 —— 于是搜索报得出名字、
+ * 发图却永远找不到物理文件。症状是模型回「图库里的图全都不见了，就剩名字挂着」。
+ * 结论：**表只是索引，能不能发以磁盘为准**。搜索与兜底挑图一律先过这一关，幽灵行不报给模型。
+ */
+function memeRelExists(pack, rel) {
+  if (!rel || !pack?.dir) return false;
+  try { return fs.existsSync(path.join(pack.dir, String(rel).replace(/\\/g, '/'))); } catch { return false; }
+}
+
+/** 一批候选行里，挑第一条"磁盘上真有文件"的；没有再返回 null（幽灵行一律跳过） */
+function pickExistingMemeRow(db, pack, rows) {
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!r?.file_name) continue;
+    if (!memeRelExists(pack, queryMemePath(db, r.file_name))) continue;
+    return { file: String(r.file_name), tag: String(r.tag ?? ''), caption: String(r.caption ?? ''), packId: pack.id };
+  }
+  return null;
+}
+
+/**
  * 按"情绪/内容描述"在一批包里挑第一张表情（qq_meme_search 同一套 SQL，只是只取第一条）。
  * 2026-09-22：给 `qq_send_meme` 在没有 `file` 时兜底：现场报错是
  * `-32602: missing required tool_input fields: file` —— 模型只给了描述没给文件名，参数校验层就把整次
@@ -340,9 +364,10 @@ async function firstMemeByQuery(packs, query, tag, onlyPack) {
         sql += ' AND (file_name LIKE ? OR caption LIKE ? OR keywords LIKE ?)';
         params.push('%' + q + '%', '%' + q + '%', '%' + q + '%');
       }
-      sql += ' LIMIT 1';
-      let r = db.prepare(sql).get(...params);
-      if (r?.file_name) return { file: String(r.file_name), tag: String(r.tag ?? ''), caption: String(r.caption ?? ''), packId: p.id };
+      // 2026-10-28：多拉一小批再按磁盘对账（原来 `LIMIT 1` 只取第一行，命中幽灵行就整次发图失败）
+      sql += ' LIMIT 20';
+      let picked = pickExistingMemeRow(db, p, db.prepare(sql).all(...params));
+      if (picked) return picked;
 
       // 2. 分词模糊兜底（如果整句没匹配上，尝试提取 >=2 字的关键词模糊匹配）
       if (q && q.length > 2) {
@@ -351,10 +376,10 @@ async function firstMemeByQuery(packs, query, tag, onlyPack) {
           const wParams = [];
           let wSql = 'SELECT file_name, tag, caption FROM memes WHERE 1=1';
           if (tg) { wSql += ' AND tag = ?'; wParams.push(tg); }
-          wSql += ' AND (file_name LIKE ? OR caption LIKE ? OR keywords LIKE ?) LIMIT 1';
+          wSql += ' AND (file_name LIKE ? OR caption LIKE ? OR keywords LIKE ?) LIMIT 20';
           wParams.push('%' + w + '%', '%' + w + '%', '%' + w + '%');
-          r = db.prepare(wSql).get(...wParams);
-          if (r?.file_name) return { file: String(r.file_name), tag: String(r.tag ?? ''), caption: String(r.caption ?? ''), packId: p.id };
+          picked = pickExistingMemeRow(db, p, db.prepare(wSql).all(...wParams));
+          if (picked) return picked;
         }
       }
     } catch { /* 坏包跳过 */ } finally { try { db.close(); } catch { /* 只读句柄 */ } }
@@ -2261,8 +2286,15 @@ if (cfg.social?.meme?.enabled !== false) {
             const params = [];
             if (tg) { sql += ' AND tag = ?'; params.push(tg); }
             if (q) { sql += ' AND (caption LIKE ? OR keywords LIKE ?)'; params.push('%' + q + '%', '%' + q + '%'); }
-            sql += ' LIMIT ?'; params.push(n - rows.length);
-            for (const r of db.prepare(sql).all(...params)) rows.push({ ...r, packId: p.id });
+            // 2026-10-28：多拉几行再按磁盘对账 —— 幽灵行（表里有、盘上没有）不再报给模型，
+            // 否则它拿着名字去 qq_send_meme，必然回「图片文件不存在」，用户看到的就是"图库发不出"。
+            sql += ' LIMIT ?'; params.push(Math.min(60, (n - rows.length) * 4 + 4));
+            for (const r of db.prepare(sql).all(...params)) {
+              if (rows.length >= n) break;
+              if (!r?.file_name) continue;
+              if (!memeRelExists(p, queryMemePath(db, r.file_name))) continue;
+              rows.push({ ...r, packId: p.id });
+            }
           } catch { broken += 1; } finally { try { db.close(); } catch { /* 只读句柄，关不掉不影响结果 */ } }
         }
         if (!rows.length) return { content: [{ type: 'text', text: `没找到匹配的表情，试试：生气/哭/睡觉/开心/疑惑/害羞/干活/日常` }] };
@@ -2374,8 +2406,11 @@ if (cfg.social?.meme?.enabled !== false) {
           }
         }
         if (!hit || !filePath || !fs.existsSync(filePath)) {
+          // 2026-10-28：把"到底在哪些包里找过、各自的目录是什么"一次说清 —— 上一轮现场只有一句
+          // "图片文件不存在"，看不出是两份同名包互相遮蔽（一份乱码残留包 + 一份好的）。
           const fallbackPath = path.join(hits[0].pack.dir, hits[0].rel.replace(/\\/g, '/'));
-          return { content: [{ type: 'text', text: `图片文件不存在：${fallbackPath}（包 ${hits[0].pack.id} 的表里有它，磁盘上没有）` }], isError: true };
+          const tried = hits.map((h) => `${h.pack.id}@${h.pack.dir}`).join('、');
+          return { content: [{ type: 'text', text: `图片文件不存在：${fallbackPath}（包 ${hits[0].pack.id} 的表里有它，磁盘上没有；同名候选 ${hits.length} 份全都没有物理文件：${tried}）` }], isError: true };
         }
         const otherPacks = hits.filter((h) => h !== hit).map((h) => h.pack.id);
         // NapCat 需读它自己能读到的路径：先复制到配置的临时目录（服务器指向 NapCat 容器的

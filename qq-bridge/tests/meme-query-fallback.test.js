@@ -29,9 +29,11 @@ ok('fileName 与 file 等价（file ?? fileName）', /let wantFile = String\(fil
 
 console.log('== ② 兜底挑图 ==');
 ok('定义了 firstMemeByQuery', /async function firstMemeByQuery\(packs, query, tag, onlyPack\)/.test(mcp));
-ok('用的是 qq_meme_search 同一套 SQL', /AND \(caption LIKE \? OR keywords LIKE \?\)/.test(mcp) && /sql \+= ' LIMIT 1'/.test(mcp));
+ok('用的是 qq_meme_search 同一套 SQL', /AND \(caption LIKE \? OR keywords LIKE \?\)/.test(mcp) && /sql \+= ' LIMIT 20'/.test(mcp));
+// 2026-10-28：多拉一小批再按磁盘对账，命中幽灵行（表里有、盘上没有）就跳过，不许把死名字挑给模型
+ok('兜底挑图会跳过磁盘上不存在的行', /pickExistingMemeRow\(db, p, db\.prepare\(sql\)\.all\(\.\.\.params\)\)/.test(mcp) && /function pickExistingMemeRow\(db, pack, rows\)/.test(mcp));
 ok('只读打开 index.db', /new DatabaseSync\(path\.join\(p\.dir, 'index\.db'\), \{ readOnly: true \}\)/.test(mcp));
-ok('坏包跳过（continue 而不是抛）', /catch \{ continue; \}\s*\n\s*try \{\s*\n\s*let sql/.test(mcp));
+ok('坏包跳过（continue 而不是抛）', /\} catch \{ continue; \}\s*\n\s*try \{[\s\S]{0,400}let sql = 'SELECT file_name, tag, caption FROM memes WHERE 1=1';/.test(mcp));
 ok('没有 file 时才会兜底挑图', /if \(!wantFile\) \{\s*\n\s*pickedByQuery = await firstMemeByQuery\(packs, query, tag, wantPack \|\| ''\);/.test(send));
 ok('挑中的 pack 会回填 wantPack', /wantFile = pickedByQuery\.file;\s*\n\s*if \(!wantPack\) wantPack = pickedByQuery\.packId;/.test(send));
 ok('回报里带 pickedByQuery + 命中的说明', /pickedByQuery: true, matched: pickedByQuery\.caption \|\| pickedByQuery\.tag/.test(send));
