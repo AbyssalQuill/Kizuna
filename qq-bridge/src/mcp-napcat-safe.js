@@ -2351,11 +2351,33 @@ if (cfg.social?.meme?.enabled !== false) {
           }
         }
         if (!hits.length) return { content: [{ type: 'text', text: `找不到表情 ${file}${wantPack ? `（包 ${wantPack}）` : ''}，请先用 qq_meme_search 搜索` }], isError: true };
-        // 多份包都有同名文件时按优先级取第一份（角色专属包排在最前），并把这件事如实告诉模型
-        const hit = hits[0];
-        const otherPacks = hits.slice(1).map((h) => h.pack.id);
-        const filePath = path.join(hit.pack.dir, hit.rel.replace(/\\/g, '/'));
-        if (!fs.existsSync(filePath)) return { content: [{ type: 'text', text: `图片文件不存在：${filePath}（包 ${hit.pack.id} 的表里有它，磁盘上没有）` }], isError: true };
+        // 多份包都有同名文件时优先取有物理文件存在的第一份
+        let hit = null;
+        let filePath = null;
+        for (const candidateHit of hits) {
+          const candPath = path.join(candidateHit.pack.dir, candidateHit.rel.replace(/\\/g, '/'));
+          if (fs.existsSync(candPath)) {
+            hit = candidateHit;
+            filePath = candPath;
+            break;
+          }
+        }
+        if (!hit) {
+          // 兜底排查：尝试在 MEME_ROOT_CANDIDATES 中寻找相对路径文件
+          for (const candRoot of MEME_ROOT_CANDIDATES) {
+            const probePath = path.join(candRoot, hits[0].pack.id, hits[0].rel.replace(/\\/g, '/'));
+            if (fs.existsSync(probePath)) {
+              hit = { ...hits[0], pack: { ...hits[0].pack, dir: path.join(candRoot, hits[0].pack.id) } };
+              filePath = probePath;
+              break;
+            }
+          }
+        }
+        if (!hit || !filePath || !fs.existsSync(filePath)) {
+          const fallbackPath = path.join(hits[0].pack.dir, hits[0].rel.replace(/\\/g, '/'));
+          return { content: [{ type: 'text', text: `图片文件不存在：${fallbackPath}（包 ${hits[0].pack.id} 的表里有它，磁盘上没有）` }], isError: true };
+        }
+        const otherPacks = hits.filter((h) => h !== hit).map((h) => h.pack.id);
         // NapCat 需读它自己能读到的路径：先复制到配置的临时目录（服务器指向 NapCat 容器的
         // 宿主挂载目录），再用 napcatImageFileArg 按 dockerPathMap 换成容器内路径 / base64。
         // 2026-09-15：此前直接把宿主绝对路径交给 NapCat，服务器（Docker）报

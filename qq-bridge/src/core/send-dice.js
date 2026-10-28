@@ -37,8 +37,8 @@ export function dice(kind, key, probability, cooldownMs) {
 // ── 表情包（内置表情库 qq_send_meme + QQ 收藏表情 qq_send_sticker 共用一条概率）──────
 // 配置沿用既有的 social.sticker.sendProbability（管理端「表情包」卡里那个"发表情概率"），
 // 新增 sendCooldownMs 管同一会话的连发。
-export const MEME_DEFAULT_PROBABILITY = 0.3;
-export const MEME_DEFAULT_COOLDOWN_MS = 30 * 1000;
+export const MEME_DEFAULT_PROBABILITY = 0.6;
+export const MEME_DEFAULT_COOLDOWN_MS = 10 * 1000;
 
 function memeCfg() {
   const s = cfgRef?.social?.sticker ?? {};
