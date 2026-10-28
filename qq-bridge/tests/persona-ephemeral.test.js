@@ -54,6 +54,19 @@ console.log('== ③ 非人设结果不动 ==');
 const s3 = fakeSession([{ seq: 5, type: 'tool/result', data: { message: { role: 'tool', content: [{ type: 'text', text: '普通工具结果'.repeat(50) }] } } }]);
 ok('普通结果不替换', mod.prunePersonaResults(s3) === 0);
 
+console.log('== ③b 读进来的对话上下文也剪（tool/call 映射） ==');
+const ctxEvents = [
+  { seq: 10, type: 'tool/call', data: { callId: 'c-ctx', name: 'mcp__napcat__napcat_invoke_tool', arguments: JSON.stringify({ tool_name: 'qq_get_recent_messages', tool_input: {} }) } },
+  { seq: 11, type: 'tool/result', data: { toolCallId: 'c-ctx', message: { role: 'tool', source: { kind: 'tool', callId: 'c-ctx' }, content: [{ type: 'text', text: '{"ok":true,"messages":[' + '"老消息"'.repeat(200) + ']}' }] } } },
+  { seq: 12, type: 'tool/call', data: { callId: 'c-send', name: 'mcp__napcat__napcat_invoke_tool', arguments: JSON.stringify({ tool_name: 'qq_send_message', tool_input: {} }) } },
+  { seq: 13, type: 'tool/result', data: { toolCallId: 'c-send', message: { role: 'tool', source: { kind: 'tool', callId: 'c-send' }, content: [{ type: 'text', text: '{"ok":true,"messageId":"123"}' }] } } }
+];
+const s4 = fakeSession(ctxEvents);
+const n4 = mod.prunePersonaResults(s4);
+ok('只剪上下文读取那条', n4 === 1, 'got ' + n4);
+ok('剪的是 qq_get_recent_messages 的结果', s4.appended[0]?.opts?.surfaceOp?.startSeq === 11);
+ok('发送结果不动', s4.appended.every((a) => a.opts?.surfaceOp?.startSeq !== 13));
+
 console.log('== ④ 接线 ==');
 const yml = fs.readFileSync(path.join(PRESET_DIR, 'agent.cordis.yml'), 'utf8');
 ok('预设挂了 qq-persona-ephemeral', /- id: qq-persona-ephemeral[\s\S]{0,80}qq-persona-ephemeral\.mjs/.test(yml));

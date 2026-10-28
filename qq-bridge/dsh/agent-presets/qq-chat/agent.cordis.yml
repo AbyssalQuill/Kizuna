@@ -85,9 +85,8 @@
 # 省掉「一步一个工具、每步重发全量上下文」的开销（每步 85k token，见 docs/memory/context-cost-model.md）。
 # 安全边界不在呈现层而在 qq-tool-restrict：白名单只放 qq_* 系列（run_code 里的嵌套调用同样过守卫），
 # 沙盒升级 / shell / 读写文件在预设里明令禁止，且本部署的批准提示一律自动拒绝。
-# 默认关闭（disabled: true）。PTC 需要 dsh 组装里真有 ctx.ptcRuntime，否则本行会把整个 preset 拒挂。
-# 想开：把 disabled 改成 false → 重启桥（重装 preset）→ 重启 dsh-web；出问题就改回来。
-# 配套已经就位：qq-tool-restrict 放行 run_code 与裸 qq_* 名，预设里有 ptc_batching / sandbox_and_approvals 两条规矩。
+# 2026-10-28 晚：PTC 暂缓 —— 打开后新建的会话拿不到 run_code 的日志（疑似 ctx.ptcRuntime 没组装），
+# 先回到 native 保证能回话，批量调用改用「并行工具调用 + 预设步骤合并」实现。
 - id: tool-presentation
   name: '@deepseek-ai/dsh-agent-tool-presentation'
   disabled: true

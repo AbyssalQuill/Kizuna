@@ -332,7 +332,13 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 现场：模型先 qq_send_message、被守卫打回「协议违规…」才回头补 qq_load_persona —— 一步白烧。
    * 尾部的 [Action Flow] 在长上下文末尾容易被忽略，挪一行到开头，模型读到的第一句就是它。 */
   const lead = '[HARD OPEN] 本回合第一个工具调用必须是 qq_load_persona（PTC 模式下是 run_code 程序里的第一句）。没加载人设就发消息会被桥物理拦截，白烧一步。';
-  return `${lead}\n${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".`;
+  /* 2026-10-28：主人定的用法 —— 每轮现取现用，用完就剪。
+   * 人设与读过的对话在回合末都会被移出历史（qq-persona-ephemeral），所以这里明说"可以放心调"，
+   * 否则模型会以为多读一次就要多背一辈子上下文。 */
+  const ctxNote = '[Context] 上一轮读过的人设/对话已移出历史。需要就现取：qq_get_recent_messages、'
+    + 'qq_memory_search(query=关键词) 翻旧话题、qq_memory_search(direction=out) 查自己说过的；'
+    + '这些结果回合末自动剪掉，放心调。';
+  return `${lead}\n${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".\n${ctxNote}`;
 }
 
 /**
@@ -1685,7 +1691,7 @@ export async function sendWakePrompt(key, reason) {
      * （现场投诉"上下文理解没落地"）。补一条极短的最近对话尾巴：只带已经回过的几条，
      * 每条截 90 字、私聊 4 条 / 群聊 6 条，≈200~400 token/轮，换回"知道刚才在说什么"。
      * 明写 context only：这些不用再答一遍，避免把旧话题重答。 */
-    const tailN = key.startsWith('private:') ? 4 : 6;
+    const tailN = 30; // 2026-10-28 主人要求：每轮都带最近 30 条
     const unreadIds = new Set((Array.isArray(unreadAll) ? unreadAll : []).map((m) => String(m.messageId || m.seq)));
     const tailMsgs = (Array.isArray(st.recentMessages) ? st.recentMessages : [])
       .filter((m) => m && !unreadIds.has(String(m.messageId || m.seq)))
@@ -1788,7 +1794,7 @@ export async function sendWakePrompt(key, reason) {
     // 所以：正常首轮 12 条、轮换首轮 24 条（都能用 config 调）；更早的历史交给
     // `qq_memory_search` 按需从 SQLite 翻（唤醒正文里已明确允许且鼓励这么做；读记录的工具是它）。
     // 依据见交接文档 §4.9 的 token 经济账：缓存读约占账单 61%，且随步数线性放大。
-    const ctxN = 5;
+    const ctxN = 30; // 2026-10-28 主人要求：开局与哨兵轮统一 30 条最近消息
     const recentBlock = formatRecentWindow(st, key, ctxN);
     promptText = buildWakePrompt(key, reason) + recentBlock;
     st._promptInjected = true;
