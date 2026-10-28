@@ -2,7 +2,10 @@
 // 1) 隐藏全局开发工具（restrict）；
 // 2) 白名单兜底（guard）；
 // 3) 防呆拦截：严禁将会话 Token / QQ 号作为工具名盲调；
-// 4) 强制 step_1：发言前必须先调用 qq_load_persona 载入角色设定，否则物理拦截打回；
+// 4) 强制 step_1：每回合第一次发言前必须先调用 qq_load_persona 载入角色设定，否则物理拦截打回；
+//    注意「每回合一次」不等于「每次发言一次」——同一回合里的第二条文字 / 语音 / 表情
+//    不该被要求重新读人设（2026-10-29 线上实测：一言一语连发语音时被误判成 protocol violation，
+//    模型被迫多花一步重新 load_persona 才发出去）；
 // 5) 消息发送后防狂乱收敛：发完消息后严禁盲目调用无关工具，强制回复 OK 完结本轮。
 
 export const name = 'qq-tool-restrict';
@@ -59,6 +62,8 @@ export const sessionLoadedPersona = new Map();
 export const sessionSentMessage = new Map();
 export const sessionLoadedCount = new Map();
 export const sessionSentCount = new Map();
+// 本回合是否已经载入过人设：true 之后同回合的任意多次发送都放行，回合结束（turn-stopping）清空
+export const sessionPersonaTurn = new Map();
 
 export function apply(ctx) {
   // 1) 隐藏危险全局工具
@@ -69,6 +74,17 @@ export function apply(ctx) {
       const detail = String(error?.message ?? error);
       console.error(`[qq-tool-restrict] skip restrict ${name}: ${detail.slice(0, 160)}${detail.length > 160 ? '…' : ''}`);
     }
+  }
+
+  // 3) 回合结束清空「本回合已载入人设」标记：下个回合的第一次发言必须重新 load。
+  //    dsh-qq-hold 会把 turn-stopping 按住不放，真回合结束时本钩子才真正执行；
+  //    万一没触发，最坏结果是沿用上一回合的载入状态（仅放宽门禁，不会误伤正常发言）。
+  if (typeof ctx.on === 'function') {
+    ctx.on('agent/turn-stopping', (payload) => {
+      const id = String(payload?.agent?.session?.id || '');
+      if (id) sessionPersonaTurn.delete(id);
+      else sessionPersonaTurn.clear();
+    });
   }
 
   // 2) 执行期白名单与动作流物理硬守卫
@@ -110,17 +126,18 @@ export function apply(ctx) {
     if (isLoadPersona) {
       sessionLoadedPersona.set(sessId, Date.now());
       sessionLoadedCount.set(sessId, (sessionLoadedCount.get(sessId) || 0) + 1);
+      sessionPersonaTurn.set(sessId, true);
       return; // 允许加载人设
     }
 
-    // ⑤ 物理硬门禁：每轮硬开局发言前必须已调用 qq_load_persona（loadedCount > sentCount）
+    // ⑤ 物理硬门禁：本回合还没载入人设就不许发言。
+    //    判据是「本回合是否 load 过」（布尔），不是「load 次数 > 发送次数」——
+    //    后者会把同回合的第二条消息 / 语音当成新一轮，线上就是在这里把 qq_send_voice 打回的。
     if (isSendTool) {
-      const loaded = sessionLoadedCount.get(sessId) || 0;
-      const sent = sessionSentCount.get(sessId) || 0;
-      if (loaded <= sent) {
-        return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called in this turn, so sending is blocked. Call qq_load_persona now, then retry the send.';
+      if (!sessionPersonaTurn.get(sessId)) {
+        return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called yet in this turn, so sending is blocked. Call qq_load_persona now, then retry the send. Later sends in the same turn do not need another load.';
       }
-      sessionSentCount.set(sessId, sent + 1);
+      sessionSentCount.set(sessId, (sessionSentCount.get(sessId) || 0) + 1);
       sessionSentMessage.set(sessId, Date.now());
       return;
     }

@@ -1,116 +1,92 @@
 import assert from 'node:assert/strict';
-import { apply, sessionLoadedPersona, sessionSentMessage } from '../dsh/agent-presets/qq-chat/qq-tool-restrict.mjs';
+import {
+  apply,
+  sessionLoadedPersona,
+  sessionSentMessage,
+  sessionPersonaTurn,
+  sessionSentCount
+} from '../dsh/agent-presets/qq-chat/qq-tool-restrict.mjs';
 
-console.log('=== 校验 1：防呆拦截——严禁把 Token / 纯数字当成工具名调用 ===');
+console.log('=== 校验 1：白名单与 Token 防呆 ===');
 let guardFn = null;
+const turnStoppingHandlers = [];
 const fakeCtx = {
   tools: {
     restrict: () => {},
     guard: (fn) => { guardFn = fn; }
-  }
+  },
+  on: (event, fn) => { if (event === 'agent/turn-stopping') turnStoppingHandlers.push(fn); }
 };
 
 apply(fakeCtx);
 assert.ok(typeof guardFn === 'function', 'guard 必须成功注册');
+assert.equal(turnStoppingHandlers.length, 1, '必须订阅 agent/turn-stopping（回合边界复位）');
 
-// 测试直接调用纯数字工具
 const resNum = guardFn({ name: '1736784911' });
-assert.ok(resNum && resNum.includes('是会话鉴权 Token 参数，不是工具名'), '纯数字工具名被精准拦截');
+assert.ok(resNum && resNum.includes('is a session auth token, not a tool name'), '纯数字工具名被精准拦截');
 
-// 测试通过 napcat_invoke_tool 传入纯数字 tool_name
 const resInvokeNum = guardFn({
   name: 'mcp__napcat__napcat_invoke_tool',
   arguments: { tool_name: '1736784911' }
 });
-assert.ok(resInvokeNum && resInvokeNum.includes('是会话鉴权 Token 参数，不是工具名'), 'invoke 包装下的纯数字被精准拦截');
-console.log('PASS: 纯数字 Token 拦截测试通过');
+assert.ok(resInvokeNum && resInvokeNum.includes('is a session auth token, not a tool name'), 'invoke 包装下的纯数字被精准拦截');
 
-console.log('=== 校验 2：物理硬门禁——未调用 qq_load_persona 严禁发消息 ===');
-const testSess = 'test-sess-guard-1';
-sessionLoadedPersona.delete(testSess);
-sessionSentMessage.delete(testSess);
+assert.ok(
+  String(guardFn({ name: 'dev_build_plugin' })).includes('not on the QQ bridge whitelist'),
+  '白名单外的全局开发工具被拒'
+);
+console.log('PASS: 白名单 / Token 拦截');
 
-// 未读人设直接尝试发消息
-const resBlocked = guardFn({
-  name: 'mcp__napcat__qq_send_message',
-  agent: { session: { id: testSess } }
-});
-assert.ok(resBlocked && resBlocked.includes('qq_load_persona'), '未读人设直接发消息被物理硬门禁拦截');
-
-// 压缩代理下的直接发消息同样被拦截
-const resBlockedInvoke = guardFn({
+// 工具夹具：线上真实形态是 napcat_invoke_tool + tool_name
+const sess = 'test-sess-guard-voice';
+const resetSess = () => {
+  for (const m of [sessionLoadedPersona, sessionSentMessage, sessionPersonaTurn, sessionSentCount]) m.delete(sess);
+};
+const call = (toolName) => guardFn({
   name: 'mcp__napcat__napcat_invoke_tool',
-  arguments: { tool_name: 'qq_send_message' },
-  agent: { session: { id: testSess } }
+  arguments: { key: 'private:1736784911', tool_name: toolName },
+  agent: { session: { id: sess } }
 });
-assert.ok(resBlockedInvoke && resBlockedInvoke.includes('qq_load_persona'), '压缩代理下未读人设同样被拦截');
-console.log('PASS: 开局未读人设硬门禁拦截测试通过');
 
-console.log('=== 校验 3：调用 qq_load_persona 后发消息顺利放行 ===');
-// 执行读人设
-const resLoad = guardFn({
-  name: 'mcp__napcat__qq_load_persona',
-  agent: { session: { id: testSess } }
-});
-assert.equal(resLoad, undefined, 'qq_load_persona 执行必须放行');
-assert.ok(sessionLoadedPersona.has(testSess), '人设状态已被记录');
+console.log('=== 校验 2：未载入人设，任何发送都被拦 ===');
+resetSess();
+assert.ok(String(call('qq_send_message')).includes('step_1 is mandatory'), '未读人设发文字被拦截');
+assert.ok(String(call('qq_send_voice')).includes('step_1 is mandatory'), '未读人设发语音被拦截');
+console.log('PASS: 开局硬门禁');
 
-// 再次调用发消息，顺利放行
-const resSend = guardFn({
-  name: 'mcp__napcat__qq_send_message',
-  agent: { session: { id: testSess } }
-});
-assert.equal(resSend, undefined, '加载人设后发消息顺利放行');
-assert.ok(sessionSentMessage.has(testSess), '发消息状态已被记录');
-console.log('PASS: 加载人设后发消息正常放行');
+console.log('=== 校验 3：载入人设后，同回合可以连续发（文字 + 表情包 + 语音）===');
+assert.equal(call('qq_load_persona'), undefined, 'qq_load_persona 放行');
+assert.equal(sessionPersonaTurn.get(sess), true, '本回合已标记载入');
 
-console.log('=== 校验 4：发消息后防狂乱收敛——禁止调用无关空间/定时/盲目搜图工具 ===');
-const resQzone = guardFn({
-  name: 'mcp__napcat__napcat_invoke_tool',
-  arguments: { tool_name: 'qq_qzone_like' },
-  agent: { session: { id: testSess } }
-});
-assert.ok(resQzone && resQzone.includes('交流闭环已达成！禁止继续调用多余工具'), '发完消息后调用空间点赞被收敛拦截');
+assert.equal(call('qq_send_message'), undefined, '第一条文字放行');
+assert.equal(call('qq_send_meme'), undefined, '表情包放行');
+assert.equal(call('qq_send_meme'), undefined, '第二个表情包放行');
+// 回归点：线上就是这一步（同回合追加一条语音）被旧逻辑当成新回合打回的
+assert.equal(call('qq_send_voice'), undefined, '同回合追加语音必须放行（不得再要一次 load_persona）');
+assert.equal(call('qq_send_message'), undefined, '同回合第二条文字同样放行');
+assert.equal(sessionSentCount.get(sess), 3, '发送计数如实累计（表情包不算发送，只有文字与语音计）');
+console.log('PASS: 同回合多气泡 / 语音连发');
 
-const resSchedule = guardFn({
-  name: 'mcp__napcat__napcat_invoke_tool',
-  arguments: { tool_name: 'qq_schedule_message' },
-  agent: { session: { id: testSess } }
-});
-assert.ok(resSchedule && resSchedule.includes('交流闭环已达成！禁止继续调用多余工具'), '发完消息后调用定时任务被收敛拦截');
-console.log('PASS: 发消息后收敛门禁测试通过');
+console.log('=== 校验 4：发言后防狂乱收敛 ===');
+const resQzone = call('qq_qzone_like');
+assert.ok(resQzone && resQzone.includes('this turn\'s goal is met'), '发完消息后调空间点赞被收敛拦截');
+const resSchedule = call('qq_schedule_message');
+assert.ok(resSchedule && resSchedule.includes('this turn\'s goal is met'), '发完消息后调定时任务被收敛拦截');
+assert.equal(call('qq_send_voice'), undefined, '收敛规则不误伤语音（只有空间/定时/搜图被限）');
+console.log('PASS: 收敛门禁');
 
-console.log('=== 校验 5：每轮硬开局——新回合必须重新读人设才能再次发言 ===');
-// 当前 loadedAt <= sentAt（因为上次发消息更新了 sentAt）
-const resSecondTurnBlocked = guardFn({
-  name: 'mcp__napcat__qq_send_message',
-  agent: { session: { id: testSess } }
-});
-assert.ok(resSecondTurnBlocked && resSecondTurnBlocked.includes('qq_load_persona'), '新一轮未经重新读人设直接发言被拦截');
+console.log('=== 校验 5：回合结束复位，新回合必须重新载入人设 ===');
+turnStoppingHandlers[0]({ agent: { session: { id: sess } } });
+assert.equal(sessionPersonaTurn.has(sess), false, 'turn-stopping 清掉本回合标记');
+assert.ok(String(call('qq_send_message')).includes('step_1 is mandatory'), '新回合未经 load 直接发言被拦截');
 
-// 新一轮重新读人设后即可发言
-guardFn({
-  name: 'mcp__napcat__qq_load_persona',
-  agent: { session: { id: testSess } }
-});
-const resSecondTurnAllowed = guardFn({
-  name: 'mcp__napcat__qq_send_message',
-  agent: { session: { id: testSess } }
-});
-assert.equal(resSecondTurnAllowed, undefined, '重新读人设后顺利发言');
-console.log('PASS: 每轮硬开局人设循环校验通过');
+assert.equal(call('qq_load_persona'), undefined, '新回合 load 放行');
+assert.equal(call('qq_send_voice'), undefined, '新回合载入后语音放行');
+console.log('PASS: 每回合一次开局门禁');
 
 console.log('=== 校验 6：后台学习任务工具直接豁免 ===');
-const resCorpus = guardFn({
-  name: 'mcp__napcat-host__qq_learning_corpus',
-  arguments: { limit: 100 }
-});
-assert.equal(resCorpus, undefined, '学习语料工具直接豁免放行');
-const resSubmit = guardFn({
-  name: 'mcp__napcat-host__qq_learning_submit',
-  arguments: { uid: '123456' }
-});
-assert.equal(resSubmit, undefined, '学习提交工具直接豁免放行');
-console.log('PASS: 学习任务工具豁免校验通过');
+assert.equal(guardFn({ name: 'mcp__napcat-host__qq_learning_corpus', arguments: { limit: 100 } }), undefined, '学习语料工具豁免');
+assert.equal(guardFn({ name: 'mcp__napcat-host__qq_learning_submit', arguments: { uid: '123456' } }), undefined, '学习提交工具豁免');
+console.log('PASS: 学习任务豁免');
 
 console.log('>>> 全部 Tool Restrict Guard 门禁测试 100% 通过！');
