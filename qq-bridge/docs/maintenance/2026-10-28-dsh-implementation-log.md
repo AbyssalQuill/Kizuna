@@ -22,6 +22,10 @@
 | 9 | STEP 单一轮瞬态投影架构改造：提示词与瞬态工具扩展 | ① 上下文无限累积导致 Token 滚雪球、人设稀释、定式严重；② 缺少对联网/表情包/黑话查询工具的剪枝闭环 | ① 在 `agent.cordis.yml` 确立 5 阶段黄金 Action 链路（Grounding 时空与人设 -> Perceiving 窗口/记忆/黑话/联网 -> Cognition 意图与潜台词 -> Critique 反定式自检 -> Dispatch 决策输出与瞬态销毁）；② `qq-persona-ephemeral.mjs` 扩充全部只读检索工具（含 web_search, meme_search, search_slang 等）；③ `wake-send.js` 对齐单轮瞬态投影正文 | `2974d08` | 本地与服务器端 `tests/persona-ephemeral.test.js` 15/15 PASS、`tests/universal-prompts.test.js` 6 项全 PASS；严格按序重启服务，`qq-bridge` 和 `dsh-web` 均为 active |
 | 10 | 彻底清理 PTC 并赋权灵活调用 100+ 项能力 | ① PTC 缺乏 runtime 支持；② 预设需赋予模型自主决定是否联网、查黑话、搜图的自由度 | ① 清除 `agent.cordis.yml` 中 `ptc_form`、`ptc_batching` 等说教；② 加入 `flexible_on_demand_tools`，明确除步骤 1 和 2 为锚点外，其余 100+ 工具（联网、记忆、表情包、群管、戳一戳等）由模型全自主按需调度 | `1116bf3` | 服务器 `systemctl restart qq-bridge` → `dsh-web` 重启；`universal-prompts` 与 `persona-ephemeral` 均 PASS；双服务 active |
 | 11 | 群聊混乱多线程人机感根治：活跃度自适应窗口与引用约束 | ① 实测取证：群友多线程斗嘴时机器人突兀插入“谁把你退了，我去看看”和“我那是回嘴不是加戏”，脱节无引用极度人机；② 写死携带数导致刷屏时前因后果被截断 | ① `wake-send.js` 增加群聊活跃度动态自适应算法（高频刷屏自动放宽至 25~35 条，并打上 `[Group Dynamic]` 提示多线程交织）；② `agent.cordis.yml` 增加 `group_thread_awareness` 与 `anti_defensive` 规则，强制跨发言距离使用 `replyToMessageId` 引用或 @ 对应人；③ `persona.md` 补全反面取证案例纠偏 | `369e6f1` | 服务器实测：测试全部 PASS，按序重启 `qq-bridge` 和 `dsh-web` 均为 active；`chat.db` 取证实证已被吸收规范 |
+| 12 | `[Action Flow]` 在系统提示词和唤醒正文各写一份 | 五步流程同时存在于 `agent.cordis.yml`（→ system prompt）和 `wake-send.js` 正文尾部；正文那份每轮全价计费，且与系统提示词完全重复 | 正文删掉整张流程表，唯一出处归系统提示词（`@deepseek-ai/dsh-persona` 把 `persona.text` 注册成 system-prompt section，属静态前缀、吃 KV-Cache）；正文只留 `[HARD OPEN]` 两行触发器 + `[Context]` 瞬态说明 | `b80dd96` | 渲染 `appendTurnTailPersonaAnchor`：700 字符、`HAS_ACTION_FLOW=false`（删前 960 字符）；`tests/wake-trigger.test.js` 19/19 PASS；按序重启后三服务 active |
+| 13 | GUI 每次重启后又弹「预览版说明」 | ack 存在 `ui-settings-general.welcomeNoticeVersion`，而 DSH 回写这条 ack 时正好落在桥托管的 preset 声明块内部，`syncPresetDeclaration21` 每次启动整块替换 → ack 消失 → 版本比对不过就弹窗 | 生成器新增 `readWelcomeNoticeVersion()`：从已装 DSH 的 `dsh-client-ui-settings-models/lib/client.js` 读 `WELCOME_NOTICE_VERSION`（读不到用 `2026-09-28.1` 兜底），每次重启把 ack 行写进声明块；DSH 升级自动跟版本 | `b80dd96` | 重启后 `profiles/web/cordis.patch.yml` 有 `welcomeNoticeVersion: 2026-09-28.1`；PyYAML `safe_load` 7 个顶层项、`has ui-settings-general: True`、值为字符串 |
+| 14 | 服务器 GUI 工作区堆着实验目录 | `persona-agent-probe` 是零引用探针工作区；`SlangAgent` 只是显示名，路径本来就是 `state/slang-agent` | 停 `dsh-web` → 改 `storages/workspace.json`（删行 + 同步 `global.workspaceIds` + 改标题）→ 起服务；`agents` / `persona-agent` / `slang-agent` 保留（机器人自己在写） | —（数据操作，无代码提交） | `tables.workspaces` 与 `global.workspaceIds` 一致（4 条、`ids_ok: True`）；3080 在听；备份 `workspace.json.bak-wsclean-20261028-124604` |
+| 15 | 本地 commit 推不上 GitHub | CLI `git push` 走本机 HTTPS，连 GitHub 超时 | 改走 GitHub MCP `push_files` 直接推文件；本地 `git fetch && git reset --hard origin/main` 对齐 | `05d2910` | 本地与远端 `git log` 同为 `05d2910`、`## main...origin/main` 无差异；`wake-send.js` 里 `[Action Flow]` 只剩一行注释 |
 
 ---
 
@@ -65,6 +69,8 @@ ssh root@202.61.72.79 'systemctl restart dsh-web'     # MCP 子进程只随 dsh 
 - 人设剪枝体检：`node qq-bridge/tools/check-persona-bloat.mjs`（多份人设却零占位 → exit 1）。
 - 回滚点：`persona.md.bak-tokenlist-20261028`（旧 token 人设）、`state/social-state.json.bak-reset-20261028-1905`（reset 前状态）、`/root/_meme-quarantine-20261028/`（乱码包）。
 - 定时任务库：`state/scheduled-tasks.json`（当前 0 条）。
+- 推送 GitHub：本机 `git push` 常超时，改走 GitHub MCP `push_files`（owner `AbyssalQuill` / repo `Kizuna` / branch `main`）；推完本地 `git fetch && git reset --hard origin/main` 对齐，避免两套 sha 打架。
+- 服务器 `/root/qq-bridge` 不是 git 仓库，上线一直是 scp 覆盖文件；查线上版本只能比对内容。
 
 ---
 
@@ -73,3 +79,5 @@ ssh root@202.61.72.79 'systemctl restart dsh-web'     # MCP 子进程只随 dsh 
 1. **PTC**：查清 `dsh-web` 为什么没有把 `ctx.ptcRuntime` 组装进来；确认后再开 `tool-presentation.mode=ptc`，否则整个 preset 会被拒挂。
 2. `tools/test-wake-protocol.mjs` 有 56 条陈旧断言（仍按"[Token] 首行 / 不要 [Now]"的老设计判），需要对齐现状。
 3. 旧会话的人设副本（916 份）仍在日志里，仅不可达；如需回收磁盘可另行归档。
+4. 服务器 `/root/qq-bridge` 不是 git 仓库（一直 scp 覆盖）：建议改成 `git pull --ff-only` 部署，"线上跑的是哪个 commit"才有锚点。
+5. 下一次真实唤醒做端到端复核：确认前两个工具仍是 `qq_load_persona` → `get_time`，且回合末 `ephemeral_turn_pruned` 计数增长（现有测试只覆盖渲染层，没覆盖线上实跑）。
