@@ -43,11 +43,8 @@ export function stripMessageArtifacts(text) {
 }
 
 export function stripActionBrackets(text) {
-  let s = String(text ?? '');
-  // 去除中文/英文括号包裹的动作表演（如 （蹭蹭）、（揉眼睛）、（摇尾巴）、*摸头* 等），保留颜文字（如 ᗜ ᴗ ᗜ）和正常英文括号
-  s = s.replace(/[\(（][\s]*(?:蹭蹭|蹭了蹭|蹭你|抱紧|抱住|扑过去|抓紧|拉住|揉揉|摸摸|拍尾巴|摇尾巴|甩尾巴|晃尾巴|脸红|害羞|扭头|傲娇|小声|嘟囔|嘀咕|低头|抬头|叹气|轻哼|噘嘴|撇嘴|叉腰|跺脚|歪头|眨巴|眨眼|微笑|轻笑|冷笑|苦笑|翻白眼|白眼|撇过头|别过头|把头埋|拉被子|打哈欠|伸懒腰|戳戳|拉拉|靠过去|缩在|看着你|盯着你|盯|移开视线|小脸一红|耳根发红|红着脸|双手合十|摊手|摊开手|捂脸)[^）\)]*[\)）]/g, '');
-  s = s.replace(/\*[^*]{1,20}\*/g, '');
-  return s.trim();
+  // 遵循指示：不用正则过滤动作，保留真实输出，由模型人设纯口语规则自律
+  return String(text ?? '');
 }
 
 export function normalizeFirstPersonSelfCall(text) {
@@ -56,10 +53,9 @@ export function normalizeFirstPersonSelfCall(text) {
   return s.replace(/(?<=^|[，。！？、~～\s]|像|跟|给|帮|趁|让|被|把)人家(?![家里园地室院伙男女人])/g, '我');
 }
 
-// 出站文本统一清洗：令牌脱敏 → 表情/图片占位符清扫 → 输入法 emoji 剥离 → 动作描写/括号表演过滤 → 第一人称规范。
+// 出站文本统一清洗：令牌脱敏 → 表情/图片占位符清扫 → 输入法 emoji 剥离 → 第一人称规范。
 export function cleanOutboundText(text) {
   const swept = sweepMessageArtifacts(text);
   const noEmoji = stripImeEmoji(swept.text);
-  const noActions = stripActionBrackets(noEmoji);
-  return normalizeFirstPersonSelfCall(noActions);
+  return normalizeFirstPersonSelfCall(noEmoji);
 }
