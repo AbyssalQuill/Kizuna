@@ -625,6 +625,11 @@ async function resolveMissingSession(wantKey) {
     return { error: e?.message ?? String(e) };
   }
 }
+/* 2026-10-28：不需要会话身份的工具。它们不往任何会话发东西，缺 key/token 与"发错群"无关，
+ * 却会被下面的包装层要求补 key —— qq_load_persona 实测每轮都吃一次「缺 key」，模型只好再补一次
+ * 带 key 的调用，白烧一步（用户看到的"老是多一步工具调用"）。这些工具直接放行。 */
+const KEYLESS_TOOLS = new Set(['qq_load_persona']);
+
 const MISSING_ARG_HINT = '缺 token：唤醒正文第一行就是 `[Token] <值>`，照抄即可；同一区域的 `[Session] group:<群号>` / '
   + '`[Session] private:<QQ>` 就是本次要发的 key。两者照常传就行。如果这一轮确实没有在途会话可推断，就先别发，下一条消息进来时再处理。';
 
@@ -667,8 +672,9 @@ const MISSING_ARG_HINT = '缺 token：唤醒正文第一行就是 `[Token] <值>
          * 结果：模型照提示传了 key，包装层却认为它没传 → 去问桥"当前在途会话" → 手动测试时没有
          * 在途回合 → 回一句"缺 key/token"，调用整个失败。
          * 现在两个字段各判各的：没声明 key 的工具根本不检查 key，只检查 token。 */
-        const missingKey = hasKeyField && (callArgs.key === undefined || callArgs.key === null || callArgs.key === '');
-        const missingToken = hasTokenField && (callArgs.token === undefined || callArgs.token === null || callArgs.token === '');
+        const keyless = KEYLESS_TOOLS.has(name);
+        const missingKey = !keyless && hasKeyField && (callArgs.key === undefined || callArgs.key === null || callArgs.key === '');
+        const missingToken = !keyless && hasTokenField && (callArgs.token === undefined || callArgs.token === null || callArgs.token === '');
         /* 2026-09-20 根因修复：桥不再替模型猜 key（修「pixiv 发图发错群」）
          * 旧写法在缺 key 时问桥 `/api/social/current-turn`，把"当前在途会话"的 key 填进去 ——
          * 而多会话同时有在途回合时，桥会按"最近活动"挑一个（console-server 的 PICKED-newest-of-N）。
@@ -706,7 +712,7 @@ const MISSING_ARG_HINT = '缺 token：唤醒正文第一行就是 `[Token] <值>
             return { content: [{ type: 'text', text: MISSING_ARG_HINT }], isError: true };
           }
         }
-        if ((hasKeyField && !callArgs.key) || (hasTokenField && !callArgs.token)) {
+        if (!keyless && ((hasKeyField && !callArgs.key) || (hasTokenField && !callArgs.token))) {
           return { content: [{ type: 'text', text: MISSING_ARG_HINT }], isError: true };
         }
         // ③ 重复失败短路（见上方常量说明）
