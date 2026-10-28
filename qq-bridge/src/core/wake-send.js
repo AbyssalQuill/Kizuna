@@ -1740,7 +1740,15 @@ export async function sendWakePrompt(key, reason) {
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
      * 只能再花一步调 qq_get_recent_messages；而 [Now] 每轮都变，但这份正文本身就是本轮新增的 user 消息，
      * 本来就不在前缀缓存里，所以不影响缓存命中。 */
-    const nowSentinel = ''; // 2026-10-28：不再注入时间行，需要就调 get_time
+    const nowSentinel = ''; // 2026-10-28：普通唤醒不再注入时间行，需要就调 get_time
+    /* 2026-10-28 晚：只有「自己主动开口」的唤醒（proactiveCheck/replyCheck/timeout…）带一行极短的时钟。
+     * 原因：这类唤醒没有对方消息，模型既不知道几点、也没有上下文，实测 363 次主动机会几乎全部
+     * 判成 "no-topic" 不开口 —— 想说"这么晚了还不睡"根本无从判断。普通唤醒不加，保持精简。 */
+    const reasonBase = String(reason ?? '').split(':')[0];
+    const selfInitiated = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/.test(reasonBase);
+    const clockLine = selfInitiated
+      ? `\n[Clock] ${fmtBeijing(Date.now()).slice(-5)} Asia/Shanghai - this is a self-initiated opening: you may start a topic. If you need context, call qq_get_recent_messages first (it gets pruned at turn end).`
+      : '';
 
     // 工具全关的兜底（几乎不会发生）：没有 unread 工具就回退到两行说明版，避免哨兵悬空。
     const tools = cfgRef.social?.tools;
@@ -1748,7 +1756,7 @@ export async function sendWakePrompt(key, reason) {
     if (!hasAnyTool) {
       const unread = (st.unread || []).length;
       const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck', afterthought: 'afterthought' };
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${clockLine}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
     } else {
       // 哨兵轮 prompt 每轮都带当前令牌：模型不必凭记忆/跨轮次查找 token，
       // 杜绝"上下文轮换后 token 抄错 → 工具全 403 → 模型看不到消息 → 空唤醒乱回"链路。
@@ -1768,7 +1776,7 @@ export async function sendWakePrompt(key, reason) {
       const notOwnerTag = (!ownerWakeBranch && key.startsWith('private:'))
         ? `[NOT-OWNER]\n`
         : '';
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${unreadLine}`;
+      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${clockLine}${unreadLine}`;
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。
