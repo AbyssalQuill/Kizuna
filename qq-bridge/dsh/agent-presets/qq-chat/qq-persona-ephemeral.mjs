@@ -37,6 +37,14 @@ const EPHEMERAL_TOOLS = new Set([
   'qq_get_forward_msg',
   'qq_get_group_history',
   'qq_group_history',
+  'qq_meme_search',
+  'meme_search',
+  'web_search',
+  'qq_web_search',
+  'google_search',
+  'qq_search_slang',
+  'search_slang',
+  'qq_get_user_profile',
 ]);
 
 /** 只认最后一段名字：mcp__napcat__qq_memory_search / qq_memory_search 都算 */

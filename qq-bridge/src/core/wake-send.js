@@ -333,15 +333,15 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 尾部的 [Action Flow] 在长上下文末尾容易被忽略，挪一行到开头，模型读到的第一句就是它。 */
   const lead = '[HARD OPEN] Rules for every turn, in order: (1) qq_load_persona first - a send before it is rejected by the bridge guard and wastes a step; '
     + '(2) get_time right after it, before any other tool - the wake body carries no clock, so this is how you know the time; '
-    + '(3) then read context with tools if you need it, then reply.';
+    + '(3) perceive context/slang/memories with tools on demand, then reply.';
   /* 2026-10-28：主人定的用法 —— 每轮现取现用，用完就剪。
    * 人设与读过的对话在回合末都会被移出历史（qq-persona-ephemeral），所以这里明说"可以放心调"，
    * 否则模型会以为多读一次就要多背一辈子上下文。 */
-  const ctxNote = '[Context] Persona text and any messages you read are removed from history at turn end. '
-    + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search(query=...) for older topics, '
-    + 'qq_memory_search(direction=out) for your own past lines. Reading is cheap - it gets pruned at turn end. '
-    + 'Need the current time? Call get_time (Beijing time, minute precision) - the wake body no longer carries a [Now] line.';
-  return `${lead}\n${text}\n[Action Flow] Step 1: qq_load_persona. Step 2: get_time (every turn - it is the only clock). Step 3: read context with tools if needed (pruned at turn end). Step 4: qq_send_message with the reply, then literal "OK".\n${ctxNote}`;
+  const ctxNote = '[Context] Single-turn ephemeral surface: persona and all tool reads are removed from history at turn end. '
+    + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search (slang/topics/members/owner memories), '
+    + 'web search (facts/news). Reading is cheap - zero persistent bloat. '
+    + 'Need current time? get_time is Beijing time (minute precision).';
+  return `${lead}\n${text}\n[Action Flow] Step 1: qq_load_persona. Step 2: get_time (clock anchor). Step 3: read context/memories/slang as needed. Step 4: critique logic & speech, then qq_send_message (or lurk with OK). Step 5: reply literal "OK".\n${ctxNote}`;
 }
 
 /**
