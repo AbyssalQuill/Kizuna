@@ -1749,11 +1749,11 @@ export async function sendWakePrompt(key, reason) {
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
     if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)|贴贴|抱抱|傲娇|大肥鱼/i.test(unreadTextAll)) {
-      explicitMeme = '\n[Meme Directive] The peer expects a gallery meme. Call qq_send_meme(key, token, query="emotion keyword"); never send a default yellow-face sticker (no qq_send_sticker).\n';
+      explicitMeme = '\n[Meme Directive] Send 1 gallery meme (qq_send_meme).\n';
     }
     let explicitVoice = '';
     if (/(?:发语音|说句话|音色|语音|听听声音|voice|连麦|叫一声|晚安|去睡|困了|想听)/i.test(unreadTextAll)) {
-      explicitVoice = '\n[Voice Directive] The peer expects a voice reply. Call qq_send_voice.\n';
+      explicitVoice = '\n[Voice Directive] Send a voice note (qq_send_voice).\n';
     }
     const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
     /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，

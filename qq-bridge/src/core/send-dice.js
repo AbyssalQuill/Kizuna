@@ -64,9 +64,9 @@ export function memeTurnHint(key) {
   if (!c.enabled) return '';
   const { p, cooling, hit } = dice('meme', key, c.probability, c.cooldownMs);
   if (hit) {
-    return `[Meme] dice HIT (p=${p}): Please attach ONE cute gallery meme! Call qq_send_meme(key, token, query="傲娇/开心/睡觉/害羞/委屈/摸头/得意/无语") to express genuine emotion (strictly use qq_send_meme for gallery images, ban default yellow-face qq_send_sticker). Never describe the sticker, just send it with your chat.\n`;
+    return `[Meme] HIT: send 1 gallery meme via qq_send_meme(query="emotion"). No yellow-face sticker.\n`;
   }
-  return '[Meme Freedom] You have full freedom to spontaneously send a gallery meme (qq_send_meme) whenever your mood, teasing, or affection fits!\n';
+  return '[Meme Freedom] Spontaneous qq_send_meme allowed anytime.\n';
 }
 
 /** 供诊断/日志：当前生效的表情包参数 */

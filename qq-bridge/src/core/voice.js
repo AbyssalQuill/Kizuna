@@ -1746,16 +1746,15 @@ export function voiceTurnHint(key) {
    * 这一支**不掷骰**：全语音模式下概率与冷却是无关参数（见文件上方"关于 send.cooldownMs"的说明）。 */
   if (cfg.send?.allVoice === true) {
     const hardCap = Math.min(MAX_TTS_CHARS, Math.max(1, Number(cfg.maxChars) || 120));
-    return `[Voice] ALL-VOICE MODE ON (default voice=${voiceName}): EVERY reply this turn must reach the chat as a VOICE bubble, not text - say it out loud instead of typing it. Speak ONE short breath (hard limit ${hardCap} chars), plain speakable words only: no markdown, no links/URLs, no emoji or [CQ:] codes, no lists. Just answer with the normal send tools - the bridge turns your text into speech for you and quietly falls back to text only if it truly cannot be spoken, so never send the same words twice (no voice + text duplicate).\n`;
+    return `[Voice] ALL-VOICE ON: reply with qq_send_voice (<${hardCap} chars, speakable words, no markdown/CQ/emoji).\n`;
   }
   const defaultVoiceProb = key.startsWith('private:') ? 0.45 : 0.25;
   const { p, cooling, hit } = dice('voice', key, cfg.send?.probability ?? defaultVoiceProb, cfg.send?.cooldownMs ?? 0);
   const cap = Math.min(60, Number(cfg.maxChars) || 60);
   if (hit) {
-    // 2026-10-22：允许纯语音回复，或文字+语音；但发语音绝不能与文字同义复述（情绪/娇憨/反应/补充而非复读）
-    return `[Voice] dice HIT (p=${p}, default voice=${voiceName}): SEND A SHORT VOICE BUBBLE (qq_send_voice, under ${cap} chars). You can reply with VOICE ALONE (no text bubble needed, like a real person speaking a voice note), OR send both text and voice. If sending both: voice MUST NEVER repeat or paraphrase the text (never the same words or meaning twice); let voice add emotion, a tease, a murmur, or a fresh reaction instead.\n`;
+    return `[Voice] HIT: send voice (qq_send_voice, voice=${voiceName}, <${cap} chars). Voice alone or text+voice (never repeat text).\n`;
   }
-  return `[Voice Freedom] You have full freedom to spontaneously send a short voice note (qq_send_voice, default voice=${voiceName}, under ${cap} chars) whenever you want to whisper tenderly, tease, murmur, comfort, say goodnight, or express vivid spoken emotion! You may send voice alone or alongside text.\n`;
+  return `[Voice Freedom] Spontaneous qq_send_voice (voice=${voiceName}, <${cap} chars) allowed anytime.\n`;
 }
 
 // ── 发送：把音频作为 QQ 语音发出去 ───────────────────────────────────────────
