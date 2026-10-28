@@ -19,6 +19,7 @@
 | 6 | 提示词风格 | 注入文本中英混杂、散文式 | `[HARD OPEN]/[Context]/[Meme]/[Voice]/[Burst]/[Proactive]`、守卫回执、剪枝占位、缺 key/token 提示全部改英文短规则 | `16b82ec` | 新唤醒正文全英文；`tests/persona-ephemeral.test.js` 15/15、`tool-restrict-guard` 全通过 |
 | 7 | PTC（run_code）批量调用 | 需要 `ctx.ptcRuntime` | 预设已加 `tool-presentation: mode: ptc`（默认 `disabled: true`），守卫放行 `run_code` 与裸 `qq_*` 名 | `0bf285b` | **未落地**：打开后新建会话不产 `run_code` 日志（疑似缺运行时），已回滚 native |
 | 8 | 沉浸式 Action 流程规范与 KV-Cache 增益保障 | ① 唤醒词中英文散杂，流程跳转不严格；② 时钟结果若保留将持续膨胀，时钟硬写 prompt 破坏 prefix cache；③ 双 Agent 缺乏硬纪律约束 | ① 规范 5 步严谨 Action 流程（`qq_load_persona` 首调 → `get_time` 必调 → 按需查消息/记忆 → 去机械化与反定式反思 → `qq_send_message` + 纯文本 `OK`）；② `get_time` 正式纳入回合末剪枝；③ 确立 `AGENTS.md` 双 Agent 落地纪律与重启顺序 | `a930eb2` | 服务器实测：`tests/persona-ephemeral.test.js` 15/15 PASS（含 get_time 剪枝测试）；`tests/universal-prompts.test.js` 6 项 100% PASS；服务严格按序重启，活跃会话已产生 107 个剪枝占位 |
+| 9 | STEP 单一轮瞬态投影架构改造：提示词与瞬态工具扩展 | ① 上下文无限累积导致 Token 滚雪球、人设稀释、定式严重；② 缺少对联网/表情包/黑话查询工具的剪枝闭环 | ① 在 `agent.cordis.yml` 确立 5 阶段黄金 Action 链路（Grounding 时空与人设 -> Perceiving 窗口/记忆/黑话/联网 -> Cognition 意图与潜台词 -> Critique 反定式自检 -> Dispatch 决策输出与瞬态销毁）；② `qq-persona-ephemeral.mjs` 扩充全部只读检索工具（含 web_search, meme_search, search_slang 等）；③ `wake-send.js` 对齐单轮瞬态投影正文 | `2974d08` | 本地与服务器端 `tests/persona-ephemeral.test.js` 15/15 PASS、`tests/universal-prompts.test.js` 6 项全 PASS；严格按序重启服务，`qq-bridge` 和 `dsh-web` 均为 active |
 
 ---
 
