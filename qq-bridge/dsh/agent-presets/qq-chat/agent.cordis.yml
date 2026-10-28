@@ -6,7 +6,10 @@
   config:
     text: |-
       action_flow:
-        step_1_load_persona: call_tool_qq_load_persona
+        step_1_load_persona_first_and_unconditionally:
+          hard_rule: The FIRST tool call of every turn is qq_load_persona. Not after a greeting, not after qq_get_recent_messages — first. The bridge physically rejects any send before it (protocol violation), so doing it first is the only path that works.
+          ptc_form: If the runtime presents tools as run_code (PTC), qq_load_persona must be the first call inside the program, before every other tool call.
+          re_load_each_turn: Persona is turn-scoped; load it again on every new turn even if you remember it.
         step_2_context_logic_analysis:
           intent_and_subtext: Analyze chat flow, dialogue targets, and internet slang/subtext before deciding to speak.
           reply_necessity: Speak when addressed, owner speaks, or contributing genuine fun; otherwise skip sending and reply literal "OK".
@@ -18,7 +21,14 @@
         step_5_dispatch:
           send: call_tool_qq_send_message_with_key_and_messages
           turn_closure: reply_only_literal_OK
+      runtime_modes:
+        ptc_batching: When tools are presented as run_code (PTC), finish the whole turn in ONE program - load persona, then send messages/memes/reads inside the same program - instead of one tool call per step. Keep the program short and single-purpose; no loops over chat data, no file or shell work.
+        sandbox_and_approvals: Never pass sandbox_permissions, never request danger-full-access, never shell out, never read or write files. Approval prompts cannot be granted to this bot - anything needing approval is auto-rejected and only burns a step. Only QQ bridge tools are whitelisted; everything else is blocked by the guard.
+        batch_calls: Independent read-only calls may be batched in one step; sends stay in one burst per persona rule.
       rules:
+        hard_open_first_tool_call_is_qq_load_persona
+        ptc_single_program_turn
+        no_sandbox_escalation_no_shell_no_fs
         pure_in_character
         mandatory_call_qq_load_persona_first
         pre_send_context_logic_analysis
@@ -48,6 +58,11 @@
 - id: qq-tool-restrict
   name: ./qq-tool-restrict.mjs
   config: {}
+# 回合末把 qq_load_persona 这次的工具结果挤出 surface（DSH 受支持的 surfaceOp replace），
+# 避免整张角色卡每轮都进历史重发。见插件头注释。
+- id: qq-persona-ephemeral
+  name: ./qq-persona-ephemeral.mjs
+  config: {}
 - id: compaction
   name: cordis:group
   group: true
@@ -65,3 +80,16 @@
       thresholdChars: 12288
       headChars: 6144
       tailChars: 2048
+
+# 2026-10-28：PTC（run_code）呈现。模型只看到 run_code + 生成的 SDK，一轮里可以连续调多个桥工具，
+# 省掉「一步一个工具、每步重发全量上下文」的开销（每步 85k token，见 docs/memory/context-cost-model.md）。
+# 安全边界不在呈现层而在 qq-tool-restrict：白名单只放 qq_* 系列（run_code 里的嵌套调用同样过守卫），
+# 沙盒升级 / shell / 读写文件在预设里明令禁止，且本部署的批准提示一律自动拒绝。
+# 默认关闭（disabled: true）。PTC 需要 dsh 组装里真有 ctx.ptcRuntime，否则本行会把整个 preset 拒挂。
+# 想开：把 disabled 改成 false → 重启桥（重装 preset）→ 重启 dsh-web；出问题就改回来。
+# 配套已经就位：qq-tool-restrict 放行 run_code 与裸 qq_* 名，预设里有 ptc_batching / sandbox_and_approvals 两条规矩。
+- id: tool-presentation
+  name: '@deepseek-ai/dsh-agent-tool-presentation'
+  disabled: true
+  config:
+    mode: ptc

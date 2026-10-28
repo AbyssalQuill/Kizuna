@@ -328,7 +328,11 @@ function buildPersonaAnchorBlock() {
  */
 export function appendTurnTailPersonaAnchor(promptText) {
   const text = String(promptText ?? '').trimEnd();
-  return `${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".`;
+  /* 2026-10-28：硬开局那行现在**同时打在正文最前面**。
+   * 现场：模型先 qq_send_message、被守卫打回「协议违规…」才回头补 qq_load_persona —— 一步白烧。
+   * 尾部的 [Action Flow] 在长上下文末尾容易被忽略，挪一行到开头，模型读到的第一句就是它。 */
+  const lead = '[HARD OPEN] 本回合第一个工具调用必须是 qq_load_persona（PTC 模式下是 run_code 程序里的第一句）。没加载人设就发消息会被桥物理拦截，白烧一步。';
+  return `${lead}\n${text}\n[Action Flow] Step 1: Call qq_load_persona. Step 2: Context logic analysis. Step 3: Candidate reply critique & refine. Step 4: qq_send_message & reply literal "OK".`;
 }
 
 /**

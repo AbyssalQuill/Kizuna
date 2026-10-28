@@ -45,7 +45,14 @@ const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
   'agy_tool',
+  // 2026-10-28：PTC 呈现下模型唯一可见的入口就是 run_code；它本身不碰 QQ，
+  // 真正的动作在程序里逐个工具调用，仍然逐次过本守卫（见 ③ 白名单与 ⑤ 人设门禁）。
+  'run_code',
 ]);
+
+/* PTC 里嵌套调用的工具名可能是不带服务前缀的裸名（qq_send_message / napcat_invoke_tool）。
+   这里明确放行 qq_* / napcat_* 裸名，其余一律拒 —— 危险工具（shell/fs/dev_*）仍然进不来。 */
+const SAFE_BARE_NAME = /^(?:qq_[a-z0-9_]+|napcat_[a-z0-9_]+)$/i;
 
 // 会话人设加载与发言状态记录（基于 sessionId）
 export const sessionLoadedPersona = new Map();
@@ -87,7 +94,7 @@ export function apply(ctx) {
     }
 
     // ③ 白名单检查
-    if (!SAFE_EXACT.has(name) && !SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+    if (!SAFE_EXACT.has(name) && !SAFE_PREFIXES.some((prefix) => name.startsWith(prefix)) && !SAFE_BARE_NAME.test(name)) {
       return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`;
     }
 
