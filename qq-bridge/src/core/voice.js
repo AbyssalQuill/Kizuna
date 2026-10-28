@@ -1748,7 +1748,8 @@ export function voiceTurnHint(key) {
     const hardCap = Math.min(MAX_TTS_CHARS, Math.max(1, Number(cfg.maxChars) || 120));
     return `[Voice] ALL-VOICE MODE ON (default voice=${voiceName}): EVERY reply this turn must reach the chat as a VOICE bubble, not text - say it out loud instead of typing it. Speak ONE short breath (hard limit ${hardCap} chars), plain speakable words only: no markdown, no links/URLs, no emoji or [CQ:] codes, no lists. Just answer with the normal send tools - the bridge turns your text into speech for you and quietly falls back to text only if it truly cannot be spoken, so never send the same words twice (no voice + text duplicate).\n`;
   }
-  const { p, cooling, hit } = dice('voice', key, cfg.send?.probability ?? 0.2, cfg.send?.cooldownMs ?? 0);
+  const defaultVoiceProb = key.startsWith('private:') ? 0.45 : 0.25;
+  const { p, cooling, hit } = dice('voice', key, cfg.send?.probability ?? defaultVoiceProb, cfg.send?.cooldownMs ?? 0);
   const cap = Math.min(60, Number(cfg.maxChars) || 60);
   if (hit) {
     // 2026-10-22：允许纯语音回复，或文字+语音；但发语音绝不能与文字同义复述（情绪/娇憨/反应/补充而非复读）

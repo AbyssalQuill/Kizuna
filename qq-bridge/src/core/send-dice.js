@@ -37,7 +37,7 @@ export function dice(kind, key, probability, cooldownMs) {
 // ── 表情包（内置表情库 qq_send_meme + QQ 收藏表情 qq_send_sticker 共用一条概率）──────
 // 配置沿用既有的 social.sticker.sendProbability（管理端「表情包」卡里那个"发表情概率"），
 // 新增 sendCooldownMs 管同一会话的连发。
-export const MEME_DEFAULT_PROBABILITY = 0.6;
+export const MEME_DEFAULT_PROBABILITY = 0.8;
 export const MEME_DEFAULT_COOLDOWN_MS = 0;
 
 function memeCfg() {
@@ -57,12 +57,7 @@ export function noteMemeSent(key) {
 
 /**
  * 唤醒提示词里的表情包抽签行（英文，与 preset 的英文指令框架一致）
- * 表情包总开关关掉、或概率为 0 时给出明确说明；不注入空行以外的东西。
- *
- * 2026-09-19：把 HIT 从"许可"改成"指令"。原文写的是 `you MAY send ONE sticker/meme`，
- * 结果实际发生率 ≈ 配置概率 × 模型配合率 —— 抽中了也常常不发（实测 1966 次工具调用里
- * qq_send_sticker 只有 5 次）。用户配概率是希望它真的发，所以改成祈使句：
- * 抽中就发一张，只有"库里没有对得上语境的"这一个理由可以跳过。preset 里的对应段落同步改了。
+ * 抽中给出强指令，平时亦鼓励随心发送画廊表情包，极大丰富对话生动度。
  */
 export function memeTurnHint(key) {
   const c = memeCfg();
@@ -71,7 +66,7 @@ export function memeTurnHint(key) {
   if (hit) {
     return `[Meme] dice HIT (p=${p}): Please attach ONE cute gallery meme! Call qq_send_meme(key, token, query="傲娇/开心/睡觉/害羞/委屈/摸头/得意/无语") to express genuine emotion (strictly use qq_send_meme for gallery images, ban default yellow-face qq_send_sticker). Never describe the sticker, just send it with your chat.\n`;
   }
-  return '';
+  return '[Meme Freedom] You have full freedom to spontaneously send a gallery meme (qq_send_meme) whenever your mood, teasing, or affection fits!\n';
 }
 
 /** 供诊断/日志：当前生效的表情包参数 */
