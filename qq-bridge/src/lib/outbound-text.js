@@ -50,9 +50,16 @@ export function stripActionBrackets(text) {
   return s.trim();
 }
 
-// 出站文本统一清洗：令牌脱敏 → 表情/图片占位符清扫 → 输入法 emoji 剥离 → 动作描写/括号表演过滤。
+export function normalizeFirstPersonSelfCall(text) {
+  let s = String(text ?? '');
+  // 去除软萌/人机味的不自然自称"人家"，规范为自然第一人称"我"（保留"别人家"、"去人家家里"等正常语法）
+  return s.replace(/(?<=^|[，。！？、~～\s]|像|跟|给|帮|趁|让|被|把)人家(?![家里园地室院伙男女人])/g, '我');
+}
+
+// 出站文本统一清洗：令牌脱敏 → 表情/图片占位符清扫 → 输入法 emoji 剥离 → 动作描写/括号表演过滤 → 第一人称规范。
 export function cleanOutboundText(text) {
   const swept = sweepMessageArtifacts(text);
   const noEmoji = stripImeEmoji(swept.text);
-  return stripActionBrackets(noEmoji);
+  const noActions = stripActionBrackets(noEmoji);
+  return normalizeFirstPersonSelfCall(noActions);
 }
