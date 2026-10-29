@@ -566,3 +566,32 @@ cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/sr
 ### 一个测量陷阱（重要）
 - **`chat.db` 记的是模型原文，不是投递文本**：我发了一条测试消息，库里存的是 `投递自检（尾鳍甩了一下）*微笑*结束。`，连末尾句号都在 —— 而 `stripTrailingPeriod` 早就生效，说明落库在清洗之前。
 - 因此 `persona-metrics` 的"括号%"衡量的是**模型原始输出**（提示词有效性），投递是否干净要看清洗器（现在是确定性 0）。两个指标要分开看，别拿 chat.db 当投递证据。
+
+---
+
+## 22. 条目 39（2026-10-29）：人设切换端到端验收 + 负面表述清零
+
+### 人设切换（目标里的"修复人设切换"）
+- 直接线上验收，不走推理：`cp` 备份 → `POST /api/persona/switch {character:"atri"}` → 看 `persona.md` → 立刻还原。实测：
+```
+before :  552 bytes  md5=2b0e65be…   head=【persona_load】cetacea_loli
+switch :  {"ok":true,"action":"use","pack":"atri"}  → 16115 bytes  head=# 角色：atri（由角色库切换）
+restore:  552 bytes  md5=2b0e65be…   （与切换前逐字节一致）
+```
+- 生效机制：`qq_load_persona` 每次调用现读 `/root/qq-bridge/persona.md`，不依赖重启、不依赖 preset 重装；系统提示词里那句永远是 `call_tool_qq_load_persona_for_character`（条目 35 的单源化），所以不会再出现"切完人设、系统提示词还挂着旧状态"的错位。
+
+### 负面表述清零（目标里的"不出负面 ban"）
+```
+grep -nE 'ban_|no_|never|forbid|严禁|不要|禁止' /root/qq-bridge/persona.md            → NONE
+grep -nE 'ban_|never|forbid|严禁|不要|禁止|no_' ~/.dsh/.agent-presets/qq-chat/agent.cordis.yml → NONE
+```
+- 唤醒侧的标签只剩 `[voice_hit] [voice_free] [voice_all] [meme_hit] [meme_free] [anchor]`。
+
+### 部署后指标快照（样本仍太小，只能当方向）
+```
+改前（部署前 6h） n=44 气泡1.39 单25% 双27% 三+16% 字数9.6 括号11% 语音0.23 表情0.59 打回5 丢图0
+改后              n= 5 气泡0.60 单0%  双0%  三+20% 字数4.5 括号20% 语音0.40 表情0.00 打回0 丢图0
+```
+- **打回 0**：条目 36 的新鲜度门禁生效，历史 7 次未再增长。
+- 括号 20% 是**模型原始输出**的比例（5 个回合里 1 个），投递侧已被条目 38 的剥离清成 0。
+- 单气泡占比无意义：这 5 个回合里有 4 个模型选择不说话（探针没有真实上下文），分母被污染。真实风格数据仍要等自然对话。
