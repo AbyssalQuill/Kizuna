@@ -474,3 +474,11 @@ cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/sr
 - `persona-metrics.py` 新增 `image_lost` 计数（按事件计，不参与回合统计），报告每桶尾部多一列 `丢图`；同时修掉老 state 缺新字段会 `KeyError` 的隐患（先用 BLANK 补齐再累加）。
 - 线上 24h 内实测只有 2 次丢图（同一条 `gxh.vip.qq.com/club/item/parcel` 商城表情 gif，`get_image` 与直连 URL 都拿不到），属于 QQ 商城表情需要登录态的那类资源；现在的行为是**如实降级**（占位告诉模型"图没到手、别猜"）并留下 `[media] 图片拿不到内容：file=… url=… kind=…` 一行日志。
 - 部署：`media-pipe.js` md5 `2bf5735c…`、`persona-metrics.py` md5 `8f5c3cb7…`，`qq-bridge` 重启后 active，`--report` 累计 86 回合、丢图 0。
+
+### 补充（同日 15:14）：基线校正与一键对照
+- **基线校正**：先前引用的「括号 22%」是 15:00 那一个小时的尖峰，不适合当基线。改成**部署前 6 小时**的窗口后，基线是：
+  `n=44，气泡 1.39，单气泡 25%，双气泡 27%，三+ 16%，单条均字数 9.6，括号 11%，语音 0.23/回合，表情 0.59/回合，被打回 5 次，丢图 0`。
+- `persona-metrics.py` 新增 `--compare [--hours N]`：同一套口径切「部署前 N 小时」与「部署后」，直接打差值与人设目标判定，不必再手工对桶。
+- **部署产物校验（服务器实际代码，不只是本地）**：
+  - `wake-send.js` 渲染 `appendTurnTailPersonaAnchor('[Session] private:1')` → `[Session] private:1\n[anchor] persona_first spoken_words_only natural_bubble_any_length`；
+  - `voice.js` / `send-dice.js` 里只剩 `[voice_hit] [voice_free] [voice_all] [meme_hit] [meme_free]` 五个新标签，没有旧的 `[Voice] HIT:` 散文形态。

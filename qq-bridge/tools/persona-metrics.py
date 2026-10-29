@@ -169,6 +169,46 @@ def save_state(state):
     os.replace(tmp, STATE)
 
 
+DEPLOY_MS = 1793257740000   # 2026-10-29 15:09 +08：正向人设 + 末端锚上线点
+
+
+def compare():
+    """改前 / 改后对照：按部署点切两段，两个窗口用同一套口径，最后给出差值。"""
+    recent_h = 6
+    for i, a in enumerate(sys.argv):
+        if a == '--hours' and i + 1 < len(sys.argv):
+            try:
+                recent_h = max(1, int(sys.argv[i + 1]))
+            except ValueError:
+                pass
+    recs = scan(0)
+    floor = DEPLOY_MS - recent_h * 3600 * 1000
+    old = [r for r in recs if floor <= r['ts'] < DEPLOY_MS]
+    new = [r for r in recs if r['ts'] >= DEPLOY_MS]
+    a = summarize(merge(dict(BLANK), old))
+    b = summarize(merge(dict(BLANK), new))
+
+    def line(name, x):
+        return ('%-6s n=%3d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
+                % (name, x['turns'], x['bubbles'], x['single_pct'], x['double_pct'], x['triple_pct'],
+                   x['chars'], x['bracket_pct'], x['voice_per_turn'], x['meme_per_turn'],
+                   x['rejected'], x.get('image_lost', 0)))
+
+    print('部署点 2026-10-29 15:09 +08；改前窗口 = 部署前 %d 小时' % recent_h)
+    print(line('改前', a))
+    print(line('改后', b))
+    if b['turns']:
+        print('差值   n=%+d 气泡%+.2f 单气泡%+.1f 括号%+.1f 字数%+.1f 打回%+d'
+              % (b['turns'] - a['turns'], b['bubbles'] - a['bubbles'],
+                 b['single_pct'] - a['single_pct'], b['bracket_pct'] - a['bracket_pct'],
+                 b['chars'] - a['chars'], b['rejected'] - a['rejected']))
+        print('判定   括号%.0f%%→%.0f%%（目标 0）；单气泡%.0f%%→%.0f%%（目标 60~70%%）'
+              % (a['bracket_pct'], b['bracket_pct'], a['single_pct'], b['single_pct']))
+    else:
+        print('改后还没有样本 —— 等真实回合进来再跑一次。')
+    return 0
+
+
 def report():
     rows = []
     try:
@@ -195,6 +235,8 @@ def report():
 def main():
     if '--report' in sys.argv:
         return report()
+    if '--compare' in sys.argv:
+        return compare()
     state = load_state()
     now = int(time.time() * 1000)
     since = int(state.get('lastRun') or BOUNDARY)
