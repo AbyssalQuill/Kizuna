@@ -213,8 +213,10 @@ def compare():
               % (b['turns'] - a['turns'], b['bubbles'] - a['bubbles'],
                  b['single_pct'] - a['single_pct'], b['bracket_pct'] - a['bracket_pct'],
                  b['chars'] - a['chars'], b['rejected'] - a['rejected']))
-        print('判定   括号模%.0f%%→%.0f%%（目标 0）；单气泡%.0f%%→%.0f%%（目标 60~70%%）'
-              % (a['bracket_pct'], b['bracket_pct'], a['single_pct'], b['single_pct']))
+        print('判定   模型侧括号 %.0f%% → %.0f%%（投递侧请用 audit-delivered.py 的口径）'
+              % (a['bracket_pct'], b['bracket_pct']))
+        print('注意   气泡/turn 含 turn-hold 合并：一个 turn 常覆盖多轮问答，'
+              '不能直接对照"单气泡占比"那个口径（2026-10-29 实测：单个 turn 里 10 条文字是连着答了七八句）。')
     else:
         print('改后还没有样本 —— 等真实回合进来再跑一次。')
     return 0
