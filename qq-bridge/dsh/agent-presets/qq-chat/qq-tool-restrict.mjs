@@ -70,7 +70,21 @@ export const sessionSentCount = new Map();
  *   现在不依赖回合事件：记时间戳，会话活跃期内（30 分钟）载入过一次就放行；长时间闲置才要求重读。
  *   代价是"同一回合里忘了 load 也能发"这条兜底变弱，但实测模型每回合都会 load，误伤的代价更大。 */
 export const sessionPersonaTurn = new Map();
+// 最近一次调用读上下文工具的时刻（回合末工具结果会被剪，所以发送前必须新鲜）
+export const sessionContextAt = new Map();
 const PERSONA_FRESH_MS = 30 * 60 * 1000;
+/* 上下文读取门禁（2026-10-29 主人要求）：唤醒正文刻意不带对话转录（条目 33/34 的决定），
+ * 所以模型拿到上下文的唯一途径就是这几个读工具；而回合末这些结果会被剪成占位符。
+ * 既然只有这条路，就必须保证它真的被调用 —— 否则模型就是在没有上下文的情况下回话。
+ * 判据同人设门禁：最近一次读上下文距今不超过 20 分钟（连续对话不会误伤，久坐后恢复会要求重读）。 */
+const CONTEXT_FRESH_MS = 20 * 60 * 1000;
+const CONTEXT_READ_TOOLS = new Set([
+  'qq_get_recent_messages',
+  'qq_get_unread_messages',
+  'qq_get_my_recent_messages',
+  'qq_get_group_history',
+  'qq_group_history',
+]);
 
 export function apply(ctx) {
   // 1) 隐藏危险全局工具
@@ -119,6 +133,12 @@ export function apply(ctx) {
                        effectiveName === 'qq_send_voice' || name.endsWith('__qq_send_voice') ||
                        effectiveName === 'qq_send_meme' || name.endsWith('__qq_send_meme');
 
+    // ④-a 记录上下文读取时刻（这几个工具的结果回合末会被剪，必须当轮用掉）
+    if (CONTEXT_READ_TOOLS.has(effectiveName)) {
+      sessionContextAt.set(sessId, Date.now());
+      return;
+    }
+
     // ④ 记录人设加载标记
     if (isLoadPersona) {
       sessionLoadedPersona.set(sessId, Date.now());
@@ -134,6 +154,11 @@ export function apply(ctx) {
       const loadedAt = Number(sessionPersonaTurn.get(sessId)) || 0;
       if (!loadedAt || (Date.now() - loadedAt) > PERSONA_FRESH_MS) {
         return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called recently in this session, so sending is blocked. Call qq_load_persona now, then retry the send.';
+      }
+      // 上下文门禁：唤醒正文不带转录，读工具结果回合末又被剪掉 —— 不读就等于失忆。
+      const ctxAt = Number(sessionContextAt.get(sessId)) || 0;
+      if (!ctxAt || (Date.now() - ctxAt) > CONTEXT_FRESH_MS) {
+        return 'Protocol violation: step_3 is mandatory. The wake body carries no transcript and tool results are pruned at turn end, so call qq_get_recent_messages (or qq_get_unread_messages) before sending, then retry.';
       }
       sessionSentCount.set(sessId, (sessionSentCount.get(sessId) || 0) + 1);
       sessionSentMessage.set(sessId, Date.now());

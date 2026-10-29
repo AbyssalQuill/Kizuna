@@ -685,3 +685,29 @@ checked=13  bracket=0   （exit 0）
 ### 未做（需要主人拍板，不是技术阻塞）
 1. 让 NapCat 带登录态转存商城表情（能把那 2 次/天的图真正拿到，代价是把 QQ 会话凭据接进图片下载路径）。
 2. 若真想让单回气泡更少，需要先把"一次回复"这个单位测出来（按入向消息分组，而不是按 turn），再谈引导方式。
+
+---
+
+## 26. 条目 43（2026-10-29）：感知顺序真正落地 + 商城表情定案为「不可达」
+
+### 一、step_3（读上下文）为什么必须变成硬门禁
+- 唤醒正文按主人 10-28 的决定**刻意不带对话转录**（`ctxN = 0`，wake-send.js），而 `qq_get_recent_messages` / `qq_get_unread_messages` / `qq_get_group_history` / `qq_memory_search` 这些结果又被 `qq-persona-ephemeral` 在回合末剪成占位符。
+- 两者叠加 → 模型拿到上下文的唯一途径就是当轮调用读工具。实测 12 个回合里只有 7 个调了（turn 6/14/15/16 没调），也就是**真的在没上下文的情况下回过话**。
+- 改法两层：
+  1. 唤醒正文加一行 `[perception] step_3_qq_get_recent_messages_before_sending`（放在生成位置附近，约 15 token/轮）；
+  2. `qq-tool-restrict` 加门禁：发送前若 20 分钟内没有读过上下文 → 打回并提示先调用 `qq_get_recent_messages`。判据同人设门禁，用时间戳不用回合事件（turn-stopping 在 hold 场景不可靠，见条目 36）。
+
+### 二、商城表情「带登录态转存」——做不到，证据如下
+```
+NapCat get_image {"file":"8e-…gif"}      → 20s 无响应；90s 长超时仍无响应（带登录态）
+NapCat get_image {"file_id":"8e-…gif"}   → 同样无响应
+gxh.vip.qq.com/…/raw300.gif              → 302 → p.qpic.cn/CDN_STATIC/0/data/imgcache/… → 404
+CDN 上换 raw800.gif / raw.gif / 200.gif / 300.gif → 全部 404
+find / -name "8e-8e784d…gif"             → 磁盘上没有（不在 QQ 缓存目录里）
+```
+- 结论：这类「QQ 商城表情」的签名链接已失效或按账号下发，OneBot 的 `get_image` 也拿不到；**没有任何可用接口能带登录态取回**。
+- 现有降级即最终形态：占位 `[image_lost]` + 如实告诉模型"图没到手别猜" + `[media] 图片拿不到内容：file=… url=… kind=…` 日志 + `persona-metrics` 的 `丢图` 列。
+
+### 三、部署
+- `qq-tool-restrict.mjs` md5 `fc2eb4b1…`（仓库与 `~/.dsh/.agent-presets` 两份一致）、`wake-send.js` md5 `a7b6e331…`；`node --check` 通过；`qq-bridge` / `dsh-web` / `napcat` 三服务 active，重启后无 error。
+- 待验证：下一个真实回合是否先调 `qq_get_recent_messages` 再发（门禁与提示同时生效后，被守卫打回的次数应当仍是 0）。

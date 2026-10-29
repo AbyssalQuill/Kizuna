@@ -4,6 +4,7 @@ import {
   sessionLoadedPersona,
   sessionSentMessage,
   sessionPersonaTurn,
+  sessionContextAt,
   sessionSentCount
 } from '../dsh/agent-presets/qq-chat/qq-tool-restrict.mjs';
 
@@ -39,7 +40,7 @@ console.log('PASS: 白名单 / Token 拦截');
 // 工具夹具：线上真实形态是 napcat_invoke_tool + tool_name
 const sess = 'test-sess-guard-voice';
 const resetSess = () => {
-  for (const m of [sessionLoadedPersona, sessionSentMessage, sessionPersonaTurn, sessionSentCount]) m.delete(sess);
+  for (const m of [sessionLoadedPersona, sessionSentMessage, sessionPersonaTurn, sessionContextAt, sessionSentCount]) m.delete(sess);
 };
 const call = (toolName) => guardFn({
   name: 'mcp__napcat__napcat_invoke_tool',
@@ -53,9 +54,14 @@ assert.ok(String(call('qq_send_message')).includes('step_1 is mandatory'), '未�
 assert.ok(String(call('qq_send_voice')).includes('step_1 is mandatory'), '未读人设发语音被拦截');
 console.log('PASS: 开局硬门禁');
 
-console.log('=== 校验 3：载入人设后，同回合可以连续发（文字 + 表情包 + 语音）===');
+console.log('=== 校验 3：载入人设 + 读过上下文后，同回合可以连续发 ===');
 assert.equal(call('qq_load_persona'), undefined, 'qq_load_persona 放行');
 assert.ok(Number(sessionPersonaTurn.get(sess)) > 0, '记录本次载入的时刻');
+
+// 2026-10-29 新增门禁：唤醒正文不带转录、读工具结果回合末被剪 → 发送前必须新鲜读过上下文
+assert.ok(String(call('qq_send_message')).includes('step_3 is mandatory'), '没读上下文就发送被拦截');
+assert.equal(call('qq_get_recent_messages'), undefined, 'qq_get_recent_messages 放行');
+assert.ok(Number(sessionContextAt.get(sess)) > 0, '记录上下文读取时刻');
 
 assert.equal(call('qq_send_message'), undefined, '第一条文字放行');
 assert.equal(call('qq_send_meme'), undefined, '表情包放行');
@@ -86,6 +92,12 @@ assert.equal(call('qq_send_voice'), undefined, '载入后语音放行');
 // 刚载入 29 分钟 → 仍算新鲜，不能误伤（线上四个打回回合就是这个场景）
 sessionPersonaTurn.set(sess, Date.now() - 29 * 60 * 1000);
 assert.equal(call('qq_send_message'), undefined, '29 分钟内连续对话一律放行');
+
+// 上下文过期（>20 分钟）→ 要求重读；重读后恢复
+sessionContextAt.set(sess, Date.now() - 21 * 60 * 1000);
+assert.ok(String(call('qq_send_message')).includes('step_3 is mandatory'), '上下文过期后发送被拦');
+assert.equal(call('qq_get_unread_messages'), undefined, '读未读也可恢复');
+assert.equal(call('qq_send_message'), undefined, '重读后放行');
 console.log('PASS: 人设新鲜度门禁');
 
 console.log('=== 校验 6：后台学习任务工具直接豁免 ===');

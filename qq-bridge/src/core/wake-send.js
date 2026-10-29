@@ -460,9 +460,12 @@ export function buildWakePrompt(key, reason) {
   /* 2026-10-28 主人：时间行也不要了 —— 需要时间就调 get_time（工具返回北京时间，分钟精度），
    * 或由 DSH 内部取；正文不再每轮带一个会变的时间戳。 */
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
+  /* 2026-10-29 主人：唤醒正文刻意不带转录，读工具结果又在回合末被剪掉 —— 不读上下文就等于失忆。
+   * 这一行把 step_3 摆在正文里（生成位置附近，最省 token 的强力提示），配合 qq-tool-restrict 的门禁。 */
+  const perceptionLine = '[perception] step_3_qq_get_recent_messages_before_sending\n';
   const diceLines = (voiceTurnHint(key) + memeTurnHint(key)).trim();
   const diceBlock = diceLines ? `${diceLines}\n` : '';
-  const raw = tokenLine + wakeLine + diceBlock;
+  const raw = tokenLine + wakeLine + perceptionLine + diceBlock;
   return raw.replace(/\n{2,}/g, '\n').trim() + '\n';
 }
 
