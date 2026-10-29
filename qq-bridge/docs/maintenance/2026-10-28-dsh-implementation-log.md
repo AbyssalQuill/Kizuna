@@ -803,3 +803,8 @@ resolve_with_tools_never_ask_peer_to_explain
 ### 未结
 - 群聊在切成 active 之后**仍未观察到唤醒**（00:16:30 那条消息之后无任何唤醒/steer 日志，unread 累积）。下一步：在群消息入口加一行诊断日志（收到即记 key + anyMessage + 判定结果 + 是否进合并窗），把闸门定位出来。
 
+### 撤回（同日 00:26）：删掉那条"共情示例"
+- 主人指出 `sample_when_peer_says_ai_crushes_us: 先把手上的事做扎实…` 本身就是人机味，会污染人格。
+- 已删除该行；保留的是行为约束（`empathy_first_then_reason` / `take_a_clear_stance_not_a_wisecrack` / `mostly_end_with_a_statement`），不再用写死的例句去替代模型自己的语感。
+- 部署：preset md5 `4675c1ce…`（仓库与 `~/.dsh/.agent-presets` 一致），重启后三服务 active，`sample_when_peer` 计数 0。
+
