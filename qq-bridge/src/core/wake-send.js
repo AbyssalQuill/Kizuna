@@ -1658,7 +1658,7 @@ export async function sendWakePrompt(key, reason) {
       const count2m = recentList.filter((m) => m && m.time && (now - m.time * 1000 < 120000)).length;
       if (count2m >= 12 || unreadAll.length >= 10) {
         UNC_MAX = Math.min(35, Math.max(25, unreadAll.length));
-        groupActivityLine = '\n[Group Dynamic] multi_topic_burst';
+        groupActivityLine = '\n[group_flow] multi_topic_burst_reply_to_one_topic_or_stay_silent';
       } else if (count2m <= 2 && unreadAll.length <= 2) {
         UNC_MAX = 8;
       } else {
@@ -1686,8 +1686,14 @@ export async function sendWakePrompt(key, reason) {
       // 2026-09-12 规则搬家：原来这段还跟着一长串"回完就在同一步收尾 / 别用等待工具 / 旧消息要用
       // qq_get_recent_messages 翻"的规则散文（每轮都注入、步步重发，owner 会话实测 47 次注入≈48KB）。
       // 现在这些规则都在系统提示词 [WAKE TYPES] 第 1/9/10 条，这里只留数据：未读正文 + 省略条数。
+      /* 2026-10-29：连续多条的处置策略写死。旧文案 \`continuous_intent_single_reply\` 太含糊，
+       * 模型照样一条一条按顺序回，读起来就是客服逐条工单。真人会合并成一次回应、挑重点、
+       * 也可能只接最后那句或最要紧的那句。群聊还要额外交代：只接一条线（带引用），别挨个答。 */
+      const isGroup = !key.startsWith('private:');
       const burstGuidance = unreadMsgs.length >= 2
-        ? '\n[Burst] continuous_intent_single_reply'
+        ? (isGroup
+          ? '\n[burst] many_in_one_reply_pick_one_thread_quote_it_rest_may_stay_silent'
+          : '\n[burst] many_in_one_reply_any_order_pick_what_matters_no_need_to_answer_each')
         : '';
       unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}${groupActivityLine}`
         + (omitted > 0 ? `\n(${omitted} older unread not shown)` : '');

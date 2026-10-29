@@ -750,3 +750,24 @@ POST /send_private_msg {record, file: "file:///root/qq-bridge/state/voice-sample
 - 压住行为靠措辞（允许但不要求、默认文字），不是靠少说。降频那版已撤回。
 - 部署：`voice.js` md5 `ba64b4b4…`、`send-dice.js` md5 `6b22399c…`，`node --check` 通过，`qq-bridge` active。
 
+---
+
+## 28. 条目 45（2026-10-29）：连续多条的回应策略 + 群聊高频流开口策略
+
+### 查到的现成做法（供对照）
+- 业界通行做法是 **debounce / buffering**：用户连发时先攒一小段再一次性处理，避免逐条抢答（n8n 与 Reddit 上「Stop duplicate replies with a debounce workflow」、GitHub `HKUDS/nanobot` 的 "Add message buffering / debounce for group chat channels"）。
+- 本仓库**已经有**这层：`social-state.js` 的 burst typing debounce（1200ms，检测到连续打字或 2.5s 内新消息就等对方说完）；`[Burst]` 标记也已存在。缺的是**回应策略**本身。
+
+### 改了什么（wake-send.js）
+1. 私聊连发：`[burst] continuous_intent_single_reply` → `[burst] many_in_one_reply_any_order_pick_what_matters_no_need_to_answer_each`。
+   - 旧文案没说清"要不要按顺序答"，模型就一条一条顺着回，读起来像客服逐条工单。
+2. 群聊连发：`[burst] many_in_one_reply_pick_one_thread_quote_it_rest_may_stay_silent`。
+   - 群里多人同时说话时，只接一条线（带引用），其余可以不管 —— 沉默是合法选项。
+3. 群聊高频：`[Group Dynamic] multi_topic_burst` → `[group_flow] multi_topic_burst_reply_to_one_topic_or_stay_silent`。
+
+### 群聊现状（这轮查到的）
+- 4 个群全部 `mode=diving`（潜水），未读积压 100 / 13 / 4，**近 6 小时 0 次群唤醒**。
+- 也就是说"群里乱"目前不是高频回复造成的，而是**根本没接过话**；这轮改的是"真的要开口时"的策略。要让它在群里活起来得动 `wakeConfig.mode`（active / anyMessage），那是主人的取舍，我不擅自改。
+
+### 部署
+- `wake-send.js` md5 `9647a350…`，`node --check` 通过，`qq-bridge` / `dsh-web` / `napcat` 三服务 active，重启无 error；单测 `wake-trigger` 19/19、`persona-inject` 12/12 通过。
