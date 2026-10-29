@@ -468,3 +468,9 @@ cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/sr
 - 单测：`tool-restrict-guard`（表情包现在算发送，计数 5）、`persona-ephemeral`、`persona-inject`、`universal-prompts`（改断言：系统提示词恒定指向 qq_load_persona）、`wake-trigger`、`meme-memory-immersion`（断言改用短语词汇）全 PASS。
 - 服务器：六份文件 md5 逐个比对一致后 mv 上线；`persona.md` 0 → 446 字节；已安装 preset 的 `[PERSONA]` 段为 `call_tool_qq_load_persona_for_character`，"尚未指定专属人设" 计数 = 0；`qq-bridge` / `dsh-web` / `napcat` 三服务 active；`persona-metrics.timer` active。
 - **待实测**：`python3 tools/persona-metrics.py --report` 按小时看两个硬指标 —— 动作括号占比（目标 0）与单气泡占比；部署前基线为括号 22%、打回 4/小时。
+
+### 补充（同日 15:12）：发图失败提醒改下划线短语 + 丢图指标
+- `media-pipe.js` 的占位文案从 `[图片（获取失败）—— 这张图没能投递给你…]` 改为 `[image_lost] [no_image_content] say_it_plainly_no_guess`（尺寸超限另用 `[image_skipped]`），保留 `[image_lost]` 作为**稳定标记**：`persona-metrics` 按这个标记统计丢图数。
+- `persona-metrics.py` 新增 `image_lost` 计数（按事件计，不参与回合统计），报告每桶尾部多一列 `丢图`；同时修掉老 state 缺新字段会 `KeyError` 的隐患（先用 BLANK 补齐再累加）。
+- 线上 24h 内实测只有 2 次丢图（同一条 `gxh.vip.qq.com/club/item/parcel` 商城表情 gif，`get_image` 与直连 URL 都拿不到），属于 QQ 商城表情需要登录态的那类资源；现在的行为是**如实降级**（占位告诉模型"图没到手、别猜"）并留下 `[media] 图片拿不到内容：file=… url=… kind=…` 一行日志。
+- 部署：`media-pipe.js` md5 `2bf5735c…`、`persona-metrics.py` md5 `8f5c3cb7…`，`qq-bridge` 重启后 active，`--report` 累计 86 回合、丢图 0。

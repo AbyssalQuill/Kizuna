@@ -58,6 +58,10 @@ def scan(since_ms):
             turn = data_.get('turn')
             if turn is None:
                 continue
+            # 发图失败：占位标记 [image_lost] 出现在任意事件里就记一次（不参与回合统计）
+            if 'image_lost' in line:
+                recs.append({'id': '%s#img%s' % (path, ev.get('seq')), 'ts': int(ev.get('time') or 0),
+                             'images_lost': 1, 'image_only': True})
             key = (path, turn)
             if typ == 'tool/call':
                 args = data_.get('arguments')
@@ -103,11 +107,14 @@ def scan(since_ms):
 
 
 BLANK = {'turns': 0, 'bubbles': 0, 'single': 0, 'double': 0, 'triple': 0,
-         'chars': 0, 'bracket_turns': 0, 'voice': 0, 'meme': 0, 'rejected': 0}
+         'chars': 0, 'bracket_turns': 0, 'voice': 0, 'meme': 0, 'rejected': 0, 'images_lost': 0}
 
 
 def merge(total, recs):
     for r in recs:
+        if r.get('image_only'):
+            total['images_lost'] += 1
+            continue
         total['turns'] += 1
         total['bubbles'] += r['bubbles']
         if r['bubbles'] == 1:
@@ -143,6 +150,7 @@ def summarize(total):
         'voice_per_turn': round(total['voice'] / n, 2) if n else 0,
         'meme_per_turn': round(total['meme'] / n, 2) if n else 0,
         'rejected': total['rejected'],
+        'image_lost': total.get('images_lost', 0),
     }
 
 
@@ -172,14 +180,15 @@ def report():
     print('最近 %d 次（每次=上一小时的增量）' % min(len(rows), 24))
     for r in rows[-24:]:
         w = r['window']
-        print('  %s  n=%2d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d'
+        print('  %s  n=%2d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
               % (r['at'][11:16], w['turns'], w['bubbles'], w['single_pct'], w['double_pct'],
                  w['triple_pct'], w['chars'], w['bracket_pct'], w['voice_per_turn'],
-                 w['meme_per_turn'], w['rejected']))
+                 w['meme_per_turn'], w['rejected'], w.get('image_lost', 0)))
     c = rows[-1]['cumulative']
-    print('累计（00:47 起） n=%d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d'
+    print('累计（00:47 起） n=%d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
           % (c['turns'], c['bubbles'], c['single_pct'], c['double_pct'], c['triple_pct'],
-             c['chars'], c['bracket_pct'], c['voice_per_turn'], c['meme_per_turn'], c['rejected']))
+             c['chars'], c['bracket_pct'], c['voice_per_turn'], c['meme_per_turn'], c['rejected'],
+             c.get('image_lost', 0)))
     return 0
 
 
@@ -197,7 +206,10 @@ def main():
             continue
         fresh.append(r)
     window = merge(dict(BLANK), fresh)
-    cumulative = merge(dict(state.get('cumulative') or BLANK), fresh)
+    # 老 state 可能缺新加的字段（如 images_lost）→ 先用 BLANK 补齐再累加，否则定时器会 KeyError
+    carry = dict(BLANK)
+    carry.update({k: v for k, v in (state.get('cumulative') or {}).items() if k in BLANK})
+    cumulative = merge(carry, fresh)
     line = {
         # 服务器是 UTC，统计一律用东八区时间，免得看报告时还要自己加 8 小时
         'at': time.strftime('%Y-%m-%dT%H:%M:%S+0800', time.gmtime(time.time() + 8 * 3600)),
