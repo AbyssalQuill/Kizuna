@@ -771,3 +771,35 @@ POST /send_private_msg {record, file: "file:///root/qq-bridge/state/voice-sample
 
 ### 部署
 - `wake-send.js` md5 `9647a350…`，`node --check` 通过，`qq-bridge` / `dsh-web` / `napcat` 三服务 active，重启无 error；单测 `wake-trigger` 19/19、`persona-inject` 12/12 通过。
+
+---
+
+## 29. 条目 46（2026-10-30）：表达形态多样化 + 逻辑/上下文优先 + 不懂自己查
+
+### 主人要求
+「消息要多样化、灵活引用、语言多样、全量丰富化非定式：直接发表情、回复内嵌表情、先图后文、先文后图、语音；重视回复逻辑与上下文；重视对别人表情包的语义理解而不是浅显描述和提问；自己有疑惑就查黑话、联网搜，不提问。」
+
+### 落地点（系统提示词，纯下划线短语）
+```
+shape_varies_per_turn_never_one_template
+meme_only_reply_ok / meme_inline_with_text_ok
+native_face_and_sticker_in_repertoire
+image_then_text_ok / text_then_image_ok
+voice_alone_ok / voice_atop_text_ok
+qq_send_message_images_param_for_text_plus_image
+read_context_before_wording / answer_the_actual_point_over_format
+thread_and_speaker_attribution_matter
+meme_meaning_over_pixel_description / meme_mood_matches_moment
+unknown_slang_lookup_first_via_qq_slang_query
+unknown_fact_lookup_first_via_web_search
+resolve_with_tools_never_ask_peer_to_explain
+```
+- 放进 `agent.cordis.yml` 的 persona 段（静态系统提示词、吃缓存），而不是每轮正文——形态规则是长期行为，不该每轮付一次全价。
+- 与条目 45 的 `[burst]` 策略互补：形态可变，但**一次回应仍是一件事**（连发合并不等于把五种形态全发一遍）。
+
+### 部署
+- `agent.cordis.yml` md5 `9515702c…`，仓库与 `~/.dsh/.agent-presets` 两份一致；重启 `qq-bridge` → `dsh-web` 后三服务 active，`dsh-web` 日志无 error；`universal-prompts` 6/6、`persona-inject` 12/12、`wake-trigger` 19/19 通过。
+
+### 未结
+- 群聊在切成 active 之后**仍未观察到唤醒**（00:16:30 那条消息之后无任何唤醒/steer 日志，unread 累积）。下一步：在群消息入口加一行诊断日志（收到即记 key + anyMessage + 判定结果 + 是否进合并窗），把闸门定位出来。
+
