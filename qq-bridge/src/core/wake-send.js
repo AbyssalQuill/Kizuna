@@ -1692,7 +1692,7 @@ export async function sendWakePrompt(key, reason) {
       const isGroup = !key.startsWith('private:');
       const burstGuidance = unreadMsgs.length >= 2
         ? (isGroup
-          ? '\n[burst] many_in_one_reply_pick_one_thread_quote_it_rest_may_stay_silent'
+          ? '\n[burst] many_in_one_reply_pick_one_thread_quote_only_when_ambiguous_rest_may_stay_silent'
           : '\n[burst] many_in_one_reply_any_order_pick_what_matters_no_need_to_answer_each')
         : '';
       unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}${groupActivityLine}`
