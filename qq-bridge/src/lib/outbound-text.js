@@ -42,9 +42,20 @@ export function stripMessageArtifacts(text) {
   return sweepMessageArtifacts(text).text;
 }
 
+/* 动作描写剥离（2026-10-29 恢复，默认开启；config.social.speech.stripActionBrackets=false 可关）。
+ * 为什么恢复：条目 37 的三条探针实测证明规则、末端锚、示范都压不住括号（5 条气泡 3 条带动作描写）。
+ * 口径很窄：只剥成对的 （…）/(…)/*…* 片段（每段 ≤80 字），正文其余标点一律不动。
+ * 剥空的调用方负责整条跳过（见 qq-send.js：actionStripped 为真时不再回退原文）。 */
+const ACTION_SPAN_RE = /（[^（）]{0,80}）|\([^()]{0,80}\)|\*[^*\n]{0,80}\*/g;
+let actionStripEnabled = true;
+export function configureOutbound(opts = {}) {
+  if (typeof opts?.stripActionBrackets === 'boolean') actionStripEnabled = opts.stripActionBrackets;
+}
+export function actionStripStatus() { return actionStripEnabled; }
 export function stripActionBrackets(text) {
-  // 遵循指示：不用正则过滤动作，保留真实输出，由模型人设纯口语规则自律
-  return String(text ?? '');
+  const s = String(text ?? '');
+  if (!s || !actionStripEnabled) return s;
+  return s.replace(ACTION_SPAN_RE, '');
 }
 
 export function stripTrailingPeriod(text) {
@@ -58,9 +69,18 @@ export function normalizeFirstPersonSelfCall(text) {
   return String(text ?? '');
 }
 
-// 出站文本统一清洗：表情/图片占位符清扫 → 输入法 emoji 剥离 → 仅去除末尾句号（问号叹号保留）。
-export function cleanOutboundText(text) {
+// 出站文本统一清洗：占位符清扫 → 动作括号剥离 → 输入法 emoji 剥离 → 仅去除末尾句号（问号叹号保留）。
+export function cleanOutboundTextDetailed(text) {
   const swept = sweepMessageArtifacts(text);
-  const noEmoji = stripImeEmoji(swept.text);
-  return stripTrailingPeriod(noEmoji);
+  const stripped = stripActionBrackets(swept.text);
+  const noEmoji = stripImeEmoji(stripped);
+  return {
+    text: stripTrailingPeriod(noEmoji),
+    removedArtifacts: swept.removed,
+    actionStripped: stripped !== swept.text,
+  };
+}
+
+export function cleanOutboundText(text) {
+  return cleanOutboundTextDetailed(text).text;
 }

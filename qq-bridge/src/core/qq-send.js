@@ -1,7 +1,7 @@
 // QQ 文本发送
 // 依赖全部来自 lib/core；cfg 静态注入（initQqSendCore），bot 运行期注入（setQqSendBot）。
 import { qqTextSeg } from '../lib/onebot-ws.js';
-import { sweepMessageArtifacts, cleanOutboundText, redactKnownTokensOnly } from '../lib/outbound-text.js';
+import { sweepMessageArtifacts, cleanOutboundText, cleanOutboundTextDetailed, configureOutbound, redactKnownTokensOnly } from '../lib/outbound-text.js';
 import { splitForQQ } from '../md-to-plain.js';
 import { escapeCqText, tokenDisclosureIn, looksLikeSerializedBubbleArray } from '../lib/text-safe.js';
 import fs from 'node:fs';
@@ -48,6 +48,10 @@ let botRef = null;
 export function initQqSendCore(cfg) {
   cfgRef = cfg;
   setSendLinearCfgReader(() => (cfgRef?.social?.send ?? null));
+  // 动作括号剥离开关：默认开，config.social.speech.stripActionBrackets=false 可整条关掉（回滚用）
+  try {
+    configureOutbound({ stripActionBrackets: cfg?.social?.speech?.stripActionBrackets !== false });
+  } catch { /* 读不到就是默认开 */ }
 }
 /** NapCat 网关就绪后注入 bot（NapCat client） */
 export function setQqSendBot(bot) {
@@ -57,11 +61,11 @@ export function setQqSendBot(bot) {
 // 发送单条文本（按 QQ 分条），入发送链
 export function sendToQQ(key, msg) {
   const rawText = String(msg ?? '');
-  const swept = sweepMessageArtifacts(rawText);
-  const stripped = cleanOutboundText(rawText);
-  // 整条是纯占位（[表情:…]）：绝不按文字发出（根治"文字版表情"）；纯 emoji/颜文字清洗为空则保留原文
-  let safeMsg = stripped;
-  if (safeMsg === '' && swept.removed === 0 && rawText.trim() !== '') safeMsg = redactKnownTokensOnly(rawText);
+  const clean = cleanOutboundTextDetailed(rawText);
+  // 整条是纯占位（[表情:…]）：绝不按文字发出；纯 emoji 清洗为空则保留原文。
+  // 但如果是「整条就是动作括号」（如 ( ˘ω˘ )）被剥空，必须整条丢弃，绝不回退原文 —— 否则括号又回来了。
+  let safeMsg = clean.text;
+  if (safeMsg === '' && !clean.actionStripped && clean.removedArtifacts === 0 && rawText.trim() !== '') safeMsg = redactKnownTokensOnly(rawText);
   if (!safeMsg) return currentSendChain();
   const [kind, id] = key.split(':');
   const parts = splitForQQ(safeMsg);
@@ -111,11 +115,11 @@ export function sendBurstToQQ(key, messages, socialCfgOrMin, maybeMax) {
 
   const sent = [];
   for (let i = 0; i < messages.length; i++) {
-    const sweptOne = sweepMessageArtifacts(messages[i]);
-    const strippedOne = cleanOutboundText(messages[i]);
-    // 纯占位条（[表情:…]）直接跳过不发；纯 emoji/颜文字清洗为空则保留原文
-    let msg = strippedOne;
-    if (msg === '' && sweptOne.removed === 0 && String(messages[i] ?? '').trim() !== '') msg = redactKnownTokensOnly(messages[i]);
+    const cleanOne = cleanOutboundTextDetailed(messages[i]);
+    // 纯占位条（[表情:…]）直接跳过不发；纯 emoji 清洗为空则保留原文；
+    // 动作括号被剥空同样直接跳过（不回退原文，见 sendToQQ 同一处说明）。
+    let msg = cleanOne.text;
+    if (msg === '' && !cleanOne.actionStripped && cleanOne.removedArtifacts === 0 && String(messages[i] ?? '').trim() !== '') msg = redactKnownTokensOnly(messages[i]);
     if (msg === '') continue;
     enqueueSend(async () => {
       // 打字节拍：批内首条秒回；第 2 条起间隔 = 这条气泡字数 × linearPerCharMs（见 send-chain.js）

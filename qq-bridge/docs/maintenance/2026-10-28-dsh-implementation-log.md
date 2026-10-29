@@ -542,3 +542,27 @@ cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/sr
 ### 下一步（需要拍板）
 - 唯一能保证"零括号"的是**出站确定性剥离**（`（…）` / `(…)` / `*…*`），也就是条目 33 里按用户要求撤掉的那条正则。数据现在支持把它加回来，但那是用户当时的明确决定，所以先不动，等确认。
 - 探针的局限要说清：admin 唤醒没有真实上下文，模型只能凭空编（"肚子饿了"就是这么来的），这是它最弱的模式；真实对话的括号率要以 `--compare` 为准。
+
+---
+
+## 21. 条目 38（2026-10-29）：恢复出站动作括号剥离（窄口径 + 可配置开关）
+
+### 为什么改回来
+- 条目 37 的三条探针证明：正向人设 `spoken_words_only`、唤醒末端 `[anchor]`、`[sample_bubbles]` 示范，三层叠加仍然 5 条气泡里 3 条带 `（…）` 动作描写。
+- 目标里写的是"零括号零动作描写"，提示词手段已穷尽，只剩确定性剥离一条路。
+
+### 实现（`src/lib/outbound-text.js` + `src/core/qq-send.js`）
+- `stripActionBrackets()` 从 no-op 恢复为真剥离：只剥成对的 `（…）` / `(…)` / `*…*`（每段 ≤80 字），正文其余标点不动。
+- 新增 `cleanOutboundTextDetailed()` 返回 `{ text, removedArtifacts, actionStripped }`；`qq-send.js` 两处（`sendToQQ` 与批量发送循环）改用这个，**当整条被剥空时直接跳过，不再回退原文** —— 否则 `( ˘ω˘ )` 会原样发出去（旧逻辑的"清洗为空则保留原文"正是漏洞）。
+- 开关：`config.social.speech.stripActionBrackets = false` 可整条关掉（`initQqSendCore` 里注入），默认开。
+
+### 验证
+- 新增 `tests/outbound-action-strip.test.js`：探针三条原文、kaomoji 剥空、未闭合括号不误伤、多段连续剥离、开关回滚，全 PASS；连同 `outbound-format` / `tool-restrict-guard` / `persona-inject` / `universal-prompts` / `wake-trigger` / `meme-memory-immersion` / `persona-ephemeral` 共 8 个测试全绿。
+- 服务器（部署后实际模块）跑清洗器：
+  - `投递自检（尾鳍甩了一下）*微笑*结束。` → `投递自检结束`
+  - `主人～你人呢？…哦（尾鳍拍了两下水）` → 括号段消失
+  - `( ˘ω˘ )` → 空串（整条跳过）
+
+### 一个测量陷阱（重要）
+- **`chat.db` 记的是模型原文，不是投递文本**：我发了一条测试消息，库里存的是 `投递自检（尾鳍甩了一下）*微笑*结束。`，连末尾句号都在 —— 而 `stripTrailingPeriod` 早就生效，说明落库在清洗之前。
+- 因此 `persona-metrics` 的"括号%"衡量的是**模型原始输出**（提示词有效性），投递是否干净要看清洗器（现在是确定性 0）。两个指标要分开看，别拿 chat.db 当投递证据。
