@@ -79,6 +79,9 @@ def scan(since_ms):
                 ti = args.get('tool_input') or {}
                 if inner == 'qq_send_message':
                     msgs = ti.get('messages') or args.get('messages') or []
+                    # 模型常把单条消息传成字符串（schema 允许）；那不是 0 条，是 1 条
+                    if isinstance(msgs, str):
+                        msgs = [msgs] if msgs.strip() else []
                     if isinstance(msgs, list):
                         rec['bubbles'] += len(msgs)
                         for m in msgs:
@@ -107,7 +110,8 @@ def scan(since_ms):
 
 
 BLANK = {'turns': 0, 'bubbles': 0, 'single': 0, 'double': 0, 'triple': 0,
-         'chars': 0, 'bracket_turns': 0, 'voice': 0, 'meme': 0, 'rejected': 0, 'images_lost': 0}
+         'chars': 0, 'bracket_turns': 0, 'voice': 0, 'meme': 0, 'rejected': 0, 'images_lost': 0,
+         'speech_turns': 0}
 
 
 def merge(total, recs):
@@ -116,6 +120,8 @@ def merge(total, recs):
             total['images_lost'] += 1
             continue
         total['turns'] += 1
+        if r['bubbles']:
+            total['speech_turns'] += 1
         total['bubbles'] += r['bubbles']
         if r['bubbles'] == 1:
             total['single'] += 1
@@ -139,14 +145,18 @@ def pct(a, b):
 
 def summarize(total):
     n = total['turns']
+    # 2026-10-29：气泡形态只在「真的说了话」的回合里才有意义；只有语音/表情、或模型选择不说话的回合
+    # 会把分母稀释成 0%，看起来像“改了没效果”。所以气泡/字数/括号改用 speech_turns 作分母。
+    sp = total.get('speech_turns') or 0
     return {
         'turns': n,
-        'bubbles': round(total['bubbles'] / n, 2) if n else 0,
-        'single_pct': pct(total['single'], n),
-        'double_pct': pct(total['double'], n),
-        'triple_pct': pct(total['triple'], n),
-        'chars': round(total['chars'] / n, 1) if n else 0,
-        'bracket_pct': pct(total['bracket_turns'], n),
+        'speech_turns': sp,
+        'bubbles': round(total['bubbles'] / sp, 2) if sp else 0,
+        'single_pct': pct(total['single'], sp),
+        'double_pct': pct(total['double'], sp),
+        'triple_pct': pct(total['triple'], sp),
+        'chars': round(total['chars'] / sp, 1) if sp else 0,
+        'bracket_pct': pct(total['bracket_turns'], sp),
         'voice_per_turn': round(total['voice'] / n, 2) if n else 0,
         'meme_per_turn': round(total['meme'] / n, 2) if n else 0,
         'rejected': total['rejected'],
@@ -169,7 +179,7 @@ def save_state(state):
     os.replace(tmp, STATE)
 
 
-DEPLOY_MS = 1793257740000   # 2026-10-29 15:09 +08：正向人设 + 末端锚上线点
+DEPLOY_MS = 1793258651000   # 2026-10-29 15:24:11 +08：最后一次性生效点（出站剥离上线，服务重启时刻）
 
 
 def compare():
@@ -194,7 +204,8 @@ def compare():
                    x['chars'], x['bracket_pct'], x['voice_per_turn'], x['meme_per_turn'],
                    x['rejected'], x.get('image_lost', 0)))
 
-    print('部署点 2026-10-29 15:09 +08；改前窗口 = 部署前 %d 小时' % recent_h)
+    print('部署点 %s +08；改前窗口 = 部署前 %d 小时'
+          % (time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(DEPLOY_MS / 1000 + 8 * 3600)), recent_h))
     print(line('改前', a))
     print(line('改后', b))
     if b['turns']:
@@ -220,8 +231,8 @@ def report():
     print('最近 %d 次（每次=上一小时的增量）' % min(len(rows), 24))
     for r in rows[-24:]:
         w = r['window']
-        print('  %s  n=%2d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
-              % (r['at'][11:16], w['turns'], w['bubbles'], w['single_pct'], w['double_pct'],
+        print('  %s  n=%2d 说%2d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
+              % (r['at'][11:16], w['turns'], w.get('speech_turns', 0), w['bubbles'], w['single_pct'], w['double_pct'],
                  w['triple_pct'], w['chars'], w['bracket_pct'], w['voice_per_turn'],
                  w['meme_per_turn'], w['rejected'], w.get('image_lost', 0)))
     c = rows[-1]['cumulative']
@@ -251,6 +262,8 @@ def main():
     # 老 state 可能缺新加的字段（如 images_lost）→ 先用 BLANK 补齐再累加，否则定时器会 KeyError
     carry = dict(BLANK)
     carry.update({k: v for k, v in (state.get('cumulative') or {}).items() if k in BLANK})
+    if not carry.get('speech_turns'):
+        carry['speech_turns'] = (carry.get('single') or 0) + (carry.get('double') or 0) + (carry.get('triple') or 0)
     cumulative = merge(carry, fresh)
     line = {
         # 服务器是 UTC，统计一律用东八区时间，免得看报告时还要自己加 8 小时
