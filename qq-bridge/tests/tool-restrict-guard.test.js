@@ -9,18 +9,17 @@ import {
 
 console.log('=== 校验 1：白名单与 Token 防呆 ===');
 let guardFn = null;
-const turnStoppingHandlers = [];
 const fakeCtx = {
   tools: {
     restrict: () => {},
     guard: (fn) => { guardFn = fn; }
-  },
-  on: (event, fn) => { if (event === 'agent/turn-stopping') turnStoppingHandlers.push(fn); }
+  }
 };
 
 apply(fakeCtx);
 assert.ok(typeof guardFn === 'function', 'guard 必须成功注册');
-assert.equal(turnStoppingHandlers.length, 1, '必须订阅 agent/turn-stopping（回合边界复位）');
+// 2026-10-29 第二次修：不再依赖 agent/turn-stopping（dsh-qq-hold 会把回合吊住，钩子提前触发 → 误伤），
+// 所以 ctx 没有 on() 也必须能正常注册。
 
 const resNum = guardFn({ name: '1736784911' });
 assert.ok(resNum && resNum.includes('is a session auth token, not a tool name'), '纯数字工具名被精准拦截');
@@ -56,7 +55,7 @@ console.log('PASS: 开局硬门禁');
 
 console.log('=== 校验 3：载入人设后，同回合可以连续发（文字 + 表情包 + 语音）===');
 assert.equal(call('qq_load_persona'), undefined, 'qq_load_persona 放行');
-assert.equal(sessionPersonaTurn.get(sess), true, '本回合已标记载入');
+assert.ok(Number(sessionPersonaTurn.get(sess)) > 0, '记录本次载入的时刻');
 
 assert.equal(call('qq_send_message'), undefined, '第一条文字放行');
 assert.equal(call('qq_send_meme'), undefined, '表情包放行');
@@ -75,14 +74,19 @@ assert.ok(resSchedule && resSchedule.includes('this turn\'s goal is met'), '发�
 assert.equal(call('qq_send_voice'), undefined, '收敛规则不误伤语音（只有空间/定时/搜图被限）');
 console.log('PASS: 收敛门禁');
 
-console.log('=== 校验 5：回合结束复位，新回合必须重新载入人设 ===');
-turnStoppingHandlers[0]({ agent: { session: { id: sess } } });
-assert.equal(sessionPersonaTurn.has(sess), false, 'turn-stopping 清掉本回合标记');
-assert.ok(String(call('qq_send_message')).includes('step_1 is mandatory'), '新回合未经 load 直接发言被拦截');
+console.log('=== 校验 5：人设过期（超过 30 分钟）后必须重新载入 ===');
+// 回归点：旧版靠 turn-stopping 复位，而 dsh-qq-hold 会让钩子提前触发 → 真回合里被误判。
+// 现在只看"载入时刻是否新鲜"，跟回合事件无关。
+sessionPersonaTurn.set(sess, Date.now() - 31 * 60 * 1000);
+assert.ok(String(call('qq_send_message')).includes('step_1 is mandatory'), '人设过期后发送被拦');
 
-assert.equal(call('qq_load_persona'), undefined, '新回合 load 放行');
-assert.equal(call('qq_send_voice'), undefined, '新回合载入后语音放行');
-console.log('PASS: 每回合一次开局门禁');
+assert.equal(call('qq_load_persona'), undefined, '重新 load 放行');
+assert.equal(call('qq_send_voice'), undefined, '载入后语音放行');
+
+// 刚载入 29 分钟 → 仍算新鲜，不能误伤（线上四个打回回合就是这个场景）
+sessionPersonaTurn.set(sess, Date.now() - 29 * 60 * 1000);
+assert.equal(call('qq_send_message'), undefined, '29 分钟内连续对话一律放行');
+console.log('PASS: 人设新鲜度门禁');
 
 console.log('=== 校验 6：后台学习任务工具直接豁免 ===');
 assert.equal(guardFn({ name: 'mcp__napcat-host__qq_learning_corpus', arguments: { limit: 100 } }), undefined, '学习语料工具豁免');

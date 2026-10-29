@@ -62,8 +62,15 @@ export const sessionLoadedPersona = new Map();
 export const sessionSentMessage = new Map();
 export const sessionLoadedCount = new Map();
 export const sessionSentCount = new Map();
-// 本回合是否已经载入过人设：true 之后同回合的任意多次发送都放行，回合结束（turn-stopping）清空
+/* 人设载入时刻（不是布尔）。
+ * 2026-10-29 第二次修：
+ *   上一版用布尔 + `agent/turn-stopping` 复位，线上仍然打回 —— 取证（13:32/14:23/14:43/14:52 四个回合）
+ *   都是 load≥1 的真回合。原因：dsh-qq-hold 会把 turn-stopping 按住不放，钩子在"回合将停"时先触发一次，
+ *   我把标记清了，而回合其实还活着、模型继续在同一个回合里发言 → 被判成"没读人设"。
+ *   现在不依赖回合事件：记时间戳，会话活跃期内（30 分钟）载入过一次就放行；长时间闲置才要求重读。
+ *   代价是"同一回合里忘了 load 也能发"这条兜底变弱，但实测模型每回合都会 load，误伤的代价更大。 */
 export const sessionPersonaTurn = new Map();
+const PERSONA_FRESH_MS = 30 * 60 * 1000;
 
 export function apply(ctx) {
   // 1) 隐藏危险全局工具
@@ -74,17 +81,6 @@ export function apply(ctx) {
       const detail = String(error?.message ?? error);
       console.error(`[qq-tool-restrict] skip restrict ${name}: ${detail.slice(0, 160)}${detail.length > 160 ? '…' : ''}`);
     }
-  }
-
-  // 3) 回合结束清空「本回合已载入人设」标记：下个回合的第一次发言必须重新 load。
-  //    dsh-qq-hold 会把 turn-stopping 按住不放，真回合结束时本钩子才真正执行；
-  //    万一没触发，最坏结果是沿用上一回合的载入状态（仅放宽门禁，不会误伤正常发言）。
-  if (typeof ctx.on === 'function') {
-    ctx.on('agent/turn-stopping', (payload) => {
-      const id = String(payload?.agent?.session?.id || '');
-      if (id) sessionPersonaTurn.delete(id);
-      else sessionPersonaTurn.clear();
-    });
   }
 
   // 2) 执行期白名单与动作流物理硬守卫
@@ -127,16 +123,17 @@ export function apply(ctx) {
     if (isLoadPersona) {
       sessionLoadedPersona.set(sessId, Date.now());
       sessionLoadedCount.set(sessId, (sessionLoadedCount.get(sessId) || 0) + 1);
-      sessionPersonaTurn.set(sessId, true);
+      sessionPersonaTurn.set(sessId, Date.now());
       return; // 允许加载人设
     }
 
-    // ⑤ 物理硬门禁：本回合还没载入人设就不许发言。
-    //    判据是「本回合是否 load 过」（布尔），不是「load 次数 > 发送次数」——
-    //    后者会把同回合的第二条消息 / 语音当成新一轮，线上就是在这里把 qq_send_voice 打回的。
+    // ⑤ 物理门禁：会话里还没有"新鲜"的人设载入记录就不许发言。
+    //    判据是「最近一次 qq_load_persona 距今是否在 30 分钟内」，不看回合事件 ——
+    //    回合事件在这个部署里不可靠（dsh-qq-hold 会把回合吊住，turn-stopping 提前触发）。
     if (isSendTool) {
-      if (!sessionPersonaTurn.get(sessId)) {
-        return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called yet in this turn, so sending is blocked. Call qq_load_persona now, then retry the send. Later sends in the same turn do not need another load.';
+      const loadedAt = Number(sessionPersonaTurn.get(sessId)) || 0;
+      if (!loadedAt || (Date.now() - loadedAt) > PERSONA_FRESH_MS) {
+        return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called recently in this session, so sending is blocked. Call qq_load_persona now, then retry the send.';
       }
       sessionSentCount.set(sessId, (sessionSentCount.get(sessId) || 0) + 1);
       sessionSentMessage.set(sessId, Date.now());

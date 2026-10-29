@@ -482,3 +482,29 @@ cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/sr
 - **部署产物校验（服务器实际代码，不只是本地）**：
   - `wake-send.js` 渲染 `appendTurnTailPersonaAnchor('[Session] private:1')` → `[Session] private:1\n[anchor] persona_first spoken_words_only natural_bubble_any_length`；
   - `voice.js` / `send-dice.js` 里只剩 `[voice_hit] [voice_free] [voice_all] [meme_hit] [meme_free]` 五个新标签，没有旧的 `[Voice] HIT:` 散文形态。
+
+---
+
+## 19. 条目 36（2026-10-29）：守卫第二次修 —— 回合事件不可靠，改用「人设新鲜度」
+
+### 取证
+- 拉出全部带 `Protocol violation` 的回合（部署前 6 小时窗口内 6 个），**每一个都是 `load >= 1` 的真回合**：
+
+```
+10-29 13:32  turn=2 load=1 sends=3 rej=1
+10-29 14:23  turn=4 load=1 sends=4 rej=1
+10-29 14:43  turn=3 load=1 sends=2 rej=1
+10-29 14:52  turn=2 load=1 sends=4 rej=2
+```
+
+- 也就是说：上一版（条目 20）虽然改成"本回合 load 过就放行"，但复位点选错了。`dsh-qq-hold` 会把回合吊住，`agent/turn-stopping` 在"回合将停"时就先触发一次；标记在那里被清掉，而回合还活着、模型继续在同一个回合里发言 → 被判成"没读人设"。
+
+### 改法
+- 彻底移除 `agent/turn-stopping` 订阅（`grep -c "ctx.on("` = 0），`sessionPersonaTurn` 改存**载入时刻**。
+- 发送门禁改成：最近一次 `qq_load_persona` 距今不超过 **30 分钟**就放行；超时才要求重读。
+- 取舍：同一回合里"忘了 load 也能发"这条兜底变弱；但实测模型每回合都会 load（load=1~2），而误伤的代价是模型多走一步 + 用户看到一条红色报错。
+
+### 验证
+- 单测改写：无 `ctx.on` 也能注册；「29 分钟内连续对话一律放行」（回归点）；「31 分钟后人设过期需重读」。6 组全 PASS。
+- 服务器：`qq-tool-restrict.mjs` 两份副本（仓库 + `~/.dsh/.agent-presets`）md5 均为 `516ef638177ad692647b113816a60b24`，`node --check` 通过，`qq-bridge` / `dsh-web` / `napcat` 三服务 active。
+- 后续用 `persona-metrics.py --compare` 的「打回」列检验：这个数应当停在历史 7 次不再增长。
