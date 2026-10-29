@@ -199,7 +199,7 @@ def compare():
     b = summarize(merge(dict(BLANK), new))
 
     def line(name, x):
-        return ('%-6s n=%3d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
+        return ('%-6s n=%3d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号模%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
                 % (name, x['turns'], x['bubbles'], x['single_pct'], x['double_pct'], x['triple_pct'],
                    x['chars'], x['bracket_pct'], x['voice_per_turn'], x['meme_per_turn'],
                    x['rejected'], x.get('image_lost', 0)))
@@ -213,7 +213,7 @@ def compare():
               % (b['turns'] - a['turns'], b['bubbles'] - a['bubbles'],
                  b['single_pct'] - a['single_pct'], b['bracket_pct'] - a['bracket_pct'],
                  b['chars'] - a['chars'], b['rejected'] - a['rejected']))
-        print('判定   括号%.0f%%→%.0f%%（目标 0）；单气泡%.0f%%→%.0f%%（目标 60~70%%）'
+        print('判定   括号模%.0f%%→%.0f%%（目标 0）；单气泡%.0f%%→%.0f%%（目标 60~70%%）'
               % (a['bracket_pct'], b['bracket_pct'], a['single_pct'], b['single_pct']))
     else:
         print('改后还没有样本 —— 等真实回合进来再跑一次。')
@@ -231,12 +231,12 @@ def report():
     print('最近 %d 次（每次=上一小时的增量）' % min(len(rows), 24))
     for r in rows[-24:]:
         w = r['window']
-        print('  %s  n=%2d 说%2d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
+        print('  %s  n=%2d 说%2d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号模%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
               % (r['at'][11:16], w['turns'], w.get('speech_turns', 0), w['bubbles'], w['single_pct'], w['double_pct'],
                  w['triple_pct'], w['chars'], w['bracket_pct'], w['voice_per_turn'],
                  w['meme_per_turn'], w['rejected'], w.get('image_lost', 0)))
     c = rows[-1]['cumulative']
-    print('累计（00:47 起） n=%d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
+    print('累计（00:47 起） n=%d 气泡%.2f 单%.0f%% 双%.0f%% 三+%.0f%% 字数%.1f 括号模%.0f%% 语音%.2f 表情%.2f 打回%d 丢图%d'
           % (c['turns'], c['bubbles'], c['single_pct'], c['double_pct'], c['triple_pct'],
              c['chars'], c['bracket_pct'], c['voice_per_turn'], c['meme_per_turn'], c['rejected'],
              c.get('image_lost', 0)))
