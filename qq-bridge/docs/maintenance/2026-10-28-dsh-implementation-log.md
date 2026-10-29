@@ -741,3 +741,12 @@ POST /send_private_msg {record, file: "file:///root/qq-bridge/state/voice-sample
 ### 部署
 - `voice.js` md5 `1994147a…`、`send-dice.js` md5 `0caa5e62…`、`social-state.js` md5 `c6206a8d…`、`wake-send.js` md5 `7ee3e6b4…`；`node --check` 通过；三服务 active，重启无 error。
 - 待观察：`afterthought` 次数应明显下降；语音发送成功率应以 `[voice] 语音已发送` / `发送语音失败` 的比值衡量。
+
+### 更正（同日 17:01）：`[voice_free]` 是授权，不是催促
+- 条目 44 里我把「每轮都有 free 提示」当成"催发语音"的原因，改成每 5 轮出现一次 —— 方向错了。主人指出：这句挂在那儿的意思是**你可以自由发**，不是让你每轮都发。
+- 现在恢复每轮都带，但把 `optional` 这个弱词换成明确的授权语句：
+  - `[voice_free] qq_send_voice_allowed_not_required`
+  - `[meme_free] qq_send_meme_allowed_not_required`
+- 压住行为靠措辞（允许但不要求、默认文字），不是靠少说。降频那版已撤回。
+- 部署：`voice.js` md5 `ba64b4b4…`、`send-dice.js` md5 `6b22399c…`，`node --check` 通过，`qq-bridge` active。
+

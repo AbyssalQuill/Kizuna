@@ -1754,10 +1754,11 @@ export function voiceTurnHint(key) {
   if (hit) {
     return `[voice_hit] qq_send_voice(voice=${voiceName},chars<${cap})\n`;
   }
-  /* 2026-10-29：非命中轮不再每轮都挂 free 提示。线上表现为「几乎每次都发语音」，
-   * 而语音转码一失败就是连串报错；改成大约每 5 轮出现一次，保住「可以发」的语义即可。 */
-  if (Math.random() < 0.2) return `[voice_free] qq_send_voice(optional)\n`;
-  return '';
+  /* 2026-10-29 更正：这句的语义是「允许」，不是「要求」—— 主人指出后按这个口径改。
+   * 之前写成 `[voice_free] qq_send_voice(optional)`，`optional` 太弱，模型容易读成「该来一条」，
+   * 于是几乎每轮都发语音。现在把话说死：允许，但不要求；默认就是文字。
+   * 频率恢复每轮都带（它只是授权），压住行为的靠措辞而不是靠少说。 */
+  return `[voice_free] qq_send_voice_allowed_not_required\n`;
 }
 
 // ── 发送：把音频作为 QQ 语音发出去 ───────────────────────────────────────────
