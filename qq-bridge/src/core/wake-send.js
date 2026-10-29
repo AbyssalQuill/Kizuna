@@ -333,7 +333,8 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * ① 把人设摆到规则之前（persona_first）；② 把输出形态钉成"口语词"而不是"描写"。
    * 全部正向表述：告诉它写什么，而不是禁止它写什么（负面指令在实测里几乎不改模型行为）。 */
   const base = String(promptText ?? '').trim();
-  const anchor = '[anchor] persona_first spoken_words_only natural_bubble_any_length';
+  /* 2026-10-30：末尾锚加“先共情再表态、别习惯性反问”。这是生成位置最近的一行，对收尾形态约束最强。 */
+  const anchor = '[anchor] persona_first empathy_then_stance spoken_words_only mostly_end_with_a_statement';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
