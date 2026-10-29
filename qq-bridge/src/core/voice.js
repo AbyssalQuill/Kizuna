@@ -1746,15 +1746,15 @@ export function voiceTurnHint(key) {
    * 这一支**不掷骰**：全语音模式下概率与冷却是无关参数（见文件上方"关于 send.cooldownMs"的说明）。 */
   if (cfg.send?.allVoice === true) {
     const hardCap = Math.min(MAX_TTS_CHARS, Math.max(1, Number(cfg.maxChars) || 120));
-    return `[Voice] ALL-VOICE ON: reply with qq_send_voice (<${hardCap} chars, speakable words, no markdown/CQ/emoji).\n`;
+    return `[voice_all] qq_send_voice(chars<${hardCap})\n`;
   }
   const defaultVoiceProb = key.startsWith('private:') ? 0.45 : 0.25;
   const { p, cooling, hit } = dice('voice', key, cfg.send?.probability ?? defaultVoiceProb, cfg.send?.cooldownMs ?? 0);
   const cap = Math.min(60, Number(cfg.maxChars) || 60);
   if (hit) {
-    return `[Voice] HIT: send voice (qq_send_voice, voice=${voiceName}, <${cap} chars). PREFER VOICE ALONE (no text bubble, like a real voice note). If text+voice: voice MUST have a COMPLETELY DIFFERENT meaning (STRICTLY FORBIDDEN to repeat, paraphrase, or re-say sleep/time reminders).\n`;
+    return `[voice_hit] qq_send_voice(voice=${voiceName},chars<${cap})\n`;
   }
-  return `[Voice Freedom] Spontaneous qq_send_voice allowed anytime. Prefer voice alone, and never duplicate text meaning.\n`;
+  return `[voice_free] qq_send_voice(optional)\n`;
 }
 
 // ── 发送：把音频作为 QQ 语音发出去 ───────────────────────────────────────────

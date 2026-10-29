@@ -64,9 +64,9 @@ export function memeTurnHint(key) {
   if (!c.enabled) return '';
   const { p, cooling, hit } = dice('meme', key, c.probability, c.cooldownMs);
   if (hit) {
-    return `[Meme] HIT: send 1 gallery meme via qq_send_meme(query="emotion"). No yellow-face sticker.\n`;
+    return '[meme_hit] qq_send_meme\n';
   }
-  return '[Meme Freedom] Spontaneous qq_send_meme allowed anytime.\n';
+  return '[meme_free] qq_send_meme(optional)\n';
 }
 
 /** 供诊断/日志：当前生效的表情包参数 */

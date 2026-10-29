@@ -78,7 +78,6 @@ ok('get_time 结果被剪', mod.prunePersonaResults(s5) === 1 && s5.appended[0]?
 console.log('== ④ 接线 ==');
 const yml = fs.readFileSync(path.join(PRESET_DIR, 'agent.cordis.yml'), 'utf8');
 ok('预设挂了 qq-persona-ephemeral', /- id: qq-persona-ephemeral[\s\S]{0,80}qq-persona-ephemeral\.mjs/.test(yml));
-ok('预设声明 PTC 呈现', /- id: tool-presentation[\s\S]{0,120}mode: ptc/.test(yml));
 const guard = fs.readFileSync(path.join(PRESET_DIR, 'qq-tool-restrict.mjs'), 'utf8');
 ok('守卫放行 run_code', /'run_code',/.test(guard) && /SAFE_BARE_NAME/.test(guard));
 

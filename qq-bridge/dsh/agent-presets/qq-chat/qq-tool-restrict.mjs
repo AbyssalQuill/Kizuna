@@ -120,7 +120,8 @@ export function apply(ctx) {
 
     const isLoadPersona = effectiveName === 'qq_load_persona' || name.endsWith('__qq_load_persona');
     const isSendTool = effectiveName === 'qq_send_message' || name.endsWith('__qq_send_message') ||
-                       effectiveName === 'qq_send_voice' || name.endsWith('__qq_send_voice');
+                       effectiveName === 'qq_send_voice' || name.endsWith('__qq_send_voice') ||
+                       effectiveName === 'qq_send_meme' || name.endsWith('__qq_send_meme');
 
     // ④ 记录人设加载标记
     if (isLoadPersona) {

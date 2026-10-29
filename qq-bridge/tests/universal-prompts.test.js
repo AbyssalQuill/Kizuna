@@ -39,7 +39,10 @@ import { buildOverrideBlock } from '../src/lib/preset-compose.js';
 const emptyBlock = buildOverrideBlock({ persona: '', speechRules: '' });
 assert.ok(!emptyBlock.includes('主人还没有上传人设'), '兜底文本已去除特定主人称谓');
 assert.ok(!emptyBlock.includes('主人还没有写发言规则'), '兜底文本已去除特定主人称谓');
-assert.ok(emptyBlock.includes('尚未指定专属人设'), '包含通用伴侣兜底');
+// 2026-10-29 改契约：系统提示词恒定只放"去读人设"这一句，不再按人设空/非空换文案
+// （旧兜底句会把人设状态烧进 preset，切换人设后与工具读到的角色卡自相矛盾）
+assert.ok(emptyBlock.includes('call_tool_qq_load_persona_for_character'), '系统提示词恒定指向 qq_load_persona');
+assert.ok(!emptyBlock.includes('尚未指定专属人设'), '不再把人设状态写进系统提示词');
 console.log('PASS: preset-compose.js 兜底文本完全通用化');
 
 console.log('=== 校验 4：wake-send.js 话题唤醒正则通用化 ===');

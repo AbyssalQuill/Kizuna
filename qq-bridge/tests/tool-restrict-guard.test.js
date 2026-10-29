@@ -64,7 +64,7 @@ assert.equal(call('qq_send_meme'), undefined, '第二个表情包放行');
 // 回归点：线上就是这一步（同回合追加一条语音）被旧逻辑当成新回合打回的
 assert.equal(call('qq_send_voice'), undefined, '同回合追加语音必须放行（不得再要一次 load_persona）');
 assert.equal(call('qq_send_message'), undefined, '同回合第二条文字同样放行');
-assert.equal(sessionSentCount.get(sess), 3, '发送计数如实累计（表情包不算发送，只有文字与语音计）');
+assert.equal(sessionSentCount.get(sess), 5, '发送计数如实累计（文字 / 语音 / 表情包都算一次发送）');
 console.log('PASS: 同回合多气泡 / 语音连发');
 
 console.log('=== 校验 4：发言后防狂乱收敛 ===');

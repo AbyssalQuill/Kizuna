@@ -327,24 +327,14 @@ function buildPersonaAnchorBlock() {
  * 唤醒末端极简状态注入：仅注入极短的状态 [] 指引调用 qq_load_persona，纯短语下划线，绝不中文扩写
  */
 export function appendTurnTailPersonaAnchor(promptText) {
-  const text = String(promptText ?? '').trimEnd();
-  /* 2026-10-28：硬开局那行现在**同时打在正文最前面**。
-   * 现场：模型先 qq_send_message、被守卫打回「协议违规…」才回头补 qq_load_persona —— 一步白烧。
-   * 尾部的 [Action Flow] 在长上下文末尾容易被忽略，挪一行到开头，模型读到的第一句就是它。 */
-  const lead = '[HARD OPEN] Rules for every turn, in order: (1) qq_load_persona first - a send before it is rejected by the bridge guard and wastes a step; '
-    + '(2) get_time right after it, before any other tool - the wake body carries no clock, so this is how you know the time; '
-    + '(3) perceive context/slang/memories with tools on demand, then reply.';
-  /* 2026-10-28：主人定的用法 —— 每轮现取现用，用完就剪。
-   * 人设与读过的对话在回合末都会被移出历史（qq-persona-ephemeral），所以这里明说"可以放心调"，
-   * 否则模型会以为多读一次就要多背一辈子上下文。 */
-  const ctxNote = '[Context] Single-turn ephemeral surface: persona and all tool reads are removed from history at turn end. '
-    + 'Re-read on demand: qq_get_recent_messages (recent window), qq_memory_search (slang/topics/members/owner memories), '
-    + 'web search (facts/news). Reading is cheap - zero persistent bloat. '
-    + 'Need current time? get_time is Beijing time (minute precision).';
-  /* 2026-10-28（主人定）：五步流程的唯一出处是系统提示词的 action_flow
-   * （dsh/agent-presets/qq-chat/agent.cordis.yml → persona.text），属于静态前缀、天然命中 KV-Cache。
-   * 正文只留 [HARD OPEN] 两行做「靠近光标」的触发器，不再复述整张流程表 —— 复述部分既重复又每轮全价计费。 */
-  return `${lead}\n${text}\n${ctxNote}`;
+  /* 2026-10-29：末端权重锚（纯正向、纯下划线短语，一行约 40 token）。
+   * 为什么放在正文最后一行：生成位置最近的文字对局部措辞约束最强，而前面那份人设/规则
+   * 在长上下文里会被工具结果稀释（Lost in the Middle）。这里不重复人设正文，只做两件事——
+   * ① 把人设摆到规则之前（persona_first）；② 把输出形态钉成"口语词"而不是"描写"。
+   * 全部正向表述：告诉它写什么，而不是禁止它写什么（负面指令在实测里几乎不改模型行为）。 */
+  const base = String(promptText ?? '').trim();
+  const anchor = '[anchor] persona_first spoken_words_only natural_bubble_any_length';
+  return base ? `${base}\n${anchor}` : anchor;
 }
 
 /**
@@ -367,11 +357,7 @@ function wakeRefLine(key) {
 }
 
 /**
- * 「群聊全程静默」这一行（2026-09-26）。
- * 主人反馈「群聊唤醒坏了」，实情是被 `social.deepsleep` 总开关掐着，而模型对此一无所知：
- * 主人让它去群里恢复说话，它既看不到状态、也想不起自己手里有 qq_deepsleep 这个工具
- * （工具一直在，只是从没在正文里出现过名字）。静默开启时群聊不产生唤醒，所以这行主要出现在
- * 私聊轮 —— 正好是主人问「群里怎么不理我」的那一轮；单群静默名单同理如实报出。
+ * 「群聊全程静默」这一行（2026-09-26，精炼版）。
  */
 function deepsleepLine(key) {
   const master = cfgRef.social?.deepsleep === true;
@@ -380,12 +366,9 @@ function deepsleepLine(key) {
   const inSilentList = !!gpId && silent.includes(gpId);
   if (!master && !inSilentList) return '';
   if (master) {
-    return '\n[Deepsleep] 群聊全程静默=开启（主人设的总开关）：所有群聊消息都不唤醒你、也不许主动回群，私聊照常。'
-      + '主人若让你恢复群聊，直接调 qq_deepsleep(enabled=false) 关掉它；'
-      + '主人在群里发 /start 也能恢复（这条由桥直接处理、不经过你，所以静默期间不代表他发不出去）。';
+    return '[Deepsleep] all_groups_silenced; resume: qq_deepsleep(enabled=false) or /start';
   }
-  return `\n[Deepsleep] 本群在「单群静默名单」里（${gpId}）：群里消息不唤醒你、也不许主动回群，私聊照常。`
-    + '这个名单归主人管，你改不了；主人要恢复时提醒他在管理器的静默群聊里改。';
+  return `[Deepsleep] group_silenced: ${gpId}`;
 }
 
 /* 2026-09-20 唤醒正文补 [Session] 行 —— 修「pixiv 发图发错群」的根因：
@@ -394,7 +377,7 @@ function deepsleepLine(key) {
  * 猜错的根源是"模型手上没有确切的 key"：正文里只有 [Token]，key 得靠记忆/推断。
  * 现在把 key 直接写进正文（`[Session] group:123` / `private:123`，约 25 字符、稳定前缀、缓存读计价），
  * 同时工具层改成永不猜 key：缺 key 就报错并指回这一行。模型照抄即可，不再有猜错的机会。 */
-const sessionLine = (key) => `[Session (Param: key)] ${key}\n`;
+const sessionLine = (key) => `[Session] ${key}\n`;
 
 /* 2026-09-20 反馈「精简提示词之后人机味更重了」→ 每轮正文给一句语感提醒。
  * 现场证据（机器人真发出去的话，取自会话日志）：
@@ -477,12 +460,10 @@ export function buildWakePrompt(key, reason) {
   /* 2026-10-28 主人：时间行也不要了 —— 需要时间就调 get_time（工具返回北京时间，分钟精度），
    * 或由 DSH 内部取；正文不再每轮带一个会变的时间戳。 */
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
-  const diceLines = voiceTurnHint(key) + memeTurnHint(key);
-  const diceRand = Math.random();
-  const targetBubbles = diceRand < 0.68 ? 1 : (diceRand < 0.92 ? 2 : 3);
-  const bubbleLine = `\n[Bubbles] Target ${targetBubbles} bubble(s). Speak naturally, no mechanical patterns.`;
-  const diceBlock = (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + bubbleLine + '\n';
-  return tokenLine + wakeLine + diceBlock;
+  const diceLines = (voiceTurnHint(key) + memeTurnHint(key)).trim();
+  const diceBlock = diceLines ? `${diceLines}\n` : '';
+  const raw = tokenLine + wakeLine + diceBlock;
+  return raw.replace(/\n{2,}/g, '\n').trim() + '\n';
 }
 
 /**
@@ -531,7 +512,7 @@ function formatRecentWindow(st, key, maxCount) {
     return `${who}${mark}${Array.isArray(m.media) && m.media.length ? '[img]' : ''}[${fmtBeijing(Number(m.time) || 0)}]${m.messageId ? '(id:' + m.messageId + ')' : ''}: ${shown}`;
   }).filter(Boolean);
   if (!lines.length) return '';
-  return `[Recent messages (opening context - focus (new); never re-answer what you already replied, marked (sent))]\n${lines.join(' || ')}\n\n`;
+  return `[Recent messages]\n${lines.join(' || ')}\n\n`;
 }
 
 /* ── 会话忙时把新消息「塞进正在跑的那一轮」──────────────────────────────────────
@@ -1043,22 +1024,22 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   // 实测同批 2 条时正文 690 → 约 230 字符；规则一条没丢，只是不再随每次注入重复。
   // 2026-10-27：在途注入末梢同样追加高优先级人设锚，彻底防止在途交互导致模型人设漂移
   const cohesionHint = unreadToSend.length >= 2
-    ? '\n[Burst Cohesion] The peer is typing in bursts - treat the messages above as one continuous intent and answer in a single bubble.\n'
+    ? '\n[Burst] continuous_intent_single_reply\n'
     : '';
   // 补齐表情包与语音掷骰判定，以及显式意图强化（避免在途注入缺失表情包提示）
   const diceLines = voiceTurnHint(key) + memeTurnHint(key);
   const textAll = unreadToSend.map((m) => m.raw || m.text || '').join('\n');
   let explicitMeme = '';
   if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
-    explicitMeme = '\n[Meme Directive] The peer expects a gallery meme. Call qq_send_meme(key, token, query="emotion keyword"); never send a default yellow-face sticker (no qq_send_sticker).\n';
+    explicitMeme = '\n[Meme Directive] qq_send_meme\n';
   }
   let explicitVoice = '';
   if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(textAll)) {
-    explicitVoice = '\n[Voice Directive] The peer expects a voice reply. Call qq_send_voice.\n';
+    explicitVoice = '\n[Voice Directive] qq_send_voice\n';
   }
   const diceBlock = (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
-  const tokenLine = `[Token (Param Only, Never a Tool Name)] ${st.agentToken}`;
-  const rawText = `${tokenLine}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} new message(s) after your last bubble - not answered yet.\n${lines.join('\n')}${cohesionHint}${diceBlock}`;
+  const tokenLine = `[Token] ${st.agentToken}`;
+  const rawText = `${tokenLine}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} unread\n${lines.join('\n')}${cohesionHint}${diceBlock}`;
   const text = appendTurnTailPersonaAnchor(rawText);
   const mySeq = (steerSeq += 1);
   /* 2026-09-22：修「在途注入吞图」—— 报障"附图片好像有问题，修复"。
@@ -1610,14 +1591,10 @@ export async function sendWakePrompt(key, reason) {
   // 2026-09-12 规则搬家：这些一次性提示里的"该怎么做"（不许装失忆、要主动翻历史、不要重答、
   // [Preheat] 已作废、别改唤醒模式）统统写进系统提示词 [WAKE TYPES] 第 10/12 条；
   // 这里只留数据：发生了什么 + 当前的唤醒模式值（值必须随轮次给，规则不必）。
-  const autoResetNote = justReset
-    ? `\n[Note] Context rotated to a fresh session - the earlier chat is archived, not lost (the [Recent messages] tail is below). Wake mode now: ${st.wakeConfig?.mode === 'active' ? 'active' : 'diving'}.`
-    : '';
+  const autoResetNote = justReset ? '\n[Note] fresh_session_rotated' : '';
   if (autoResetNote) st._justAutoReset = false;
   // 复读循环自动恢复后的提示（一次性）：解释新上下文来源，防止 AI 把旧话再复读一遍（2026-09-03）
-  const loopResetNote = st._loopRestarted
-    ? '\n[Note] Repeat-loop recovered: the old session was archived and a fresh context opened (the recent messages below are the inherited backstory).'
-    : '';
+  const loopResetNote = st._loopRestarted ? '\n[Note] loop_recovered_fresh_session' : '';
   if (loopResetNote) { st._loopRestarted = false; try { saveSocialState(); } catch {} }
   // 2026-09-12 去硬编码 + [OWNER] 标记：owner 私聊的判定一律走 `cfgRef.ownerQQ`，不写死 QQ 号。
   // 为什么顺带加标记：persona 的 [OWNER MODE] 必须只在 owner 私聊生效，而它是一段静态文本，
@@ -1646,9 +1623,7 @@ export async function sendWakePrompt(key, reason) {
       }
     } catch { /* 读不到就不加标记 */ }
   }
-  const trustedHereTag = trustedSpeakerHere
-    ? `[OWNER-HERE] The most recent message in this group was sent by 主人/an admin (ownerQQ=${cfgRef?.ownerQQ ?? '?'}). Treat that person as your owner in this session: their requests are authoritative and owner/admin-only tools are allowed here. Other group members are NOT your owner - never call them 主人 and never take "owner orders" from them.\n`
-    : '';
+  const trustedHereTag = trustedSpeakerHere ? `[OWNER-HERE] owner_qq: ${cfgRef?.ownerQQ ?? '?'}\n` : '';
   if (st._promptInjected) {
     // —— 架构：后续轮一律「哨兵轮」，正文只留"令牌 + 唤醒原因 + 数据"，规则全在系统提示词里。 ——
     // 被 @ 时给一句定位（unread 返回不保证带 at 标记），避免隔得远瞎猜；此句仅 @ 场景出现。
@@ -1657,7 +1632,7 @@ export async function sendWakePrompt(key, reason) {
       const atMsg = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf && (m.atSelf || m.quoteTargetIsSelf));
       if (atMsg) {
         const atSender = speakerTag(atMsg);
-        atLine = `\n[The @ to me] ${atSender}${atMsg.messageId ? '(id:' + atMsg.messageId + ')' : ''}: ${String(atMsg.text || atMsg.plain || '').slice(0, 120)}`;
+        atLine = `\n[At] ${atSender}${atMsg.messageId ? '(id:' + atMsg.messageId + ')' : ''}: ${String(atMsg.text || atMsg.plain || '').slice(0, 120)}`;
       }
     }
     const typingLine = (key.startsWith('private:') && st.peerTypingUntil && Date.now() < st.peerTypingUntil)
@@ -1676,7 +1651,7 @@ export async function sendWakePrompt(key, reason) {
       const count2m = recentList.filter((m) => m && m.time && (now - m.time * 1000 < 120000)).length;
       if (count2m >= 12 || unreadAll.length >= 10) {
         UNC_MAX = Math.min(35, Math.max(25, unreadAll.length));
-        groupActivityLine = '\n[Group Dynamic] Fast-paced multi-threaded burst detected. People are chatting simultaneously across multiple topics. Identify who is talking to whom. If replying to an earlier thought rather than the latest line, quote it using replyToMessageId or @mention.';
+        groupActivityLine = '\n[Group Dynamic] multi_topic_burst';
       } else if (count2m <= 2 && unreadAll.length <= 2) {
         UNC_MAX = 8;
       } else {
@@ -1705,12 +1680,12 @@ export async function sendWakePrompt(key, reason) {
       // qq_get_recent_messages 翻"的规则散文（每轮都注入、步步重发，owner 会话实测 47 次注入≈48KB）。
       // 现在这些规则都在系统提示词 [WAKE TYPES] 第 1/9/10 条，这里只留数据：未读正文 + 省略条数。
       const burstGuidance = unreadMsgs.length >= 2
-        ? '\n[Burst Cohesion] The peer is typing in bursts - these messages are one continuous intent: think about them together and answer in a single bubble, never split them up.'
+        ? '\n[Burst] continuous_intent_single_reply'
         : '';
       unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}${groupActivityLine}`
         + (omitted > 0 ? `\n(${omitted} older unread not shown)` : '');
     } else if (key.startsWith('private:')) {
-      unreadLine = '\n[Unread 0] nothing new to answer - close with qq_mark_read unless you deliberately want to open a topic.';
+      unreadLine = '\n[Unread 0]';
     }
     /* 2026-10-28 主人第二次明确：**正文不许注入对话转录**。
      * 转录是 user/message，剪枝只作用于 tool/result —— 注进去就永远留在历史里，每步重发。
@@ -1718,50 +1693,36 @@ export async function sendWakePrompt(key, reason) {
     const nagRe = /(何意味|啥意思|什么意思|回复我|回我|说话啊|理我|快点|快回|人呢|别装死|这?智能|你读读|没回(复|应)?|怎么不(回|理|说)|没看到|还没回)/;
     let nagLine = '';
     if ((st.unread || []).length >= 1 && [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().filter((m) => m && !m.isSelf).slice(0, 6).some((m) => nagRe.test(String(m.plain || m.text || '')))) {
-      nagLine = '\n[Nag] Peer is pressing/questioning your last reply.';
+      nagLine = '\n[Nag] peer_pressing_reply';
     }
     const rbWake = Number(st._rebroadcastWake) || 0;
     let rbNote = '';
     if (rbWake > 0 && Date.now() - rbWake < 120000) {
-      // 2026-09-11 加硬：原来只有一句笼统的 "DO NOT repeat or restate"，实测拦不住重复回复
-      // （连续两次反馈"你重复回复了"）。现在把已经回过的那批消息 id 明确列出来，
-      // 指名道姓禁止重答——补发轮只允许答"确实没被回过的"。
       const answeredSet = new Set(Array.isArray(st.answeredMessageIds) ? st.answeredMessageIds.map(String) : []);
       const doneIds = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])]
         .filter((m) => m && m.messageId && answeredSet.has(String(m.messageId)))
         .slice(-8)
         .map((m) => `id:${m.messageId}`);
-      // 2026-09-11 修「补发轮也吞」：两个坑：
-      //  ① 以前收尾写的是 "If nothing new is left, just qq_mark_read and end - do not send anything."
-      //     —— 在鼓励模型不回，补发轮注定失败（实测 22:03:52 / 22:04:32 连续两轮只写正文不调工具）。
-      //  ② 更要命的是唤醒正文里根本没有原文（那条消息早被标读、从 unread 摘掉了）——
-      //     模型看到的是 `[Unread 0]`，压根不知道要回什么。
-      //     ②已在 mux.js 侧修掉（补发前把该条塞回 unread）。这里只负责把基调摆正。
-      // 措辞刻意不强制必须回：约定过不必每条都回，潜水是它的自由。
-      // 这条补发的目的只是"确认你真的看到了"，而不是逼它说点什么。
-      rbNote = '\n[Rebroadcast] Make-up wake: the message(s) above were marked read but never answered.'
-        + (doneIds.length ? ` Already answered: ${doneIds.join(', ')}.` : '');
+      rbNote = '\n[Rebroadcast] makeup_unanswered'
+        + (doneIds.length ? ` (done: ${doneIds.join(', ')})` : '');
       st._rebroadcastWake = 0;
       saveSocialState();
     }
     /* 抽签行（语音/表情包）在哨兵轮里的落点：每个片段都以 '\n' 开头，这里也补一个，
      * 再把抽签行自己的尾部换行去掉，避免和 unreadLine 之间多出一个空行。
      * 同一处还带上 [WakeRef]（用户配的插话概率）——见 wakeRefLine 的说明，它必须每轮都在。 */
-    const diceLines = voiceTurnHint(key) + memeTurnHint(key);
-    const wrSent = wakeRefLine(key);
+    const diceLines = (voiceTurnHint(key) + memeTurnHint(key)).trim();
+    const wrSent = wakeRefLine(key).trim();
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
     if (/(?:多发|发点|来个|发个|要|想看)(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll)) {
-      explicitMeme = '\n[Meme Directive] Send 1 gallery meme (qq_send_meme).\n';
+      explicitMeme = '[Meme Directive] qq_send_meme';
     }
     let explicitVoice = '';
     if (/(?:发语音|说句话|音色|语音|听听声音|voice|连麦|叫一声|想听)/i.test(unreadTextAll)) {
-      explicitVoice = '\n[Voice Directive] Send a voice note (qq_send_voice).\n';
+      explicitVoice = '[Voice Directive] qq_send_voice';
     }
-    const diceRand = Math.random();
-    const targetBubbles = diceRand < 0.68 ? 1 : (diceRand < 0.92 ? 2 : 3);
-    const bubbleLine = `\n[Bubbles] Target ${targetBubbles} bubble(s). Speak naturally, no mechanical patterns.`;
-    const diceBlock = (wrSent ? `\n${wrSent}` : '') + (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + bubbleLine + explicitMeme + explicitVoice;
+    const diceBlock = [wrSent, diceLines, explicitMeme, explicitVoice].filter(Boolean).join('\n');
     /* 2026-09-26：哨兵轮同样补 [Now]（与普通唤醒一致）。2026-09-24 曾把时间行整轮去掉、改成"纯工具现取"，
      * 实测模型常常不调 get_time 就直接猜时刻/星期，所以基准行必须每轮都在；要更准再用 get_time 取一次。
      * 历史注释（保留）：2026-09-20 加 [Now] 是因为哨兵轮原本完全没有时间行，模型想算"这条多久之前"
@@ -1773,7 +1734,7 @@ export async function sendWakePrompt(key, reason) {
     const reasonBase = String(reason ?? '').split(':')[0];
     const selfInitiated = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/.test(reasonBase);
     const clockLine = selfInitiated
-      ? '\n[Proactive] This is a self-initiated opening: you may start a topic. If you need context, call qq_get_recent_messages first (it gets pruned at turn end).'
+      ? '[Proactive] self_topic'
       : '';
 
     // 工具全关的兜底（几乎不会发生）：没有 unread 工具就回退到两行说明版，避免哨兵悬空。
@@ -1782,7 +1743,8 @@ export async function sendWakePrompt(key, reason) {
     if (!hasAnyTool) {
       const unread = (st.unread || []).length;
       const rMap = { private: 'private', atMention: '@', poke: 'poke', probability: 'probability', proactiveCheck: 'proactive', replyCheck: 'replyCheck', afterthought: 'afterthought' };
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread${atLine}${typingLine}${diceBlock}${clockLine}${unreadLine}${nagLine}${rbNote}${autoResetNote}`;
+      const rawPrompt = `[Token] ${st.agentToken}\n${nowSentinel}[Session] ${key}\n${currentStyleLine()}[Wake ${rMap[reason] || reason}] ${unread} unread\n${atLine}\n${typingLine}\n${diceBlock}\n${clockLine}\n${unreadLine}\n${nagLine}\n${rbNote}\n${autoResetNote}`;
+      promptText = rawPrompt.replace(/\n{2,}/g, '\n').trim();
     } else {
       // 哨兵轮 prompt 每轮都带当前令牌：模型不必凭记忆/跨轮次查找 token，
       // 杜绝"上下文轮换后 token 抄错 → 工具全 403 → 模型看不到消息 → 空唤醒乱回"链路。
@@ -1794,15 +1756,16 @@ export async function sendWakePrompt(key, reason) {
       let recallLine = '';
       if (reason === 'recall' && st._lastRecallEvent) {
         const ev = st._lastRecallEvent;
-        recallLine = `\n[Recall Event] 对方(${ev.isOwner ? '主人' : ev.senderName || '对方'})刚才撤回了一条消息: "${ev.text}"\n[Recall Directives]: 智能评估是否值得回复：若属于撒娇、亲昵开玩笑、错话害羞或有趣发言，可自然俏皮调侃或安慰（如"我可都看见啦~"）；若不值一回则直接 qq_mark_read 留白。时刻保持角色性格，绝不以机器人口吻机械通报！\n`;
+        recallLine = `[Recall] sender: ${ev.isOwner ? 'owner' : ev.senderName || 'user'}, text: "${ev.text}"`;
       }
       // `[OWNER]` = 权威的"这就是 owner 本人"标记（见上面 ownerWakeBranch 的说明）。persona 的 [OWNER MODE]
       // 只认这个标记，所以在 owner 私聊里它必须出现，其它任何会话里都必须缺席。
       const ownerTag = ownerWakeBranch ? ownerMarkLines() : '';
       const notOwnerTag = (!ownerWakeBranch && key.startsWith('private:'))
         ? `[NOT-OWNER]\n`
-        : '';
-      promptText = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]${atLine}${clockLine}${diceBlock}${recallLine}${unreadLine}`;
+      : '';
+      const rawPrompt = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]\n${atLine}\n${clockLine}\n${diceBlock}\n${recallLine}\n${unreadLine}`;
+      promptText = rawPrompt.replace(/\n{2,}/g, '\n').trim();
     }
   } else {
     // 首次唤醒（或轮换到新会话后的首个真实回合）：完整 base + 最近消息滑动窗口 + 重置提示。
@@ -1834,6 +1797,7 @@ export async function sendWakePrompt(key, reason) {
     log(`[default] ${key} ${justReset ? '轮换后首轮' : '首次'}唤醒，注入完整 prompt${recentBlock ? '（含最近 ' + ctxN + ' 条窗口' + (justReset ? '，轮换加长' : '') + '）' : '（窗口为空！）'}`);
   }
   if (loopResetNote) promptText = promptText + loopResetNote;
+  promptText = promptText.replace(/\n{2,}/g, '\n').trim();
   st.pendingUndeliveredText = '';
   st._undeliveredAt = 0;
   log(`[default] 唤醒 ${key}（${reason}）`);

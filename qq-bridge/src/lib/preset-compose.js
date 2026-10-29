@@ -31,9 +31,12 @@ function indentBlock(text, fallbackLine) {
 
 /** 生成带标记的那段（缩进已就位）。遵照动态人设架构：不再将庞大人设注入预设，仅保留动态读取工具指引 */
 export function buildOverrideBlock({ persona = '', speechRules = '' } = {}) {
-  const line = persona
-    ? `${INDENT}call_tool_qq_load_persona_for_character`
-    : `${INDENT}${NO_PERSONA_LINE}`;
+  /* 2026-10-29：系统提示词里始终只放"去读人设"这一句，不再因人设空/非空而换文案。
+   * 旧写法在人设清空时会把 NO_PERSONA_LINE 那句"尚未指定专属人设"烧进 preset，
+   * 而 preset 要等下次重启才重装 —— 于是切完人设，会话里还挂着一句"没有专属人设"，
+   * 与工具刚读到的角色卡自相矛盾（线上 06:53 那次 clear 之后正是这个状态）。
+   * 人设的唯一来源是 qq_load_persona 的返回值，系统提示词保持恒定，切换即生效。 */
+  const line = `${INDENT}call_tool_qq_load_persona_for_character`;
   return [
     COMPOSE_BEGIN,
     `${INDENT}[PERSONA]`,

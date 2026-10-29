@@ -47,15 +47,20 @@ export function stripActionBrackets(text) {
   return String(text ?? '');
 }
 
-export function normalizeFirstPersonSelfCall(text) {
-  let s = String(text ?? '');
-  // 去除软萌/人机味的不自然自称"人家"，规范为自然第一人称"我"（保留"别人家"、"去人家家里"等正常语法）
-  return s.replace(/(?<=^|[，。！？、~～\s]|像|跟|给|帮|趁|让|被|把)人家(?![家里园地室院伙男女人])/g, '我');
+export function stripTrailingPeriod(text) {
+  let s = String(text ?? '').trimEnd();
+  // 只去掉末尾连续的中文句号与英文句号，问号（？/?）、感叹号（！/!）、波浪号等正常保留
+  return s.replace(/[。.]+$/g, '').trimEnd();
 }
 
-// 出站文本统一清洗：令牌脱敏 → 表情/图片占位符清扫 → 输入法 emoji 剥离 → 第一人称规范。
+export function normalizeFirstPersonSelfCall(text) {
+  // 遵循指示：中间的正则全部去掉，不干预中间语句表达
+  return String(text ?? '');
+}
+
+// 出站文本统一清洗：表情/图片占位符清扫 → 输入法 emoji 剥离 → 仅去除末尾句号（问号叹号保留）。
 export function cleanOutboundText(text) {
   const swept = sweepMessageArtifacts(text);
   const noEmoji = stripImeEmoji(swept.text);
-  return normalizeFirstPersonSelfCall(noEmoji);
+  return stripTrailingPeriod(noEmoji);
 }

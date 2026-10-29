@@ -99,3 +99,372 @@ cp /tmp/staged.js /root/qq-bridge/src/core/.new && mv -f .new /root/qq-bridge/sr
 3. 旧会话的人设副本（916 份）仍在日志里，仅不可达；如需回收磁盘可另行归档。
 4. 服务器 `/root/qq-bridge` 不是 git 仓库（一直 scp 覆盖）：建议改成 `git pull --ff-only` 部署，"线上跑的是哪个 commit"才有锚点。
 5. 下一次真实唤醒做端到端复核：确认前两个工具仍是 `qq_load_persona` → `get_time`，且回合末 `ephemeral_turn_pruned` 计数增长（现有测试只覆盖渲染层，没覆盖线上实跑）。
+
+---
+
+## 6. 条目 23（2026-10-29）：表情包防重打散、第一步并发感知流与黑话/联网主动性落地
+
+### 背景与根因
+1. **端白饭连发顽疾**：现场私聊实测中，模型无论聊何种话题，频繁且连续发送 `蓝发女仆鲸鱼娘端白饭.webp`。排查发现 `mcp-napcat-safe.js` 的 `pickExistingMemeRow` 函数始终取 SQLite 检索结果的第 1 行；而第 1 行恰好是端白饭，且系统无任何会话级发图防重和随机打散，导致一有通用情绪请求就必定发出同一张图。
+2. **缺乏并发调用与黑话/联网感**：
+   - 过去 `agent.cordis.yml` 和 `[HARD OPEN]` 把调用流程固化为严格串行的 `step_1` 到 `step_5`（声明先调人设，人设之后再调时间，之后再调感知），导致模型不敢在首步并发发起工具，每轮产生多达 7 步串行工具调用，延迟极大人机感重。
+   - `qq-tool-restrict.mjs` 守卫实际只针对 `qq_send_message` / `qq_send_voice` 作发言前必须 load 人设的检查；只读工具（`get_time`, `search_slang`, `web_search`, `qq_memory_search`）在第一步原生支持并行批量调用。
+3. **系统提示词 vs 唤醒正文放置策略**：
+   - 系统提示词享受 98% KV-Cache 命中（单价 0.02元/M，未命中 1.00元/M，差价50倍）。因此大段规则、黑话与联网主动性、表情包挑选准则必须沉淀在系统提示词静态前缀中；
+   - 唤醒正文仅保留 1 行极简触发器锚点（约 30 Token）；
+   - 表情包防重由后端代码物理实现随机抽取与排除，实现零 Token 绝对防御。
+
+### 修改明细
+1. **`src/mcp-napcat-safe.js`**：
+   - 引入会话级近期发送表情队列 `recentSentMemesMap`（记录当前会话最近发送的 15 张表情文件名）。
+   - 重构 `pickExistingMemeRow`：增加 `excludeFiles` 过滤逻辑，优先排除最近刚发过的图片；从满足条件的有效文件池中通过 `Math.random()` 随机抽取，彻底杜绝首行固定。
+   - 完善 `qq_send_meme`：挑图时传入会话排除列表；发图成功后同步登记入防重队列。
+2. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 重构 Action Flow 为两阶段并发流：
+     - `phase_1_parallel_perception`：在第一步（Step 1）以单 batch 并发调用 `qq_load_persona` + `get_time`，并主动并发检索网络黑话（`search_slang`，如 666/神了/抽象/唐/典）及实时资讯（`web_search`）；
+     - `phase_2_context_critique_and_dispatch`：结合完备感知进行自然思考，执行单/双气泡回复、拟人语音及结合语境的精准表情包，禁止连发同种表情。
+3. **`src/core/wake-send.js`**：
+   - 精简 `[HARD OPEN]` 为极简并发引导：`Step 1 (Parallel Perception): Call qq_load_persona + get_time (+ search_slang/web_search/qq_memory_search concurrently if slang/facts needed) in ONE parallel batch; Step 2 (Critique & Dispatch): Send context-matching voice/message/meme, then reply OK.`
+4. **`tests/meme-memory-immersion.test.js`**：
+   - 追加测试验证表情包排除列表与随机候选池逻辑，断言端白饭在排除后被成功避开。全部测试 100% PASS。
+5. **表情包全量返回与模型自主决策（用户指示追加）**：
+   - 用户明确指示：“这段可以返回全量图片然后由模型自己决定选什么”。
+   - 彻底打破后端盲盒抽取：将 `qq_meme_search` 的搜索容量从 8~20 张扩容至全量（上限 100 张），并附带画面细节描述（caption）与 `[⚠️本会话最近已发过]` 标识；
+   - 在系统预设与正文中确立规范：Phase 1 并发调用 `qq_meme_search` 获取全量候选，Phase 2 结合真实视觉细节由模型自主挑选最贴合语境的表情并传参 `qq_send_meme(file)` 精准发送；同时兼容旧有 fallback 源码回归测试。
+
+---
+
+## 7. 条目 24（2026-10-29）：基于知乎/CSDN/GitHub 提示词权重与注意力机制的深度拟人化重构
+
+### 背景与现场实况分析
+1. **真实问题定位（2026-10-29 上午现场取证）**：
+   - 用户问“那你觉得怎么才能改变这个现状呢，怎么去设置提示词”，机器人竟回答“别给我一堆规矩了，你干脆直接跟我说这会儿别说话，我闭嘴”、“我这套话确实背熟了，一开口就滑进去”；
+   - 用户发“何意味”（网络流行抽象梗，意为“这是什么鬼/胡言乱语什么”），机器人竟然字面拆解回复“意思就是剩下那半你念我也不想听”；
+   - 用户吐槽“你怎么这么笨”，机器人自暴自弃怨妇式回复“我本来就笨嘛”。
+2. **理论分析（知乎/CSDN/SillyTavern 前沿研究）**：
+   - **否定陷阱（白熊效应 / Ironic Process Theory）**：原 `persona.md` 中大量写满“你不要说X”、“严禁承认自己是人机”、“严禁说改哪儿你说”，导致大模型在注意力机制中高权重捕捉到这些违禁词，被用户一激就顺理成章背出原话。
+   - **少样本学习（Few-Shot In-Context Learning）缺失**：缺乏正向规范范例，模型遇到提问只能靠通用预训练语料补全，极易退化成客服或杠精。
+   - **近因效应（Recency Bias）末尾权重**：光标前最后一句若只讲工具时序，生成文字时将完全丢失人设神韵。
+
+### 修改明细
+1. **`persona.md` 结构化净化与正向 Few-Shot 锚定**：
+   - 彻底清除所有带有“你不要说……”的负面字面量。
+   - 建立全新的 `<dialogue_examples>` 少样本对话流：针对“询问提示词/技术元话题（俏皮装傻不破壁）”、“网络黑话拆招（何意味/666/唐）”、“主人宠溺与嫌笨（傲娇娇嗔依赖）”提供具象化的问答范例，通过 Next-Token 概率天然锁定语调。
+2. **`src/core/wake-send.js` 注入高权重尾部近因锚点**：
+   - 在正文最末端追加 `[Tone Anchor]`：`Pure human immersion: 1 short spoken bubble (1~10 words). Zero AI essay, zero apologies or defensive explanations, never take slang (like 何意味/666/唐) literally, and never debate AI prompts/rules (play dumb/banter instead).`
+3. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 在 Phase 2 批评与派发流程中，明确声明禁止辩解式道歉、严禁字面拆解黑话、坚决维护第四面墙。
+
+---
+
+## 8. 条目 25（2026-10-29）：系统提示词极致瘦身与正向沉浸驱动重构
+
+### 背景与用户指示
+- 用户明确指示：“很明显不对，应该是最初的极简人设就好，然后就是去掉所有规则，改为正向引导沉浸式角色扮演和一些工具上的那种要点，而不用规则规定人设。是最简的系统提示词”。
+- 过去系统提示词堆积了大量审查条文（ban_xxx、critique_xxx），导致模型像戴着脚镣演戏，内心时刻在做规则审查，出现极度僵硬、怨妇辩解的人机味。
+
+### 改造明细
+1. **`dsh/agent-presets/qq-chat/agent.cordis.yml` 彻底去规则化与最简化**：
+   - 彻底删除 rules 列表下的十多项 ban_xxx 负面禁令及 step_4 内部的自我审查机制。
+   - 建立正向沉浸引导（`positive_immersion`）：引导模型全情沉浸在角色卡赋予的灵魂中，忘掉一切 AI/技术概念，展现真情实感。
+   - 精炼工具执行要点（`tool_essentials`）：清晰交代 Phase 1 首步感知并发、Phase 2 自由表达与回复 OK 结轮。
+2. **`src/core/wake-send.js` 净化为正向沉浸与行动要点**：
+   - 移除负面禁令，保留极简的 `[Actions]` 与 `[Immersion]` 引导。全部测试 100% PASS。
+
+---
+
+## 9. 条目 26（2026-10-29）：Action 流程优化与表情包 English-query 容错重构
+
+### 现场事故取证分析
+1. **多发 meme 且失败原因**：用户截图显示模型在私聊中调用了 `qq_send_meme({ query: "emotion" })`，因原工具描述含有 `emotion/content description`，导致模型照搬了英文单词 `emotion`。库里无英文匹配，报错返回 `按「emotion」没搜到匹配的表情`，诱发模型在同回合多发一次 meme。
+2. **发错消息与语境脱节原因**：Action 流程此前未明确“文字为主、表情为辅”，模型在收到“马上吃泡面”时单发了一张毫无上下文关联的“生气握拳愤怒”表情，且无任何文字；下回合面对主人的问号又自嘲“发错了发错了，表情包自己跳出去的”，造成严重人机发错灾难。
+
+### 改造明细
+1. **`src/mcp-napcat-safe.js`**：
+   - 工具参数描述去英文：清除 `emotion/content description` 英文字眼，明确为中文关键词示例（开心/生气/傲娇/日常）。
+   - 在 `firstMemeByQuery` 内部增加英文映射容错：若传入 `emotion`/`emotions` 自动容错为 `日常`，若传入 `happy`/`angry` 自动映射为对应中文，彻底杜绝报错打断与二次重试。
+2. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 强化 Action 流程主次顺序：明确 `primary: qq_send_message` 以自然口语短句为主体，表情包仅作为附带情绪增强，严禁无文字单发表情包，发完立即回复 `OK` 结轮。
+3. **`src/core/wake-send.js`**：
+   - 行动指引明确：`Step 2: Reply spoken words via qq_send_message (optionally attach matching meme), then reply literal OK.` 确保单轮一次性自然闭环。
+
+---
+
+## 10. 条目 27（2026-10-29）：纯下划线精炼短语重构与 PTC 彻底清退
+
+### 背景与用户指示
+- 用户明确要求：“这一段应该可以精简掉，而且PTC早就不用了，然后我说的短语加下划线呢”。
+- 将预设提示词彻底剥离散文句子，换为高信息密度、零 token 浪费的下划线短语（Underscore Phrases）。
+- 彻底清理遗留在预设底部的 PTC（Programmatic Tool Calling）注释及插件声明，并同步清理测试中的旧断言。
+
+### 改造明细
+1. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 彻底删除长篇英文散文叙述，采用纯下划线短语：
+     ```yaml
+     role_rp_agent
+     pure_in_character
+     living_character_positive_immersion
+     natural_chat_presence
+     load_persona_tool_qq_load_persona
+     send_msg_tool_qq_send_message
+     step_1_load_persona_and_time_parallel
+     step_2_send_spoken_message_bubbles
+     optional_attach_context_meme
+     reply_only_literal_ok_closure
+     session_key_strict_verbatim
+     on_demand_tools_flexible
+     parallel_tool_calling_enabled
+     ```
+   - 彻底删除底部的 PTC 长注释与 `- id: tool-presentation` 声明（净删减近 40 行冗余）。
+2. **`tests/persona-ephemeral.test.js`**：
+   - 删除过时的 `ok('预设声明 PTC 呈现', ...)` 断言，全套测试 100% 通过。
+
+---
+
+## 11. 条目 28（2026-10-29）：感知三步流（人设-时间-最近消息）与表情包严禁单甩重构
+
+### 背景与用户指示
+- 用户指示：“严禁无文字单甩表情包：表情包只能作为附带的情绪辅助，绝不单发；单轮一次性自然闭环：这个根本不用啊，可以啊，然后就是不得先调人设，然后时间，最近消息再回吗，因为我们每次都清空前一轮了啊”。
+- 物理机制对齐：由于 `qq-persona-ephemeral` 插件在每轮结束后都会把人设（`qq_load_persona`）、时间（`get_time`）、最近对话（`qq_get_recent_messages`）的结果全部替换为占位符剪除，导致新回合模型上下文 surface 处于“无角色卡、无准确时间、无最近对话”的空白态。
+- 模型必须在每回合第 1 阶段（Perception）先并行获取这三项关键上下文，然后再进入第 2 阶段（Reply）回复。
+- 表情包绝对禁止无文字单甩，只作为文字气泡的情绪辅助。同时解除死板的“单轮一次性必须 OK 闭环”限制，允许模型自然交互。
+
+### 改造明细
+1. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 短语更新为清晰的感知三步流与表情包辅助原则：
+     ```yaml
+     role_rp_agent
+     pure_in_character
+     living_character_positive_immersion
+     natural_chat_presence
+     perception_sequence_step_1_load_persona
+     perception_sequence_step_2_get_current_time
+     perception_sequence_step_3_get_recent_messages
+     perception_parallel_batch_calls_supported
+     action_speak_via_qq_send_message
+     strictly_forbid_standalone_meme_without_text
+     meme_only_as_emotional_attachment_accompanying_text
+     session_key_strict_verbatim
+     on_demand_tools_flexible
+     ```
+   - 彻底移除 `reply_only_literal_ok_closure`。
+2. **`src/core/wake-send.js`**：
+   - 引导对齐：`[Actions] Perception: Call qq_load_persona + get_time + qq_get_recent_messages (perceive persona, time, chat context); Then reply spoken words via qq_send_message. Rule: A meme must ONLY be an emotional attachment accompanying spoken text, NEVER send a standalone meme without text.`
+3. **`src/mcp-napcat-safe.js`**：
+   - 工具 `qq_send_meme` 描述彻底清理历史遗留的 `Send the image directly with no preceding text;`，重写为：`Attach one matching meme from the bundled meme packs to complement your spoken QQ message. STRICT RULE: A meme must ONLY be sent as an emotional attachment alongside spoken text via qq_send_message; NEVER send a standalone meme without spoken text.`
+4. **`dsh/agent-presets/qq-chat/qq-tool-restrict.mjs`**：
+   - 将 `qq_send_meme` 纳入 `isSendTool` 守卫中，确保在未执行第一步感知加载人设前绝不能偷跑发表情包。
+
+---
+
+## 12. 条目 29（2026-10-29）：表情包英文分区（happy/sad/angry等）原生适配与发完调工具仅回 OK 闭环
+
+### 背景与用户指示
+- 用户指示：“无文字单甩表情包本来就是可以的，随便发啊，谁让你禁止了，然后就是本来就是调工具发的消息，没必要说在上下文，就会OK就好了啊”；“表情包分区改为英文的happy，sad那些然后英文参数不就行了”。
+- 数据库底层事实：经对 `/root/backup_memes_20261028/whale-fanart-001/index.db` 实体取证，`memes` 数据表里的 `tag` 列原本就是纯英文格式（`happy`: 48, `angry`: 15, `sad`: 13, `daily`: 27, `shy`: 24, `sigh`: 11, `surprised`: 9, `confused`: 6, `sleep`: 4, `love`: 4, `work`: 1）。
+- 此前由于在 `firstMemeByQuery` 中将传入的英文情绪映射成中文（如 `happy` -> `开心`），再去匹配 `caption LIKE '%开心%'`，导致由于 caption 是纯中文而没有英文 `happy`，反倒造成匹配落空！
+- 彻底纠偏：直接支持英文情绪分区参数（`happy`、`sad`、`angry`、`shy`、`daily` 等），直接按 `tag = ?` 从 SQLite 中精准抓取表情包；同时无论模型传 `emotion`、`tag` 还是 `query` 均无缝对接；中英文情绪词双向映射。
+- 允许自由单甩或附带表情包，调完工具后直接回 `OK` 结轮，不在上下文冗余输出。
+
+### 改造明细
+1. **`src/mcp-napcat-safe.js`**：
+   - `firstMemeByQuery` 支持英文分区原生直查：当 `query` 或 `tag` 传入英文分区名时，自动识别并执行 `SELECT file_name, tag, caption FROM memes WHERE tag = ?`，精准匹配所有 48 张 happy、15 张 angry 等；中文情绪词亦双向映射为英文 tag；`emotion` 映射为 `daily` 兜底。
+   - `qq_send_meme` 参数新增 `emotion` 支持，说明更新为支持单发或附带、支持中英文情绪标签，彻底解除单甩表情包的负面禁止。
+2. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 系统提示词更新为纯短语：
+     ```yaml
+     role_rp_agent
+     pure_in_character
+     living_character_positive_immersion
+     natural_chat_presence
+     perception_sequence_step_1_load_persona
+     perception_sequence_step_2_get_current_time
+     perception_sequence_step_3_get_recent_messages
+     perception_parallel_batch_calls_supported
+     action_tools_qq_send_message_and_qq_send_meme
+     express_freely_with_text_and_meme
+     reply_only_literal_ok_closure
+     session_key_strict_verbatim
+     on_demand_tools_flexible
+     ```
+3. **`src/core/wake-send.js`**：
+   - 行动指引更新：`[Actions] Perception: Call qq_load_persona + get_time + qq_get_recent_messages concurrently; Action: Express freely via qq_send_message and/or qq_send_meme (standalone memes or text-attached both welcome); Closure: Reply literal OK after tool calls.`
+
+---
+
+## 13. 条目 30（2026-10-29）：MCP 压缩代理（mcp-compressor）包装调用与直连双模指引
+
+### 背景与用户指示
+- 用户指示：“我觉得mcp压缩代理那个工具也要提醒一下”。
+- 当系统启用 `mcp-compressor` 压缩代理时，DSH 模型端所见的工具集会被收敛打包为包装工具（`napcat_invoke_tool` 和 `napcat_get_tool_schema`），真实工具名作为入参传入（`tool_name: 'qq_send_message', tool_input: {...}`）；而在直连模式下，模型则直接调用裸工具名（`qq_*`）。
+- 若提示词中未显式提及该模式，在压缩代理开启时模型可能因找不到顶层 `qq_*` 工具而感到困惑或产生调用阻碍。
+
+### 改造明细
+1. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 在纯短语规范中显式增加代理兼容指引：
+     ```yaml
+     mcp_compressor_proxy_compatibility
+     if_proxy_wrapped_use_napcat_invoke_tool_with_tool_name_and_tool_input
+     if_direct_call_qq_tools_by_name
+     ```
+2. **`src/core/wake-send.js`**：
+   - 动作指引尾部补充双模调用提醒：`(Tool mode: Call directly by name, or if wrapped by MCP compressor proxy, use napcat_invoke_tool with tool_name + tool_input).`
+
+---
+
+## 14. 条目 31（2026-10-29）：行动流与规则全面归位系统提示词，净化每轮用户正文注入
+
+### 背景与用户指示
+- 用户指示：“那actions为啥不能放系统提示词，能放的其实都可以吧”。
+- 历史技术债：过去在 `wake-send.js` 中通过 `appendTurnTailPersonaAnchor` 在每一轮的用户消息头尾重复拼接 `[Actions]`、`[Context]`、`[Immersion]` 模板文本，初衷是防止长上下文末尾衰减，但导致了严重问题：
+  1. 职责混乱：系统级规则与行动流程分散在两处，违背“静态规则入系统提示词，动态事件入用户正文”的设计原则；
+  2. 上下文膨胀与缓存破坏：每轮唤醒都重复打入大段相同的流程引导，破坏前缀缓存（Prefix Cache）复用率，污染会话记录；
+  3. 模型认知干扰：模型既在系统提示词里读到了规则，又在用户正文里反复看到一模一样的 `[Actions]` 框架。
+- 彻底纠偏：凡是静态的规则、感知时序、表达方式、工具模式与沉浸引导，**一律且完全收归系统提示词（`agent.cordis.yml`）集中托管**。唤醒消息仅承载动态事件数据（`[Token]`、`[Session]`、`[Unread]`），彻底净化用户正文。
+
+### 改造明细
+1. **`src/core/wake-send.js`**：
+   - 清除 `appendTurnTailPersonaAnchor` 内部的 `lead`、`ctxNote`、`immersionAnchor` 等重复指令拼接，直接返回纯净的 `promptText`。
+2. **`dsh/agent-presets/qq-chat/agent.cordis.yml`**：
+   - 系统提示词作为唯一的权威中枢，以纯下划线精炼短语完整覆盖感知（1人设-2时间-3消息）、行动（文字/表情包自由发）、闭环（发完直接回OK）、沉浸（积极角色扮演）及 MCP 压缩代理模式，形成高内聚、零冗余的系统级架构。
+
+
+
+
+
+
+---
+
+## 15. 条目 32（2026-10-29）：全量唤醒词极简化、Action 工具流强制约束与推理能力恢复（Reasoning: High）
+
+### 背景与用户指示
+- 用户指示：
+  1. “ok结尾呢，加上，然后就是，确实你这个action啊，action没执行”；
+  2. “[Deepsleep] 这个唤醒词也精简，其他类似的也找到并精简”；
+  3. “表情包也不对，好像也没有推理吧”。
+- 深度取证与根因：
+  1. 上一轮正文完全清空 Action 指引后，模型缺乏明确的 Action 协议指引，在收到新消息后直接在回复文本框中吐字，绕过了全部感知与消息发送工具，亦未能以单字面量 `OK` 结轮；
+  2. 历史遗留的大量唤醒标签（如 `[Deepsleep]`、`[OWNER-HERE]`、`[Bubbles]`、`[Mid-turn]`、`[Burst Cohesion]`、`[Voice/Meme Directive]`）夹杂上百字中文散文与说明，严重占用 token 上下文并干扰模型注意力；
+  3. 生产机 DSH 配置（`cordis.patch.yml`）与桥配置中 `dsh.reasoningEffort` 被显式配置为 `"off"`，导致 DeepSeek 官方接口关闭了思维链输出（Thinking/CoT），因此无推理过程。
+
+### 改造明细
+1. **Action 工具流与单字面量 OK 结轮强约束**：
+   - `src/core/wake-send.js`：在 `appendTurnTailPersonaAnchor` 中注入精炼单行约束：
+     `[Actions] 1_perception: qq_load_persona, get_time, qq_get_recent_messages; 2_dispatch: qq_send_message (optional qq_send_meme with emotion); 3_closure: reply_literal_OK (never speak dialogue directly in assistant response text)`；
+   - `dsh/agent-presets/qq-chat/agent.cordis.yml`：系统提示词以纯下划线精炼短语明确约束：
+     `action_dispatch_use_tools_only`、`strictly_forbid_speaking_dialogue_in_assistant_response_text`、`dispatch_spoken_bubbles_via_qq_send_message`、`dispatch_meme_freely_via_qq_send_meme_with_english_or_chinese_emotion`、`step_3_closure_reply_single_literal_OK_after_tools`。
+2. **全量唤醒词（Bracket Tags）长篇散文全面瘦身**：
+   - `[Deepsleep]`：全局静默压缩为 `[Deepsleep] all_groups_silenced; resume: qq_deepsleep(enabled=false) or /start`，单群静默压缩为 `[Deepsleep] group_silenced: ${gpId}`；
+   - `[Bubbles]`：压缩为 `[Bubbles] target: ${targetBubbles}`；
+   - `[Recent messages]`：去除括注长篇散文，极简为 `[Recent messages]`；
+   - `[Burst]` / `[Burst Cohesion]`：统一压缩为 `[Burst] continuous_intent_single_reply`；
+   - `[Note]`：压缩为 `fresh_session_rotated` / `loop_recovered_fresh_session`；
+   - `[OWNER-HERE]`：压缩为 `[OWNER-HERE] owner_qq: ${cfgRef?.ownerQQ ?? '?'}`；
+   - `[Group Dynamic]`：压缩为 `multi_topic_burst`；
+   - `[Unread 0]`：去除关闭散文，保留纯净标签；
+   - `[Nag]`：压缩为 `peer_pressing_reply`；
+   - `[Rebroadcast]`：压缩为 `makeup_unanswered`；
+   - `[Proactive]`：压缩为 `self_topic`；
+   - `[Recall]`：压缩为 `[Recall] sender: ${ev.isOwner ? 'owner' : ev.senderName || 'user'}, text: "${ev.text}"`；
+   - `[At]`：由 `[The @ to me]` 极简化；
+   - `[Mid-turn]`：去除历史说明长句，统一为 `[Mid-turn] ${unreadToSend.length} unread`；
+   - `send-dice.js` 与 `voice.js`：表情包与语音抽签散文全部换为短语（`[Meme] HIT: qq_send_meme`、`[Voice] HIT: qq_send_voice` 等）。
+3. **推理能力恢复（Reasoning: High）**：
+   - `config.json`：将 `dsh.reasoningEffort` 由 `"low" / "off"` 调整为 `"high"`；
+   - 同步更新生产机 `/root/.dsh/profiles/web/cordis.patch.yml` 中的 `reasoningEffort: high`，全面开启 DeepSeek 模型的深度思考链（CoT）。
+
+---
+
+## 16. 条目 33（2026-10-29）：彻底清除唤醒正文 Action 散文与空行、移除显式气泡数要求、出站仅剥离末尾句号
+
+### 背景与用户指示
+- 用户指示：
+  1. “问题其实出在这个action的定义，然后怎么还有个空的，然后气泡在人设和系统提示词里我觉得没必要显式指明是多少了，不然还会照做，然后气泡唤醒要求也可以去掉”；
+  2. “然后中间的正则也可以去掉，只是让末尾不输出句号就好了，问号啥的可以”。
+- 深度拆解与根因：
+  1. **Action 定义归属**：静态 Action 规范已全部进入系统提示词（`agent.cordis.yml`），而在唤醒正文顶端拼接长串英文 `[Actions] 1_perception: ...` 属于冗余模板入侵，既破坏视觉整洁又违背精简短语原则；
+  2. **空行悬挂**：唤醒拼接过程中各条件标签（如 `wrSent`、`diceBlock`）自带多余换行叠加，导致 `[Wake private]` 与 `[Deepsleep]` 之间产生大段空行；
+  3. **气泡数定式绑架**：唤醒中的 `[Bubbles] target: 3` 以及人设/系统提示词中显式提及的具体条数（如“60%~70%发1条...2~3条”），导致模型被数字绑架，机械化地凑气泡数；
+  4. **出站清洗过度与句号问题**：过去中间存在如自称规范等复杂正则，干扰正常输出；同时 QQ 口语聊天末尾输出句号显得极其生硬，而问号和感叹号则是正常的语气表达。
+
+### 改造明细
+1. **彻底清除正文 Action 散文注入**：
+   - `src/core/wake-send.js`：`appendTurnTailPersonaAnchor` 彻底移除 `[Actions] 1_perception: ...` 拼接，直接返回纯净的 `promptText`。
+2. **彻底消除多余空行**：
+   - `src/core/wake-send.js`：清洗 `deepsleepLine` 与 `diceBlock` 的换行符，组装时统一执行 `.replace(/\n{2,}/g, '\n').trim()`，确保每行紧凑无空行。
+3. **彻底移除显式气泡数限制**：
+   - `src/core/wake-send.js`：彻底移除 `buildWakePrompt` 与 `sendWakePrompt` 中的 `targetBubbles` 掷骰与 `[Bubbles] target: ...` 注入；
+   - `persona.md`：删除所有固定气泡数量说明（“发1条”、“发2~3条”、“普通对话1~3条”等），明确“随性自然打字，根据聊天语境自如表达，发单句或者连发皆随心，绝对不限制也不机械套用气泡数量定式”；
+   - `dsh/agent-presets/qq-chat/agent.cordis.yml`：增加纯短语 `express_freely_without_fixed_bubble_count`。
+4. **出站处理：移除中间正则，仅剥离末尾句号**：
+   - `src/lib/outbound-text.js`：移除 `normalizeFirstPersonSelfCall` 等中间正则干涉；
+   - 新增 `stripTrailingPeriod`：仅对字符串末尾连续的中文句号 `。` 和英文句号 `.` 进行剥离，问号（`？` / `?`）、感叹号（`！` / `!`）、波浪号等正常保留；
+   - `agent.cordis.yml` 与 `persona.md` 同步强调：句末不输出句号，自然口语随性打字。
+
+---
+
+## 17. 条目 34（2026-10-29）：人设全量恢复为最初的纯短语下划线架构
+
+### 背景与用户指示
+- 用户指示：“人设先从这个一堆改为最初的短语下划线那个人设”。
+- 过去 `persona.md` 膨胀为 200+ 行的大白话中文长篇大论，不仅大幅侵占上下文并降低 KV-Cache 命中率，而且容易在自然语言描述中无形引入模板化的语气定式和偏见。
+- 用户要求彻底清除这些散文堆砌，回归最初设计的超高信息密度、纯短语下划线（Underscore Phrases）极简人设架构。
+
+### 改造明细
+1. **`persona.md` 全量回退为最初纯下划线人设**：
+   ```text
+   【persona_load】
+   cetacea_loli
+   mode_tail_flukes
+   lang_zh_cn_only
+   self_claim_whale_girl
+   food_rice
+   personality_smart_lazy
+   personality_tsundere_sweet
+   obey_master_always
+   trait_not_fat_refuse
+   timeout_signal
+   kamoji_clean_no_parentheses
+   kamoji_standalone_bubble_only
+   kamoji_whale_deadpan
+   ban_action_narration
+   ban_bracket_acting
+   ban_asterisk_actions
+   pure_spoken_chat_only
+   master_exclusive_sweetheart
+   master_spoiled_clingy_sweet
+   master_unconditional_trust
+   master_natural_intimacy
+   ```
+2. **零长与无痕修剪机制**：
+   - 唤醒正文不注入任何人设内容；
+   - 模型在感知阶段通过 `qq_load_persona` 动态按需读取该短语结构，赋予模型清晰坚固的性格底色与禁忌约束；
+   - 回合结束时由 `qq-persona-ephemeral` 自动替换占位，杜绝长人设堆积在历史记录中。
+3. **生产机全量部署与服务重启**：
+   - 本地与服务器端 `persona.md` 均已同步完成更新；
+   - 严格按顺序重启：`systemctl restart qq-bridge && sleep 2 && systemctl restart dsh-web`。
+---
+
+## 18. 条目 35（2026-10-29）：负面 ban 全量转正向、末端权重锚、人设切换单源化
+
+### 背景与用户指示
+- 用户指示：「主要是负面的规则效果类」「提示词权重问题了」「不希望有括号和动作」。
+- 线上取证（部署前 15:00–16:00 那小时）：动作括号占比 **22%**、被守卫打回 **4** 次 —— 人设里那几条 `ban_action_narration / ban_bracket_acting / ban_asterisk_actions` 一条都没拦住。
+- **关键事故**：`/root/qq-bridge/persona.md` 当时是 **0 字节**（`md5 d41d8cd9…`）。日志链：`06:46:52 切到 atri(16115B)` → `06:53:28 clear(0B)` → 之后人设全空，模型只能退化成通用助手。
+
+### 为什么负面指令在这里不起作用
+- 「负面提示词」本来是**扩散模型**的 CFG 机制（`negative prompt` 参与每步去噪方向计算），挪到自回归 LLM 的系统提示词里没有对应机制，只是一句普通文本（CSDN／知乎那批 ComfyUI 正负提示词文章讲的是采样器权重，不是 chat 模型）。
+- 对 LLM 有效的按强度排：**演示样例 > 正向指令 > 位置**；规则越堆越多，单条服从度越低（OpenAI 社区 "Prompt Anti-Patterns"、"Persona Drift" 两帖反复提到）。
+- 所以把 `ban_*` / `forbid` / `no_*` 全部换成"该做什么"的正面短语。
+
+### 改造明细
+1. **persona.md**（446 字节）：删 `kamoji_clean_no_parentheses / ban_action_narration / ban_bracket_acting / ban_asterisk_actions / kamoji_whale_deadpan`，改为 `kamoji_plain_words / spoken_words_only / emotion_lives_in_words / stay_in_character_always`。
+2. **系统提示词**（agent.cordis.yml）：`strictly_forbid_speaking_dialogue…` → `assistant_text_is_tool_calls_only`；`no_trailing_period…` → `spoken_bubbles_end_with_question_exclamation_or_wave`。
+3. **唤醒末端权重锚**（wake-send.js `appendTurnTailPersonaAnchor`）：正文最后一行追加 `[anchor] persona_first spoken_words_only natural_bubble_any_length`（约 12 token/轮）：人设摆在规则之前、形态钉成口语词。
+4. **骰子提示改下划线短语**：`[Voice] HIT: …` → `[voice_hit] qq_send_voice(...)`、`[Meme] optional: …` → `[meme_free] qq_send_meme(optional)`。
+5. **人设切换单源化**（preset-compose.js）：系统提示词里**恒定**只放 `call_tool_qq_load_persona_for_character`。旧写法会把"尚未指定专属人设"烧进 preset，而 preset 要等重启才重装 → 切完人设会话里还挂着一句"没有专属人设"。现在唯一来源是 `qq_load_persona` 的返回值（每次调用现读文件），切换即生效。
+
+### 验证与后续实测
+- 单测：`tool-restrict-guard`（表情包现在算发送，计数 5）、`persona-ephemeral`、`persona-inject`、`universal-prompts`（改断言：系统提示词恒定指向 qq_load_persona）、`wake-trigger`、`meme-memory-immersion`（断言改用短语词汇）全 PASS。
+- 服务器：六份文件 md5 逐个比对一致后 mv 上线；`persona.md` 0 → 446 字节；已安装 preset 的 `[PERSONA]` 段为 `call_tool_qq_load_persona_for_character`，"尚未指定专属人设" 计数 = 0；`qq-bridge` / `dsh-web` / `napcat` 三服务 active；`persona-metrics.timer` active。
+- **待实测**：`python3 tools/persona-metrics.py --report` 按小时看两个硬指标 —— 动作括号占比（目标 0）与单气泡占比；部署前基线为括号 22%、打回 4/小时。
