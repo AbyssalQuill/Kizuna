@@ -1754,7 +1754,10 @@ export function voiceTurnHint(key) {
   if (hit) {
     return `[voice_hit] qq_send_voice(voice=${voiceName},chars<${cap})\n`;
   }
-  return `[voice_free] qq_send_voice(optional)\n`;
+  /* 2026-10-29：非命中轮不再每轮都挂 free 提示。线上表现为「几乎每次都发语音」，
+   * 而语音转码一失败就是连串报错；改成大约每 5 轮出现一次，保住「可以发」的语义即可。 */
+  if (Math.random() < 0.2) return `[voice_free] qq_send_voice(optional)\n`;
+  return '';
 }
 
 // ── 发送：把音频作为 QQ 语音发出去 ───────────────────────────────────────────
@@ -1793,7 +1796,16 @@ export async function sendVoiceToOneBot(key, filePath, { replyToMessageId = null
   const fmt = (path.extname(p).replace(/^\./, '') || 'mp3').toLowerCase();
   // 路径归一化交给共享助手：配置了 napcat.tmpDir + dockerPathMap 时换成容器内路径（实测可用），
   // 换不出去就退回 base64:// —— 与图片/表情走的是同一套逻辑，避免各写一份。
-  const fileArg = napcatImageFileArg(p, cfgRef);
+  /* 2026-10-29：语音统一改走 base64，不再传文件路径。
+   * 线上实测（直连 NapCat 复现）：NapCat 以 qq 用户运行，而桥的语音文件在 /root 下（0700），
+   * 它转码时 ffmpeg 打不开输入 → `Error opening input: Permission denied`，
+   * 桥侧只看到一句 `发送语音失败`，用户侧就是「每次都发语音、但一条都没出来」。
+   * 语音文件只有几十 KB（base64 后 <100KB），走 base64 既绕开跨用户权限，也省掉路径映射那套。
+   * 大文件（>2MB）才退回路径，避免把消息体撑太大。 */
+  const voiceSize = fs.statSync(p).size;
+  const fileArg = voiceSize <= 2 * 1024 * 1024
+    ? `base64://${fs.readFileSync(p).toString('base64')}`
+    : napcatImageFileArg(p, cfgRef);
   const segments = [];
   /* 2026-09-18 修「引用有框、框下面没内容」：语音**不带 reply 段**。
    * 实测（线上 16:14–16:15，全语音模式）：QQ 渲染不了 `[{type:'reply'},{type:'record'}]` ——

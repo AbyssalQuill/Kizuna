@@ -1463,8 +1463,10 @@ export function scheduleAfterthought(key) {
       log(`[afterthought] 本轮交互已追念过，跳过 ${key}`);
       return;
     }
-    // 检查4：自然概率骰子（默认 0.45）
-    const p = Number(cfgRef.social?.afterthoughtProbability ?? 0.45);
+    // 检查4：自然概率骰子。2026-10-29：默认 0.45 → 0.15。
+    // 线上实测 3 小时内 9 次 afterthought，用户体感是「主动接话但不聪明、还重复」。
+    // 追念本身要保留（它是拟人的一部分），但频率降到约 1/7，且下面唤醒里要求「没有新东西就别开口」。
+    const p = Number(cfgRef.social?.afterthoughtProbability ?? 0.15);
     const dice = Math.random();
     if (dice > p) {
       log(`[afterthought] 概率未命中 (${dice.toFixed(2)} > ${p})，保持安静 ${key}`);

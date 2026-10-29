@@ -66,7 +66,9 @@ export function memeTurnHint(key) {
   if (hit) {
     return '[meme_hit] qq_send_meme\n';
   }
-  return '[meme_free] qq_send_meme(optional)\n';
+  // 同上：非命中轮不每轮都催表情包，约每 5 轮一次
+  if (Math.random() < 0.2) return '[meme_free] qq_send_meme(optional)\n';
+  return '';
 }
 
 /** 供诊断/日志：当前生效的表情包参数 */

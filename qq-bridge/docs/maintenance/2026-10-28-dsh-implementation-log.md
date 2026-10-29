@@ -711,3 +711,33 @@ find / -name "8e-8e784d…gif"             → 磁盘上没有（不在 QQ 缓�
 ### 三、部署
 - `qq-tool-restrict.mjs` md5 `fc2eb4b1…`（仓库与 `~/.dsh/.agent-presets` 两份一致）、`wake-send.js` md5 `a7b6e331…`；`node --check` 通过；`qq-bridge` / `dsh-web` / `napcat` 三服务 active，重启后无 error。
 - 待验证：下一个真实回合是否先调 `qq_get_recent_messages` 再发（门禁与提示同时生效后，被守卫打回的次数应当仍是 0）。
+
+---
+
+## 27. 条目 44（2026-10-29）：语音为什么一条也发不出来 + 主动接话降噪
+
+### 语音失败的真正原因（不是模型的问题，也不是限流）
+直连 NapCat 复现：
+```
+POST /send_private_msg {record, file: "file:///root/qq-bridge/state/voice-samples/xxx.mp3"}
+→ Command failed: /usr/bin/ffmpeg … -c:a ntsilk_s16le …
+   Error opening input: Permission denied
+```
+- NapCat 以 **qq 用户**运行，桥把语音写在 **/root**（0700）下 → 它转码时 ffmpeg 打不开输入，桥侧只看到一句「发送语音失败」。
+- 另一个坑：重启 NapCat 前同一调用报的是 `spawn ENOMEM`（定位误导）；重启后才露出真正的 Permission denied。
+- 修法：语音一律走 `base64://`（文件只有几十 KB，大于 2MB 才退回路径）。实测通过桥的真实发送链路：`{"ok":true,"sent":{"messageId":644773685,"bytes":17376,"format":"mp3"}}`。
+
+### 为什么「几乎每次都发语音」
+- 唤醒正文每轮都带 `[voice_free] qq_send_voice(optional)`，等于每轮都在鼓励发语音。
+- 改成约每 5 轮出现一次（`Math.random() < 0.2`），命中轮仍是强指令；表情包同理。
+
+### 主动接话为什么显得不聪明
+- 3 小时里唤醒原因统计：`private` 27、`admin` 11、**`afterthought` 9**、`bootstrap` 4、`proactiveCheck` 2。
+- `afterthought`（追念碎碎念）默认概率 **0.45**，每次私聊后 25~45 秒有一半概率再补一句 —— 实测出现「笑成这样，肯定有鬼 / 是不是还有别的图」紧接着「…还藏了别的图」这种近重复。
+- 改法两条：
+  1. 默认概率 0.45 → **0.15**（配置项 `social.afterthoughtProbability` 仍可调）；
+  2. 自主动唤醒（`afterthought` / `proactiveCheck` / `topic` / `activityStart` / `timeout` / `replyCheck`）的正文追加 `[self_talk] say_something_new_or_stay_silent` —— 没有新东西就别开口。
+
+### 部署
+- `voice.js` md5 `1994147a…`、`send-dice.js` md5 `0caa5e62…`、`social-state.js` md5 `c6206a8d…`、`wake-send.js` md5 `7ee3e6b4…`；`node --check` 通过；三服务 active，重启无 error。
+- 待观察：`afterthought` 次数应明显下降；语音发送成功率应以 `[voice] 语音已发送` / `发送语音失败` 的比值衡量。
