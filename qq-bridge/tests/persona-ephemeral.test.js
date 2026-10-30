@@ -85,6 +85,42 @@ const clockEvents = [
 const s5 = fakeSession(clockEvents);
 ok('get_time 结果被剪', mod.prunePersonaResults(s5) === 1 && s5.appended[0]?.opts?.surfaceOp?.startSeq === 21);
 
+console.log('== ⑤ 单轮折叠：除系统提示词/工具注册外全部折叠 ==');
+const sys = { seq: 1, type: 'system/message', data: { message: { role: 'system', content: [{ type: 'text', text: '系统提示词' }] } } };
+const reg = { seq: 2, type: 'developer/message', data: { message: { role: 'developer', source: { kind: 'tool-registry' }, content: [{ type: 'tool-removal', toolName: 'ops_bash' }] } } };
+const turnEvents = [
+  sys, reg,
+  { seq: 3, type: 'user/message', data: { content: [{ type: 'text', text: '[Wake private]' }] } },
+  { seq: 4, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'x', name: 'qq_send_message', arguments: '{"messages":["打得太软喵"]}' }] } } },
+  mkPersona(5, 'cp'),
+  { seq: 6, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'OK' }] } } },
+];
+const sc = fakeSession(turnEvents);
+sc.id = 'sess-collapse';
+const nc = mod.collapseToSingleTurn(sc);
+ok('折叠了 4 个节点（user/assistant/tool）', nc === 4, 'got ' + nc);
+ok('只追加 1 条替换事件', sc.appended.length === 1, 'got ' + sc.appended.length);
+const rc = sc.appended[0];
+ok('替换范围 3..6', rc?.opts?.surfaceOp?.startSeq === 3 && rc.opts.surfaceOp.endSeq === 6, JSON.stringify(rc?.opts?.surfaceOp));
+ok('sourceEventSeqs 列全被覆盖节点', JSON.stringify(rc?.opts?.sourceEventSeqs) === '[3,4,5,6]');
+ok('替换事件是空 developer/message（不产生模型消息）', rc?.type === 'developer/message' && rc.data.message.role === 'developer' && rc.data.message.content.length === 0);
+ok('系统提示词与工具注册不在范围内', rc.opts.surfaceOp.startSeq > 2);
+ok('通知守卫人设/上下文记录作废', globalThis.__qqCollapsedAt instanceof Map && globalThis.__qqCollapsedAt.has('sess-collapse'));
+
+console.log('== ⑤b 已折叠的会话不再重复折叠；新一轮只折叠新增部分 ==');
+const placeholder = { seq: 7, type: 'developer/message', data: { message: { role: 'developer', source: { kind: 'tool-registry' }, content: [] } } };
+const sd = fakeSession([sys, reg, placeholder]);
+ok('只有空占位时不动', mod.collapseToSingleTurn(sd) === 0 && sd.appended.length === 0);
+const se = fakeSession([sys, reg, placeholder,
+  { seq: 8, type: 'user/message', data: { content: [{ type: 'text', text: '新一轮' }] } },
+  { seq: 9, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'OK' }] } } }]);
+ok('占位 + 新一轮合并折叠（不累积空占位）', mod.collapseToSingleTurn(se) === 3 && se.appended[0].opts.surfaceOp.startSeq === 7 && se.appended[0].opts.surfaceOp.endSeq === 9, JSON.stringify(se.appended[0]?.opts));
+
+console.log('== ⑤c 守卫在折叠之后要求重读人设与上下文 ==');
+const guardSrc = fs.readFileSync(path.join(PRESET_DIR, 'qq-tool-restrict.mjs'), 'utf8');
+ok('守卫比较 __qqCollapsedAt（人设）', /loadedAt <= collapsedAt/.test(guardSrc));
+ok('守卫比较 __qqCollapsedAt（上下文）', /ctxAt <= collapsedAt/.test(guardSrc));
+
 console.log('== ④ 接线 ==');
 const yml = fs.readFileSync(path.join(PRESET_DIR, 'agent.cordis.yml'), 'utf8');
 ok('预设挂了 qq-persona-ephemeral', /- id: qq-persona-ephemeral[\s\S]{0,80}qq-persona-ephemeral\.mjs/.test(yml));

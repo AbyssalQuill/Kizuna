@@ -141,12 +141,93 @@ export function prunePersonaResults(session) {
 
 export const pruneEphemeralResults = prunePersonaResults;
 
+/* 2026-10-30 主人：「我需要的是单轮 —— 所有的都裁剪，除了系统提示词，只保留一轮」。
+ * 永久会话 + 逐类剪枝剪不干净：模型自己发过的气泡在 assistant/message(tool-call 参数) 里，
+ * 剪枝只认 tool/result，旧台词一直留着被模仿（「喵」「打得太软」就是这么滚起来的）。
+ * 所以回合末直接把「系统提示词 / 工具注册(developer/message 有内容) 之外的所有 surface 节点」
+ * 整段替换成一条空 developer/message（空内容不产生任何模型消息，见 deriveEventMessage）。
+ * 下一轮模型只看到：系统提示词 + 工具表 + 新的唤醒正文，其余一律靠工具现读。
+ * 原始事件仍在日志里（surfaceOp replace 不删数据），seq 连续，可回放。 */
+const isEmptyDeveloper = (ev) => ev?.type === 'developer/message'
+  && Array.isArray(ev.data?.message?.content) && ev.data.message.content.length === 0;
+
+/** 该节点是否要被折叠：系统消息、带内容的 developer/message（工具注册）保留 */
+function isCollapsible(ev) {
+  if (!ev) return false;
+  if (ev.type === 'system/message') return false;
+  if (ev.type === 'developer/message') return isEmptyDeveloper(ev);
+  return ev.type === 'user/message' || ev.type === 'assistant/message' || ev.type === 'tool/result';
+}
+
+/**
+ * 把会话折叠成「系统提示词 + 空占位」。导出给测试用。
+ * @returns {number} 被折叠的节点数（已经是干净状态则为 0）
+ */
+export function collapseToSingleTurn(session) {
+  if (!session || typeof session.append !== 'function') return 0;
+  const nodes = session.surface && Array.isArray(session.surface.nodes) ? [...session.surface.nodes] : [];
+  if (!nodes.length) return 0;
+  const evs = nodes.map((seq) => session.eventAt?.(seq) || null);
+  // 连续可折叠节点分成若干段（被保留的 developer/message 把它们隔开）
+  const runs = [];
+  let cur = null;
+  for (let i = 0; i < nodes.length; i += 1) {
+    if (isCollapsible(evs[i])) {
+      if (!cur) { cur = []; runs.push(cur); }
+      cur.push(i);
+    } else {
+      cur = null;
+    }
+  }
+  const proto = evs.find((e) => e && e.type === 'developer/message' && !isEmptyDeveloper(e));
+  const lastData = [...evs].reverse().find((e) => e && e.data && e.data.turn !== undefined)?.data || {};
+  let collapsed = 0;
+  for (const run of runs) {
+    // 这一段本来就只是一条上次留下的空占位 → 不再重复折叠
+    if (run.length === 1 && isEmptyDeveloper(evs[run[0]])) continue;
+    const startSeq = nodes[run[0]];
+    const endSeq = nodes[run[run.length - 1]];
+    const sources = run.map((i) => nodes[i]);
+    try {
+      session.append('developer/message', {
+        ...(lastData.turn !== undefined ? { turn: lastData.turn } : {}),
+        ...(lastData.step !== undefined ? { step: lastData.step } : {}),
+        message: {
+          source: proto?.data?.message?.source || { kind: 'tool-registry' },
+          content: [],
+          role: 'developer',
+          id: globalThis.crypto?.randomUUID?.() || `collapse-${Date.now()}-${startSeq}`,
+        },
+      }, {
+        surfaceOp: { op: 'replace', startSeq, endSeq },
+        sourceEventSeqs: sources,
+      });
+      collapsed += sources.length;
+    } catch (e) {
+      try { console.error(`[qq-persona-ephemeral] 单轮折叠失败 ${startSeq}-${endSeq}: ${String(e?.message ?? e).slice(0, 160)}`); } catch { /* ignore */ }
+    }
+  }
+  /* 通知 qq-tool-restrict：这个会话的人设/上下文已被清空，之前的「新鲜」记录一律作废，
+   * 下一轮发言前必须重新 qq_load_persona + 读上下文。用 globalThis 共享，不依赖两个插件是同一个模块实例。 */
+  if (collapsed > 0) {
+    const sid = String(session.id || 'default');
+    if (!(globalThis.__qqCollapsedAt instanceof Map)) globalThis.__qqCollapsedAt = new Map();
+    globalThis.__qqCollapsedAt.set(sid, Date.now());
+  }
+  return collapsed;
+}
+
 export function apply(ctx) {
   if (!ctx || typeof ctx.on !== 'function') return;
   ctx.on('agent/turn-stopping', (payload) => {
     try {
-      const n = prunePersonaResults(payload?.agent?.session);
-      if (n > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 本轮剪掉 ${n} 段瞬态上下文`);
+      const session = payload?.agent?.session;
+      const n = collapseToSingleTurn(session);
+      if (n > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 单轮折叠：本轮收尾折叠 ${n} 个历史节点（仅留系统提示词）`);
+      if (n === 0) {
+        const m = prunePersonaResults(session);   // 兜底：折叠不可用时仍按旧策略剪瞬态结果
+        if (m > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 本轮剪掉 ${m} 段瞬态上下文`);
+      }
     } catch (e) {
       try { console.error(`[qq-persona-ephemeral] skip: ${String(e?.message ?? e).slice(0, 160)}`); } catch { /* 日志都写不出去就算了 */ }
     }

@@ -151,13 +151,16 @@ export function apply(ctx) {
     //    判据是「最近一次 qq_load_persona 距今是否在 30 分钟内」，不看回合事件 ——
     //    回合事件在这个部署里不可靠（dsh-qq-hold 会把回合吊住，turn-stopping 提前触发）。
     if (isSendTool) {
+      /* 单轮折叠（qq-persona-ephemeral.collapseToSingleTurn）清空历史的时刻：在它之前的
+       * 人设/上下文读取已不在模型手里，记录一律视为过期，必须重读。 */
+      const collapsedAt = Number(globalThis.__qqCollapsedAt?.get?.(sessId)) || 0;
       const loadedAt = Number(sessionPersonaTurn.get(sessId)) || 0;
-      if (!loadedAt || (Date.now() - loadedAt) > PERSONA_FRESH_MS) {
+      if (!loadedAt || loadedAt <= collapsedAt || (Date.now() - loadedAt) > PERSONA_FRESH_MS) {
         return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called recently in this session, so sending is blocked. Call qq_load_persona now, then retry the send.';
       }
       // 上下文门禁：唤醒正文不带转录，读工具结果回合末又被剪掉 —— 不读就等于失忆。
       const ctxAt = Number(sessionContextAt.get(sessId)) || 0;
-      if (!ctxAt || (Date.now() - ctxAt) > CONTEXT_FRESH_MS) {
+      if (!ctxAt || ctxAt <= collapsedAt || (Date.now() - ctxAt) > CONTEXT_FRESH_MS) {
         return 'Protocol violation: step_3 is mandatory. The wake body carries no transcript and tool results are pruned at turn end, so call qq_get_recent_messages (or qq_get_unread_messages) before sending, then retry.';
       }
       sessionSentCount.set(sessId, (sessionSentCount.get(sessId) || 0) + 1);
