@@ -2336,7 +2336,7 @@ export function startConsoleServer() {
         // 写成 `..., now)` 会在发送端点里直接 TDZ `ReferenceError`。判重窗口是分钟级，两处时钟差几毫秒无所谓。
         const idem = filterAlreadySentBubbles(key, messages, Date.now());
         if (idem.skipped.length) {
-          logIdempotencyBlock(key, idem, '上一批发送部分失败，这是模型重发整批');
+          logIdempotencyBlock(key, idem, idem.skipped.some((s) => s.why === 'near-dup') ? '近 90 秒内已经发过同一句（忽略空白/标点）' : '上一批发送部分失败，这是模型重发整批');
           appendActivity(`${key} [send] 幂等挡下重复气泡 ${idem.skipped.length} 条：${idem.skipped.map((s) => String(s.text).slice(0, 20)).join('、')}`);
           if (!idem.kept.length) {
             sendJson({
@@ -2434,11 +2434,17 @@ export function startConsoleServer() {
           const burstHint = sendList.length >= 3 ? '你已经连发了多条，确认是必要的吗？真人很少一口气补完。' : undefined;
           // 软提醒（lint）必须与发送结果隔离：消息已成功发出，lint 任何异常都不能把 ok 改写成失败，
           // 否则模型看到"发送失败"会换参数重发 → 撞重复拦截 → 用户其实已收到一条。
-          let spaceWarn;
-          let splitWarn;
+          /* 2026-10-30：这两条 lint 不再回给模型 —— 它们是"消息已经进群之后"才产生的，
+           * 模型收到后唯一能做的就是改好再发一遍，于是群里出现同一句两遍。
+           * 真机：12:42:32 发 ["被这样拎着 裙摆都飘起来了呀", …] → 回 warn「内部有中文空格」→
+           *       12:42:42 改标点重发 ["被这样拎着裙摆都飘起来了，…" , …]。
+           * 现在只写日志给人看；模型侧的风格由 [bubbles] 提示词 + 发送前近重挡板负责。 */
           try {
-            spaceWarn = findCjkSpaceWarning(sendList);
-            splitWarn = findSplitBoundaryWarning(sendList);
+            const spaceWarn = findCjkSpaceWarning(sendList);
+            const splitWarn = findSplitBoundaryWarning(sendList);
+            if (spaceWarn || splitWarn) {
+              log(`[send-lint] ${key} 已发出（仅供排障，不回模型）: ${[spaceWarn, splitWarn].filter(Boolean).join(' / ')}`);
+            }
           } catch (eLint) {
             log(`[send] 发送后质量软提醒异常（不影响发送结果）: ${eLint?.message ?? eLint}`);
           }
@@ -2451,7 +2457,7 @@ export function startConsoleServer() {
             ...(atDropped ? { atUserIdDropped: atDropped } : {}),
             // atNote 与 burstHint 共用 hint 字段：两个都有时合并，别让后者把 atUserId 的回执吞掉
             ...((atNote || burstHint) ? { hint: [atNote, burstHint].filter(Boolean).join(' ') } : {}),
-            ...(spaceWarn ? { warn: spaceWarn } : {}), ...(splitWarn ? { splitWarn } : {})
+
           });
         } catch (error) {
           if (error?.sent?.length) {

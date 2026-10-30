@@ -1787,9 +1787,14 @@ export async function sendWakePrompt(key, reason) {
      * 本来就不在前缀缓存里，所以不影响缓存命中。 */
     const nowSentinel = ''; // 2026-10-28：普通唤醒不再注入时间行，需要就调 get_time
     /* 2026-10-28：时间改由每轮的 get_time 现取（[HARD OPEN] 第 2 条），正文不再带 [Clock]。
-     * 自发唤醒（没有对方消息）额外给一句"你可以主动开话题"，其余情形一律不加。 */
+     * 自发唤醒（没有对方消息）额外给一句"你可以主动开话题"，其余情形一律不加。
+     * 2026-10-30 修「极短时间内主动找话题」：原来这个集合把 replyCheck / probability / topic
+     * 也算成"自发"，而这三者的前提都是**对方刚发了消息**（replyCheck 更是发完 15~29 秒就自查）——
+     * 于是它每次回完话，20 秒后又被叫醒、还被额外发了一张"可以主动开话题"的许可。
+     * 真机：12:42:40 刚回完，12:42:42 就"话说主人，都这个点了你中饭吃了没呀？"。
+     * 现在只保留真正没有对方消息的四种；带消息的唤醒照常只处理消息。 */
     const reasonBase = String(reason ?? '').split(':')[0];
-    const selfInitiated = /^(proactiveCheck|probability|replyCheck|timeout|topic|activityStart|afterthought)$/.test(reasonBase);
+    const selfInitiated = /^(proactiveCheck|afterthought|timeout|activityStart)$/.test(reasonBase);
     const clockLine = selfInitiated
       ? '[Proactive] self_topic'
       : '';

@@ -34,6 +34,7 @@
 //   … 只发 idem.kept；idem.skipped 打一行日志说明挡了哪条、为什么
 //   noteBatchOutcome(key, { attempted, delivered, failed }); // 发送后（成功/部分失败都要调）
 import { log } from '../lib/log.js';
+import { isDuplicateSendText } from '../lib/loop-guard.js';
 
 /** 部分失败后模型"重发整批"的认账窗口。实测重发间隔 13s（14:12:34 → 14:12:47），
  *  给到 3 分钟足够覆盖模型先回一句别的话再补发的长尾巴；超过窗口就当作全新的回复，不再过滤。 */
@@ -86,20 +87,37 @@ export function noteBatchOutcome(key, { attempted = [], delivered = [], failed =
   return { pending: false, delivered: deliveredNorms.length, failed: 0, attempted: norm(attempted).length };
 }
 
-/** 发送前过滤：返回 { kept, skipped }（kept/skipped 里都是 { index, text }，index 是原始下标）。
- *  只有「上一批有失败且还在重发窗口内」时才可能挡东西；否则 kept === messages。 */
+/** 「同一句话又说了一遍」的近重窗口。实测重发间隔 10 秒（12:42:32 → 12:42:42），给 90 秒。 */
+const NEAR_DUP_WINDOW_MS = 90000;
+/** 近重只判够长的话：短气泡（"哼""好""嗯"）真人本来就会重复，挡掉反而假。
+ *  精确重发（replay）不受这个限制。 */
+const NEAR_DUP_MIN_LEN = 8;
+
+/** 发送前过滤：返回 { kept, skipped }（kept/skipped 里都是 { index, text, why }，index 是原始下标）。
+ *  两条规则，任一条命中就挡：
+ *    ① replay   —— 上一批部分失败后的整批重发（原逻辑，逐条精确文本）；
+ *    ② near-dup —— 近 90 秒内已经发过"同一句话"（忽略空白/标点差异，见 loop-guard 的注释）。
+ *  ② 是 2026-10-30 新增：模型收到发送后的 styleWarn（中文空格/像是把同一句拆开）后，
+ *  唯一能做的是"改好再发一遍"，而原件已经进群了 —— 用户看到的重复就是这么来的。
+ *  挡掉之后照样回 ok:true + note，明确告诉它"已经发过了，直接收尾"，不让它再试一次。 */
 export function filterAlreadySentBubbles(key, messages, nowMs) {
   const list = Array.isArray(messages) ? messages : [];
   const out = { kept: list.map((m, i) => ({ index: i, text: m })), skipped: [] };
   if (key == null || String(key) === '') return out;
-  const p = pendingPartial.get(String(key));
-  if (!p) return out;
+  const k = String(key);
   const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-  if (now - p.at > REPLAY_WINDOW_MS) { pendingPartial.delete(String(key)); return out; }
+  let p = pendingPartial.get(k);
+  if (p && now - p.at > REPLAY_WINDOW_MS) { pendingPartial.delete(k); p = null; }
+  const recentDelivered = (deliveredLog.get(k) || []).filter((x) => now - Number(x.at || 0) <= NEAR_DUP_WINDOW_MS);
+  if (!p && !recentDelivered.length) return out;
   const kept = [];
   for (let i = 0; i < list.length; i++) {
     const t = normBubble(list[i]);
-    if (t && p.delivered.has(t)) { out.skipped.push({ index: i, text: t }); continue; }
+    if (t && p && p.delivered.has(t)) { out.skipped.push({ index: i, text: t, why: 'replay' }); continue; }
+    if (t && t.replace(/\s+/g, '').length >= NEAR_DUP_MIN_LEN && recentDelivered.some((x) => isDuplicateSendText(x.text, t))) {
+      out.skipped.push({ index: i, text: t, why: 'near-dup' });
+      continue;
+    }
     kept.push({ index: i, text: list[i] });
   }
   out.kept = kept;

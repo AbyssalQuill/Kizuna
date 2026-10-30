@@ -8,18 +8,25 @@ export function normalizeLoopSignature(text) {
   return t.slice(0, 120);
 }
 
-// 防循环回复：判断两条发送文本是否构成重复（相同、包含、或前 20 字高度相似）
+// 防循环回复：判断两条发送文本是否构成重复（相同、包含、或公共前缀高度重合）
+/* 2026-10-30 真机复现「重复回复」：
+ *   12:42:32 发 ["被这样拎着 裙摆都飘起来了呀","人家又不是挂件 笨蛋主人"] → 工具回了一条
+ *            styleWarn「第 1、2 条消息内部有中文空格…」
+ *   12:42:42 模型把第一条改了个标点重发 ["被这样拎着裙摆都飘起来了，人家又不是挂件啦", …]
+ *   群里于是出现「被这样拎着 裙摆都飘起来了呀」和「被这样拎着裙摆都飘起来了…」同一句两遍。
+ * 旧判据为什么没拦住：它比的是**原文**，前 5 字之后因为多了一个空格整体错位；
+ * 而且分母取 max(len)，一句被拉长到 20 字时前缀重合度会被稀释（13/20=0.65 < 0.8）。
+ * 现在先去掉空白再比，且公共前缀的分母取较短那条（被改写的永远是较短/较长的一方之一）。 */
 export function isDuplicateSendText(a, b) {
-  if (!a || !b) return false;
-  if (a === b) return true;
-  const la = a.length, lb = b.length;
+  const na = String(a ?? '').replace(/[ \t\r\n\u3000]+/g, '');
+  const nb = String(b ?? '').replace(/[ \t\r\n\u3000]+/g, '');
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const la = na.length, lb = nb.length;
   if (la < 4 || lb < 4) return false;
-  if (la >= lb && a.includes(b)) return true;
-  if (lb > la && b.includes(a)) return true;
-  const sa = a.slice(0, 20), sb = b.slice(0, 20);
-  const n = Math.max(sa.length, sb.length);
-  if (!n) return false;
-  let same = 0;
-  for (let i = 0; i < Math.min(sa.length, sb.length); i++) if (sa[i] === sb[i]) same++;
-  return same / n > 0.8;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  let cp = 0;
+  const lim = Math.min(la, lb);
+  while (cp < lim && na[cp] === nb[cp]) cp++;
+  return cp >= 10 && cp / lim >= 0.8;
 }
