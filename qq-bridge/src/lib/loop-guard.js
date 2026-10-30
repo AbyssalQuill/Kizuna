@@ -17,9 +17,14 @@ export function normalizeLoopSignature(text) {
  * 旧判据为什么没拦住：它比的是**原文**，前 5 字之后因为多了一个空格整体错位；
  * 而且分母取 max(len)，一句被拉长到 20 字时前缀重合度会被稀释（13/20=0.65 < 0.8）。
  * 现在先去掉空白再比，且公共前缀的分母取较短那条（被改写的永远是较短/较长的一方之一）。 */
+/* 2026-10-30 主人：「不用忽略标点符号，就是句尾不要句号就行了」。
+ * 所以这里只归一两种必然不算差异的东西：空白（发送时本来就会被吞）和**句尾**的句号/点
+ * （stripTrailingPeriod 出站时一定会去掉，所以"有没有句号"在用户看来是同一条）。
+ * 中间的 ，！？～ 一律算数：那两个版本的删除逻辑就是从这里开始失控的。 */
+const normForCompare = (s) => String(s ?? '').replace(/[ \t\r\n\u3000]+/g, '').replace(/[。.]+$/, '');
 export function isDuplicateSendText(a, b) {
-  const na = String(a ?? '').replace(/[ \t\r\n\u3000]+/g, '');
-  const nb = String(b ?? '').replace(/[ \t\r\n\u3000]+/g, '');
+  const na = normForCompare(a);
+  const nb = normForCompare(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
   const la = na.length, lb = nb.length;

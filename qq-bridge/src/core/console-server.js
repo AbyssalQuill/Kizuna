@@ -2336,7 +2336,7 @@ export function startConsoleServer() {
         // 写成 `..., now)` 会在发送端点里直接 TDZ `ReferenceError`。判重窗口是分钟级，两处时钟差几毫秒无所谓。
         const idem = filterAlreadySentBubbles(key, messages, Date.now());
         if (idem.skipped.length) {
-          logIdempotencyBlock(key, idem, idem.skipped.some((s) => s.why === 'near-dup') ? '近 90 秒内已经发过同一句（忽略空白/标点）' : '上一批发送部分失败，这是模型重发整批');
+          logIdempotencyBlock(key, idem, idem.skipped.some((s) => s.why === 'near-dup') ? '近 90 秒内已经发过同一句（只忽略空白与句尾句号）' : '上一批发送部分失败，这是模型重发整批');
           appendActivity(`${key} [send] 幂等挡下重复气泡 ${idem.skipped.length} 条：${idem.skipped.map((s) => String(s.text).slice(0, 20)).join('、')}`);
           if (!idem.kept.length) {
             sendJson({

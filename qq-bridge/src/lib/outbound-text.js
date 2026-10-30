@@ -133,9 +133,24 @@ export function stripTrailingPeriod(text) {
   return s.replace(/[。.]+$/g, '').trimEnd();
 }
 
+// 2026-10-30 主人：「然后不要人家自称」。
+// 历史：2026-10-28 上过一版物理过滤（把自称的"人家"规范成"我"），后来按"不要用正则干预中间表达"
+// 整段撤掉，函数被改成原样返回 —— 于是 12:42 又出现了「人家又不是挂件 笨蛋主人」。
+// 这次只保留**最小够用**的一条：只在句首或标点/空白之后命中，且后面紧跟自称常见虚词时才替换。
+//   "人家又不是挂件"   → "我不是挂件"
+//   "别人家"           → 不动（前面是"别"，不是句首）
+//   "去人家家里"       → 不动（前面是"去"）
+//   "人家都说好了吧"   → 不动（后面是"都"…这里"都"在列表里，会替换 —— 所以列表只留最像自称的虚词）
+const SELF_CALL_HEAD_RE = /(^|[，。！？!?~…、\s])人家/g;
 export function normalizeFirstPersonSelfCall(text) {
-  // 遵循指示：中间的正则全部去掉，不干预中间语句表达
-  return String(text ?? '');
+  const s = String(text ?? '');
+  if (!s.includes('人家')) return s;
+  /* 只换"非从属用法的句首人家"：先去保护"别人家/人家家/人家里的"这类正常名词短语。 */
+  return s.replace(SELF_CALL_HEAD_RE, (m, head, offset, whole) => {
+    const after = whole.slice(offset + m.length, offset + m.length + 2);
+    if (after.startsWith('家') || after.startsWith('的')) return m; // 人家的/人家家里 → 不动
+    return head + '我';
+  });
 }
 
 // 出站文本统一清洗：占位符清扫 → 动作括号剥离 → 输入法 emoji 剥离 → 仅去除末尾句号（问号叹号保留）。
@@ -144,8 +159,10 @@ export function cleanOutboundTextDetailed(text) {
   const stripped = stripActionBrackets(swept.text);
   const noEmoji = stripImeEmoji(stripped);
   const guarded = kaomojiLineGuard ? guardKaomojiLine(noEmoji, kaomojiMaxCols) : noEmoji;
+  // 自称规范（人家 → 我）：只做句首/标点后的最小替换，见 normalizeFirstPersonSelfCall 的注释
+  const selfCalled = normalizeFirstPersonSelfCall(guarded);
   return {
-    text: stripTrailingPeriod(guarded),
+    text: stripTrailingPeriod(selfCalled),
     removedArtifacts: swept.removed,
     actionStripped: stripped !== swept.text,
   };
