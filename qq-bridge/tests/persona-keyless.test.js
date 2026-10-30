@@ -29,7 +29,7 @@ try {
   ok('没有回「缺 key」', !t.includes('缺 key'), t.slice(0, 160));
   ok('没有回「缺 token」', !t.includes('缺 token'), t.slice(0, 160));
   ok('isError 为假', r?.isError !== true, JSON.stringify(r?.isError));
-  ok('真的读到了人设正文', t.includes('【persona_load】') && /角色卡|DeepSeek/.test(t), t.slice(0, 120));
+  ok('真的读到了人设正文', /【persona_load】/i.test(t) && /角色卡|DeepSeek|CETACEA_LOLI/i.test(t), t.slice(0, 120));
 } catch (e) {
   fail++;
   process.exitCode = 1;

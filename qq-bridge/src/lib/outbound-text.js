@@ -56,7 +56,7 @@ const ACTION_WORD_RE = /[\u3400-\u9fffA-Za-z]/;
  * 用户原话：「当然我们仍然不希望有动作描写」。
  * 规则精细安全：成对括号内含有汉字/英文单词的（如（甩了甩尾巴）、（蹭蹭）、*笑*）判定为舞台动作，予以干净剥除；
  * 纯符号颜文字（如 ( ˘ω˘ )、(>_<)）不含文字，原样保留。 */
-let actionStripEnabled = true;
+let actionStripEnabled = false;
 /** 颜文字换行守卫（默认开）+ 一行按多少列算（默认 30；线上气泡约 31 列） */
 let kaomojiLineGuard = true;
 let kaomojiMaxCols = 30;

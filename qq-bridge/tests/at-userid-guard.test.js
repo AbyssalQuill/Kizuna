@@ -165,7 +165,7 @@ t('降级后这一批整体成功 → 幂等账本无未了结记录（重发链
   // 去掉 @ 的整批成功（不再有 Get Uid Error → 不再有部分失败）
   idem.noteBatchOutcome(KEY, { attempted: batch, delivered: batch.map((x) => ({ text: x })), failed: [] }, 1);
   assert.equal(idem.idempotencyLedger(KEY).pendingPartial, null);
-  const r = idem.filterAlreadySentBubbles(KEY, batch, 2);
+  const r = idem.filterAlreadySentBubbles(KEY, batch, 90002);
   assert.equal(r.skipped.length, 0, '整批成功就不该有任何过滤');
   assert.equal(r.kept.length, 2);
 });

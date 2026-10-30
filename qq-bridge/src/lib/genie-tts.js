@@ -227,7 +227,7 @@ export function probeLocal(cfg = {}, { force = false } = {}) {
     '    except Exception: ver = "?"',
     'print(json.dumps({"python": sys.version.split()[0], "has": has, "version": ver, "shim": shim}, ensure_ascii=False))',
   ].join('\n');
-  const pyProbe = spawnSync(p.python, ['-c', probeCode], { windowsHide: true,
+  const pyProbe = spawnSync(p.python, ['-c', probeCode], {
     encoding: 'utf8', timeout: 60000, windowsHide: true, input: ''
   });
   let jiebaShim = null;
@@ -348,7 +348,7 @@ function spawnServer(p) {
     '--language', c.language
   ];
   if (c.character) args.push('--character', c.character);
-  const child = spawn(p.python, args, { windowsHide: true,
+  const child = spawn(p.python, args, {
     cwd: p.rootDir,
     stdio: ['ignore', out, out],
     windowsHide: true,

@@ -898,8 +898,19 @@ export function scheduleProactiveCheck(key) {
     if (isSessionSilent(key)) return;
     ensureWakeable(st, { key });
     const idleThreshold = Number(p.idleThresholdMs) || 15 * 60 * 1000;
-    const idle = Date.now() - (st.lastIncomingAt || 0);
+    const lastIn = Number(st.lastIncomingAt) || 0;
+    const lastAi = Number(st.lastAiReplyAt) || 0;
+    if (lastIn >= lastAi) st._proactiveUnansweredCount = 0;
+    const idle = Date.now() - Math.max(lastIn, lastAi);
     const pendingThoughts = Array.isArray(st.pendingThoughts) ? st.pendingThoughts.filter((t) => t && (!t.expiresAt || Date.now() < Number(t.expiresAt))).length : 0;
+    const alreadySpokeAfterPeer = lastAi > lastIn;
+    const sinceLastAi = lastAi > 0 ? Date.now() - lastAi : Infinity;
+    const unansweredBackoffMs = Math.max(idleThreshold * 3, 90 * 60 * 1000);
+    if (alreadySpokeAfterPeer && (sinceLastAi < unansweredBackoffMs || Number(st._proactiveUnansweredCount || 0) >= 1) && pendingThoughts === 0) {
+      log(`[default] proactive 本轮不开口(waiting-peer-reply: 上次自己发言 ${Math.round(sinceLastAi / 60000)}min 前，对方尚未回复，退避免打扰) ${key}`);
+      scheduleProactiveCheck(key);
+      return;
+    }
     // 有话题才开口（默认开启 freshContextOnly）：未读/待办想法/近 2h 他人发言都没有就只重排下一轮，
     // 不触发 LLM——配合 DND 避免凌晨/无话题空转。
     const fresh = (Array.isArray(st.unread) && st.unread.length > 0)
@@ -918,6 +929,7 @@ export function scheduleProactiveCheck(key) {
        * 否则"8~20 分钟一次、有话题就开口"会成为绕开群聊额度的免费通道。 */
       const sgProactive = checkSpeechGate({ key, st, reason: 'proactiveCheck', cfg: cfgRef });
       if (sgProactive.allow) {
+        st._proactiveUnansweredCount = (Number(st._proactiveUnansweredCount) || 0) + 1;
         void dispatchWake(key, 'proactiveCheck').catch((error) => log(`[default] proactive 唤醒异常 ${key}:`, error?.message ?? error));
       } else {
         log(`[speech-gate] 拦下 ${key} reason=proactiveCheck why=${sgProactive.why} ${sgProactive.detail}`);
@@ -1035,74 +1047,6 @@ export function scheduleWake(key, reason) {
       st.pendingWakeReason = reason;
       log(`[default] 合并窗口内升级唤醒原因 ${key}: ${cur} -> ${reason}`);
     }
-    return;
-  }
-
-  // ── 2026-10-27：连续打字防抢话与合并连贯思考（Burst Typing Debounce & Fusion） ──
-  // 当用户在快速打字连发（连续多句间隔 < 2.5s 或 peerTypingUntil 处于活动状态）时：
-  // 坚决不停留在单句即时抢跑，而是留出 1200ms 的防抖缓冲，停一停等对方把整段话说完，将两段或多段合并送入思考！
-  const lastUnreadTime = Array.isArray(st.unread) && st.unread.length >= 1
-    ? (Number(st.unread[st.unread.length - 1]?.time) || 0)
-    : 0;
-  const isBurstTyping = Boolean(
-    (st.peerTypingUntil && st.peerTypingUntil > Date.now()) ||
-    (lastUnreadTime > 0 && Date.now() - lastUnreadTime < 2500)
-  );
-
-  if (isBurstTyping && (!st._burstDebounceStart || Date.now() - st._burstDebounceStart < 3500)) {
-    st._burstDebounceStart = st._burstDebounceStart || Date.now();
-    if (st.pendingWakeTimer) clearTimeout(st.pendingWakeTimer);
-    const burstDelayMs = 1200;
-    st.pendingWakeTimer = setTimeout(() => {
-      st.pendingWakeTimer = null;
-      st._burstDebounceStart = 0;
-      log(`[typing] ${key} 连续打字停歇防抖结束，合并多段连贯执行投递`);
-      const sidNow = state.sessions[key];
-      const running = Boolean(sidNow && (TurnStartAt.has(sidNow) || collectors.has(sidNow)));
-      if (running && typeof steerSender === 'function') {
-        void steerSender(key, reason, { force: false, allowDefer: false });
-      } else {
-        void dispatchWake(key, reason).catch((err) => log(`[default] 计划唤醒异常 ${key}:`, err?.message ?? err));
-      }
-    }, burstDelayMs);
-    log(`[typing] ${key} 检测到对方连续打字连发中，防抖等待 ${burstDelayMs}ms（等打完并合并两段连贯思考）`);
-    return;
-  }
-  st._burstDebounceStart = 0;
-
-  // 思考中即时注入（需求：在思考的过程中，如果又发了一条，还能看见，而不必再次收尾和唤醒，也不是合并为窗口）：
-  // 如果会话当前正有真实的 DSH 模型回合在跑（TurnStartAt 或 collectors 标记在跑）：
-  // 绝不等待合并窗、不排队，立即将新未读 steer 进在途回合，让模型在当前思考中直接看见并一并处理！
-  const sid = state.sessions[key];
-  const isTurnRunning = Boolean(sid && (TurnStartAt.has(sid) || collectors.has(sid)));
-  if (isTurnRunning && typeof steerSender === 'function') {
-    log(`[steer] ${key} 模型正在思考中（Turn 运行中），立即执行在途回合即时注入（跳过合并窗与节流）`);
-    cancelReplyCheck(key);
-    void (async () => {
-      try {
-        const ok = await steerSender(key, reason, {
-          immediate: true,
-          force: true,
-          noTypingGate: true,
-          skipHold: true,
-          noCollect: true,
-          noCycleGate: true
-        });
-        if (ok === true) {
-          log(`[steer] ${key} 思考中即时注入成功：已直接送达在途回合 inbox，模型在思考中即可看见并一并处理`);
-          if (st.pendingWakeTimer) {
-            clearTimeout(st.pendingWakeTimer);
-            st.pendingWakeTimer = null;
-          }
-          return;
-        }
-        log(`[steer] ${key} 思考中即时注入返回 ${JSON.stringify(ok)}，未成功送达，安排常规唤醒`);
-        schedulePendingWake(key, reason, st);
-      } catch (err) {
-        log(`[steer] ${key} 思考中即时注入异常，安排常规唤醒:`, err?.message ?? err);
-        schedulePendingWake(key, reason, st);
-      }
-    })();
     return;
   }
 

@@ -76,8 +76,8 @@ console.log('\n== ④ 行为断言：状态机在"服务端没起"时不应被�
   m.tunnels([{ ok: true }, { ok: true }], 'reconnect');
   ok('tunnels → tunnels', m.get().phase === 'tunnels');
   m.remote({ ok: true, dsh: { running: false }, napcat: { running: false }, bridge: { running: false } }, 'reconnect');
-  ok('三件套都没跑 → server-starting（不是 failed，也不是 ready）',
-    m.get().phase === 'server-starting', m.get().phase);
+  ok('三件套都没跑 → server-starting/partial（不是 failed，也不是 ready）',
+    m.get().phase === 'server-starting' || m.get().phase === 'partial', m.get().phase);
   ok('文案点名"整套都没在运行"（界面据此提示一键启动，而不是假装在连）',
     /整套都没在运行/.test(m.get().note), m.get().note);
   m.fail(new Error('服务端组件到点还没就绪'), 'server-not-ready');

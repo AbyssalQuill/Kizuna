@@ -746,24 +746,16 @@ const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <val
          * 模型手上一直有确切答案；所以这里缺 key 直接拒绝并指回那一行，绝不猜。
          * 只缺 token 仍然照旧补齐（token 不决定发到哪个会话，补错最多是鉴权失败，不会误导目标）。 */
         if (missingKey) {
-          // 若当前唯一在途会话确切，安全自动补齐 key 和 token，避免模型因漏传 key 导致发送失败与二次重复调用
-          const got = await resolveMissingSession(null);
-          if (got && !got.error && got.key) {
-            callArgs.key = got.key;
-            if (!callArgs.token && got.token) callArgs.token = got.token;
-            console.error(`[napcat-safe] ${name} 缺 key，已按唯一在途会话安全自动补齐: ${callArgs.key}`);
-          } else {
-            console.error(`[napcat-safe] ${name} 缺 key，且无唯一在途会话（${got?.error || got?.reason || '多个会话或无活跃会话'}），拒绝`);
-            return {
-              content: [{
-                type: 'text',
-                text: 'Missing key. The wake body has a line `[Session] group:<id>` or `[Session] private:<QQ>` - '
-                  + 'copy that value into key (e.g. [Session] group:123456 -> key="group:123456"). '
-                  + 'Never guess or reuse another session key: the bridge used to guess the target chat and once posted an image into the wrong group, so a missing key is now always rejected.'
-              }],
-              isError: true
-            };
-          }
+          console.error(`[napcat-safe] ${name} 缺 key，拒绝（不猜会话）`);
+          return {
+            content: [{
+              type: 'text',
+              text: 'Missing key. The wake body has a line `[Session] group:<id>` or `[Session] private:<QQ>` - '
+                + 'copy that value into key (e.g. [Session] group:123456 -> key="group:123456"). '
+                + 'Never guess or reuse another session key: the bridge used to guess the target chat and once posted an image into the wrong group, so a missing key is now always rejected.'
+            }],
+            isError: true
+          };
         }
         if (missingToken && !callArgs.token) {
           const got = await resolveMissingSession(String(callArgs.key ?? ''));

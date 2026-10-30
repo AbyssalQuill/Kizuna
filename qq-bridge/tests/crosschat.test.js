@@ -125,7 +125,7 @@ const otherLines = (block) => block.split('\n').filter((l) => l.startsWith('[Oth
 const parseOther = (line) => {
   const m = line.match(/^\[Other sessions\] (.+?): (.+?): (.*) - already handled; do not re-act unless asked or new\.$/);
   assert.ok(m, `没解析出 [Other sessions] 行：${JSON.stringify(line)}`);
-  return { label: m[1], who: m[2], body: m[3] };
+  return { label: m[1], who: m[2].replace(/\s*\(id:[^)]+\)$/, ''), body: m[3] };
 };
 
 /** 旧实现（文件摘要）在同一标签下的行长上限：前缀 + 标签 + ': ' + 80 字正文 + 后缀。 */

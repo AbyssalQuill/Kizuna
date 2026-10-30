@@ -180,7 +180,7 @@ t('⑥b 返回结构紧凑：字段齐全、正文截到 200 字、按时间倒�
   const rows = mem.recentMessagesAcrossSessions(SELF, { now, limit: 10 });
   const top = rows[0];
   assert.equal(top.text.length, 200, `正文应截到 200 字，实际 ${top.text.length}`);
-  assert.deepEqual(Object.keys(top).sort(), ['isSelf', 'key', 'sender', 'senderUid', 'text', 'ts', 'tsMs'].sort(), Object.keys(top).join(','));
+  assert.deepEqual(Object.keys(top).sort(), ['hasMedia', 'isSelf', 'key', 'messageId', 'sender', 'senderUid', 'text', 'ts', 'tsMs'].sort(), Object.keys(top).join(','));
   assert.equal(top.key, B, '最新的一条应排第一');
   assert.equal(top.sender, '长文');
   assert.equal(top.isSelf, false);

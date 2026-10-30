@@ -48,10 +48,10 @@ let botRef = null;
 export function initQqSendCore(cfg) {
   cfgRef = cfg;
   setSendLinearCfgReader(() => (cfgRef?.social?.send ?? null));
-  // 动作括号剥离开关：默认开，config.social.speech.stripActionBrackets=false 可整条关掉（回滚用）
+  // 动作括号剥离开关：默认关（源头提示词已约束，不再用正则误伤代码/括号），config.social.speech.stripActionBrackets=true 可显式开启
   try {
     configureOutbound({
-    stripActionBrackets: cfg?.social?.speech?.stripActionBrackets !== false,
+    stripActionBrackets: cfg?.social?.speech?.stripActionBrackets === true,
     // 2026-10-30：颜文字整块不跨行。一行按多少列算由 config.social.speech.kaomojiMaxCols 调（默认 30）。
     kaomojiLineGuard: cfg?.social?.speech?.kaomojiLineGuard !== false,
     kaomojiMaxCols: cfg?.social?.speech?.kaomojiMaxCols,

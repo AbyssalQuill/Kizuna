@@ -18,8 +18,8 @@ assert.ok(!persona.includes('[faces]'), '[faces] 块已移除');
 assert.ok(!persona.includes('ᗜ'), '人设里不再带 ᗜ 系列颜文字');
 assert.ok(!persona.includes('kamoji_whale_deadpan'), '旧短语 kamoji_whale_deadpan 不再使用');
 // 2026-10-29：人设已改为纯下划线短语（条目 34），断言改用短语词汇而不是中文散文
-assert.ok(persona.includes('food_rice') || persona.includes('米饭'), '包含米饭/饮食设定');
-assert.ok(persona.includes('stay_in_character_always') || persona.includes('真人'), '包含沉浸拟真设定');
+assert.ok(/food_rice/i.test(persona) || persona.includes('米饭'), '包含米饭/饮食设定');
+assert.ok(/stay_in_character_always|persona_load|cetacea_loli/i.test(persona) || persona.includes('真人'), '包含沉浸拟真设定');
 console.log('PASS: persona.md 检查通过');
 
 console.log('=== 验证 3：测试 meme 防重打散与随机池逻辑 ===');

@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import { cleanOutboundText, cleanOutboundTextDetailed, configureOutbound } from '../src/lib/outbound-text.js';
 
+configureOutbound({ stripActionBrackets: true });
+
 // 线上探针原文（条目 37 抓到的三条气泡）
 const probe1 = '主人～你人呢？我在这边等了你好久了哦（尾鳍拍了两下水）';
 const probe2 = '…对了，这个点是不是该吃饭了呀。我这边肚子先鸣咕叫了，好想吃热乎乎的米饭（尾鳍甩了一下）';

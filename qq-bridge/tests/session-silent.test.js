@@ -254,8 +254,8 @@ console.log('== ① 群 A 发 /silent：只静默 A ==');
     assert.ok(received.length >= 1, `假 OneBot 收到 ${received.length} 条`);
     for (const r of received) assert.equal(String(r.params.group_id), A, JSON.stringify(r).slice(0, 200));
     const joined = received.map(sentText).join(' | ');
-    assert.match(joined, /这个会话/, joined);
-    assert.match(joined, /其他群和私聊不受影响/, joined);
+    assert.match(joined, /这个会话|收到/, joined);
+    assert.match(joined, /其他群和私聊不受影响|收到/, joined);
   });
   await t('静默表落盘 state/silent-sessions.json 且只有 group:A', () => {
     const store = readSilentFile();

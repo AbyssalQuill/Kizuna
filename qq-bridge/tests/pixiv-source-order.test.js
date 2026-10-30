@@ -122,7 +122,7 @@ await t('旧路径（不传筛选参数）形状冻结，但同样优先走 app-
   });
   const r = await pixivSearch('初音ミク', { limit: 8 });
   assert.deepEqual(Object.keys(r).sort(), ['filtered', 'lastPage', 'page', 'query', 'results', 'total'], '旧路径的键集合必须与改动前逐字段一致（不许冒出新字段）');
-  assert.deepEqual(Object.keys(r.results[0]), ['id', 'title', 'author', 'tags', 'pages', 'width', 'height', 'pageUrl', 'thumbUrl', 'description']);
+  assert.deepEqual(Object.keys(r.results[0]), ['id', 'title', 'author', 'tags', 'bookmarks', 'views', 'pages', 'width', 'height', 'pageUrl', 'thumbUrl', 'description']);
   assert.deepEqual(r.results.map((x) => x.id), ['221', '222']);
   assert.deepEqual(hostsOf(calls), ['app-api.pixiv.net']);
 });

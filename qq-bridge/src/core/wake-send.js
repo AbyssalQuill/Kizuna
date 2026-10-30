@@ -34,7 +34,7 @@ import { getPromptMediaResolver } from './prompt-deliver.js';
 import { buildCrossChatBlock } from './crosschat.js';
 import { activityStatusLine } from './activity.js';
 import { armPendingWakeLease, disarmPendingWakeLease } from './turn-guard.js';
-import { wakeConfigMissCount, reverse, pendingWakeKeys, TurnStartAt, collectors, agentRunningSessions, holdActiveKeys, turnHasBubble } from './session-state.js';
+import { wakeConfigMissCount, reverse, pendingWakeKeys, TurnStartAt, collectors, agentRunningSessions, holdActiveKeys, turnHasBubble, messageMediaStore } from './session-state.js';
 import { noteInboxDelivery } from './inbox-marks.js';
 // 文件类型标签（`[file:PDF]` 标记用）：与正文里的 `[文件:…]` 标记共用同一份映射，避免两处漂移
 import { fileKindLabel } from '../lib/message-parse.js';
@@ -239,17 +239,10 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
     }
   }
 
-  /* 2026-10-30 主人：「群聊什么都接话，根治」。
-   * 现场机制（两处叠加）：① 群配置里 anyMessage=true 时上面第 208 行直接放行**每一条**消息；
-   * ② 就算关了 anyMessage，这里对普通消息也一律 return 'probability' —— 骰子在 2026-09-30 被删过，
-   *    于是 probability 只剩"等于 0 才闭嘴"这一种含义，等于**没有概率闸门**。
-   * 现在恢复真正的掷骰：0 = 永不接，0<x<1 = 按概率接，1/未配 = 全部交给模型判断（旧语义保留）。 */
+  // 群聊普通消息：除非 probability 显式配置为 0（明确关闭），一律交由模型结合完整上下文判断是否接话
+  // （发言频率与防刷屏由 scheduleWake 入口的 speech-gate 逻辑回归门控统一负责）
   const rawProb = tr.probability;
-  const prob = (rawProb === undefined || rawProb === null || rawProb === '') ? null : Number(rawProb);
-  if (prob === 0) return null;
-  if (Number.isFinite(prob) && prob > 0 && prob < 1) {
-    return Math.random() < prob ? 'probability' : null;
-  }
+  if (rawProb !== undefined && rawProb !== null && rawProb !== '' && Number(rawProb) === 0) return null;
   return 'probability';
 }
 
@@ -375,8 +368,15 @@ export function appendTurnTailPersonaAnchor(promptText) {
  * 来源标记保留：owner = 主人配置的值；model = 模型自己写过的值。
  */
 function wakeRefLine(key) {
+  const st = getSocialState(key);
+  const tr = st?.wakeConfig?.triggers || {};
+  const ownerRaw = cfgRef?.social?.wake?.recommendedProbability;
+  const ownerStr = ownerRaw !== undefined && ownerRaw !== null && ownerRaw !== '' ? String(ownerRaw) : '未设置';
+  const curRaw = tr.probability;
+  const curStr = curRaw !== undefined && curRaw !== null && curRaw !== '' ? String(curRaw) : '未设置';
+  const src = tr.probabilitySource || 'default';
   const ds = deepsleepLine(key);
-  return ds ? `${ds}` : '';
+  return `[WakeRef] 普通消息不再按概率过滤，交由你结合上下文自主决定是否接话（主人配置=${ownerStr}，当前记录=${curStr}，来源=${src}；仅 0 代表关闭普通消息唤醒）${ds ? ' ' + ds : ''}`;
 }
 
 /**
@@ -479,9 +479,9 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    /* 2026-10-30：松弛拟人与友善互动；纯口语打字，绝无动作括号；自称用我或自然省主语；无句尾句号；自然气泡节奏 */
-    '[style] friendly_internet_tone pure_spoken_words no_action_brackets use_wo_or_drop_subject tail_no_period',
-    '[tools] in_group_reply_peer_use_replyToMessageId group_treat_all_as_netizens send_message_or_reply_ok closure_reply_literal_ok',
+    /* 2026-10-30：松弛拟人与友善互动；纯口语打字，绝无动作括号；自称用我或自然省主语；无句尾句号；自然精炼气泡节奏 */
+    '[style] friendly_internet_tone pure_spoken_words no_action_brackets no_unrelated_cat_verbal_tics use_wo_or_drop_subject tail_no_period concise_1_to_2_bubbles_save_tokens',
+    '[tools] parallel_step_1_2_3_supported in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally group_treat_all_as_netizens send_message_or_reply_ok closure_reply_literal_ok',
   ].join('\n');
 }
 
@@ -490,6 +490,41 @@ function judgeLineFor(key, reason) {
   return (String(key).startsWith('group:') && /anyMessage/i.test(String(reason || '')))
     ? '[turn] every_message_reaches_you_choose_silence_unless_you_add_something'
     : '';
+}
+
+/**
+ * 单轮会话动态微记忆与黑话唤醒槽（随回合末 collapseToSingleTurn 自然代谢，零上下文堆积，零系统提示词稀释）：
+ * - 提取当前活跃说话人的精简核心记忆（memoryDigest <= 260字）
+ * - 自动匹配本轮未读/近期消息中的群黑话（detectSlangMatches）
+ * - 主动唤醒（proactiveCheck 等）时若上次发言为自己且对方尚未回复，注入防打脸状态提醒
+ */
+function buildDynamicTurnContext(key, st, reason) {
+  if (!st) return '';
+  const parts = [];
+  try {
+    const unreadList = Array.isArray(st.unread) ? st.unread : [];
+    const lastUnread = unreadList.length ? unreadList[unreadList.length - 1] : null;
+    const activeUid = String(lastUnread?.userId || (String(key).startsWith('private:') ? String(key).slice('private:'.length) : '') || '');
+    const mem = memoryDigest({ uid: activeUid, convKey: key, limit: 4, maxChars: 260 });
+    if (mem) {
+      parts.push(`[Memory]\n${mem}`);
+    }
+    const textSample = unreadList.map((m) => String(m?.plain || m?.text || '')).join('\n');
+    if (textSample && Array.isArray(slangEntries) && slangEntries.length) {
+      const slangBlock = detectSlangMatches(textSample, slangEntries, key, 4);
+      if (slangBlock) parts.push(slangBlock);
+    }
+    const reasonBase = String(reason ?? '').split(':')[0];
+    if (/^(proactiveCheck|afterthought|timeout|activityStart)$/.test(reasonBase)) {
+      const lastAi = Number(st.lastAiReplyAt) || 0;
+      const lastIn = Number(st.lastIncomingAt) || 0;
+      if (lastAi > lastIn) {
+        const agoMin = Math.max(1, Math.round((Date.now() - lastAi) / 60000));
+        parts.push(`[LastSelfBubble] already_spoke_${agoMin}m_ago_without_peer_reply_stay_silent_unless_new_urgent_matter`);
+      }
+    }
+  } catch { /* 动态微卡片异常不阻断唤醒 */ }
+  return parts.length ? parts.join('\n') + '\n' : '';
 }
 
 export function buildWakePrompt(key, reason) {
@@ -507,13 +542,20 @@ export function buildWakePrompt(key, reason) {
   const perceptionLine = '[perception] step_3_qq_get_recent_messages_before_sending\n';
   /* 2026-10-29：自主动唤醒（追念 / 主动看顾）必须带一条「没有新东西就别说话」。
    * 线上实测这类唤醒占了不小比例，且经常补一句和上一条几乎一样的话 —— 用户体感就是「不聪明」。 */
-  const selfInitiated = /^(afterthought|proactiveCheck|topic|activityStart|timeout|replyCheck)$/.test(String(reason || ''));
+  const selfInitiated = /^(afterthought|proactiveCheck|timeout|activityStart|timeout|replyCheck)$/.test(String(reason || ''));
   const proactiveLine = selfInitiated ? '[self_talk] say_something_new_or_stay_silent\n' : '';
+  const unreadList = Array.isArray(st?.unread) ? st.unread : [];
+  const waiting = unreadList.length ? unreadList[unreadList.length - 1] : null;
+  const statusLine = waiting
+    ? `[Status] waiting on ${speakerTag(waiting)}${waiting.messageId ? `(id:${waiting.messageId})` : ''}: ${unreadBody(waiting, 160)}\n`
+    : '';
+  const dynContext = buildDynamicTurnContext(key, st, reason);
   /* 2026-10-30 主人：群里 100% 收到（active + anyMessage），但要自己判断该不该接话。
    * 这一行只在"因为 anyMessage 被叫醒"时出现 —— 别的唤醒原因不需要它，加了反而稀释。 */
   const diceLines = (voiceTurnHint(key) + memeTurnHint(key)).trim();
-  const diceBlock = diceLines ? `${diceLines}\n` : '';
-  const raw = tokenLine + wakeLine + perceptionLine + proactiveLine + diceBlock;
+  const wrLine = wakeRefLine(key).trim();
+  const diceBlock = [wrLine, diceLines].filter(Boolean).join('\n') + '\n';
+  const raw = tokenLine + wakeLine + perceptionLine + proactiveLine + statusLine + dynContext + diceBlock;
   return raw.replace(/\n{2,}/g, '\n').trim() + '\n';
 }
 
@@ -533,22 +575,9 @@ function formatRecentWindow(st, key, maxCount) {
    * 内存里只剩 5~6 条，模型对着一堆图片和别人的对话瞎接（群聊里"猫娘味儿挺冲的"就是这么来的）。
    * 现在按主人 2026-10-22 的要求：**每轮必须保有充分上下文**，缺的条数由库补齐，但绝不超过 maxCount
    * （上下文成本仍由 contextWindow 这个旋钮控制，不再有隐形缩水）。 */
-  if (key) {
-    let fromDb = recentChatMessages(key, maxCount);
-    if (resetCutoff > 0) {
-      fromDb = fromDb.filter((m) => (Number(m?.time) || 0) > resetCutoff);
-    }
-    if (fromDb.length) {
-      const merged = new Map();
-      for (const m of [...fromDb, ...recent]) {
-        if (!m) continue;
-        const mk = m.messageId ? `m:${m.messageId}` : `s:${m.seq ?? ''}:${m.time ?? ''}`;
-        merged.set(mk, m);
-      }
-      recent = [...merged.values()]
-        .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
-        .slice(-maxCount);
-    }
+  if (!recent.length && key) recent = recentChatMessages(key, maxCount);
+  if (resetCutoff > 0) {
+    recent = recent.filter((m) => (Number(m?.time) || 0) > resetCutoff);
   }
   if (!recent.length) return '';
   const unreadSeqs = new Set((Array.isArray(st.unread) ? st.unread : []).map((m) => m && Number(m.seq)).filter((n) => Number.isFinite(n) && n > 0));
@@ -1080,7 +1109,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   }
   const diceBlock = (diceLines ? `\n${diceLines.replace(/\n+$/, '')}` : '') + explicitMeme + explicitVoice;
   const tokenLine = `[Token] ${st.agentToken}`;
-  const rawText = `${tokenLine}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} unread\n${lines.join('\n')}${cohesionHint}${diceBlock}`;
+  const rawText = `${tokenLine}\n${sessionLine(key)}${currentStyleLine()}[Mid-turn] ${unreadToSend.length} new message(s) after your last bubble - not answered yet.\n${lines.join('\n')}${cohesionHint}${diceBlock}`;
   const text = appendTurnTailPersonaAnchor(rawText);
   const mySeq = (steerSeq += 1);
   /* 2026-09-22：修「在途注入吞图」—— 报障"附图片好像有问题，修复"。
@@ -1736,7 +1765,7 @@ export async function sendWakePrompt(key, reason) {
       const isGroup = !key.startsWith('private:');
       const burstGuidance = unreadMsgs.length >= 2
         ? (isGroup
-          ? '\n[burst] group_reply_with_replyToMessageId_for_target_peer'
+          ? '\n[burst] group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally'
           : '\n[burst] many_in_one_reply_any_order_pick_what_matters_no_need_to_answer_each')
         : '';
       unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}${groupActivityLine}`
@@ -1826,7 +1855,8 @@ export async function sendWakePrompt(key, reason) {
       const notOwnerTag = (!ownerWakeBranch && key.startsWith('private:'))
         ? `[NOT-OWNER]\n`
       : '';
-      const rawPrompt = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]\n${atLine}\n${clockLine}\n${diceBlock}\n${recallLine}\n${unreadLine}`;
+      const dynContext = buildDynamicTurnContext(key, st, reason).trim();
+      const rawPrompt = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]\n${atLine}\n${clockLine}\n${diceBlock}\n${recallLine}\n${dynContext}\n${unreadLine}`;
       promptText = rawPrompt.replace(/\n{2,}/g, '\n').trim();
     }
   } else {

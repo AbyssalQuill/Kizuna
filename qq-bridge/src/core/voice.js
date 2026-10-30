@@ -155,7 +155,13 @@ function readStored() {
 /** 生效配置 = 默认值 ← 主 config.json 的 voice 段 ← state/voice-config.json（管理端写入的优先） */
 export function voiceConfig() {
   const fromMain = (cfgRef && typeof cfgRef.voice === 'object' && cfgRef.voice) ? cfgRef.voice : {};
-  return mergeConfig(mergeConfig(defaults(), fromMain), readStored());
+  const merged = mergeConfig(mergeConfig(defaults(), fromMain), readStored());
+  if (fromMain.local && typeof fromMain.local === 'object' && merged.local) {
+    for (const k of ['rootDir', 'pythonPath', 'dataDir', 'modelsDir', 'character']) {
+      if (fromMain.local[k] && !merged.local[k]) merged.local[k] = fromMain.local[k];
+    }
+  }
+  return merged;
 }
 
 function maskKey(k) {
@@ -1804,7 +1810,7 @@ export async function sendVoiceToOneBot(key, filePath, { replyToMessageId = null
    * 语音文件只有几十 KB（base64 后 <100KB），走 base64 既绕开跨用户权限，也省掉路径映射那套。
    * 大文件（>2MB）才退回路径，避免把消息体撑太大。 */
   const voiceSize = fs.statSync(p).size;
-  const fileArg = voiceSize <= 2 * 1024 * 1024
+  const fileArg = (p.startsWith('/root/') && voiceSize <= 2 * 1024 * 1024)
     ? `base64://${fs.readFileSync(p).toString('base64')}`
     : napcatImageFileArg(p, cfgRef);
   const segments = [];
@@ -1830,7 +1836,7 @@ export async function sendVoiceToOneBot(key, filePath, { replyToMessageId = null
   let { res, body } = await onebotPost(action, build());
   let errText = onebotErrText(body);
   if (!res.ok || body?.status !== 'ok' || body?.retcode !== 0) {
-    if (/文件处理失败|识别URL失败|ENOENT|no such file|语音|record/i.test(errText) && !/^base64:\/\//i.test(String(recordSeg.data.file))) {
+    if (/文件处理失败|识别URL失败|Permission denied|Error opening input|ENOENT|no such file|语音|record/i.test(errText) && !/^base64:\/\//i.test(String(recordSeg.data.file))) {
       try {
         recordSeg.data.file = `base64://${fs.readFileSync(p).toString('base64')}`;
         log(`[voice] NapCat 读不到语音路径（${shortBody(errText).slice(0, 60)}），改用 base64 重发一次`);

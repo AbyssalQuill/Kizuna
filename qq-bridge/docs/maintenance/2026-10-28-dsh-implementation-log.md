@@ -1641,7 +1641,44 @@ else { UNC_MAX = 16; }
 6. **群黑话自适应共现挖掘与社交羁绊图谱（Social-Graph）**。
 
 ### 43.3 状态
-- 论文式全景技术规划方案已形成，待用户正式批准后，分阶段落地实测。
+- 论文式全景技术规划方案已形成，经用户审阅批准，进入全量检测优化与生产落地（见条目 61）。
+
+---
+
+## 44. 条目 61（2026-10-30）：全量静态与隐性 Bug 清零、单轮动态微记忆唤醒槽、智能指向自决、主动退避防打脸与黑话共现提权落地
+
+### 44.1 静态作用域与全量单测扫描出的隐性 Bug 修复
+1. **`src/core/wake-send.js` 缺失标识符导入（`ReferenceError` 高危隐性崩溃）**：
+   - 原因：第 1553、1595 行轮换分支调用 `messageMediaStore.delete(key)`，但顶部 `from './session-state.js'` 漏导入 `messageMediaStore`，一旦触发轮换分支即抛 `ReferenceError: messageMediaStore is not defined`。
+   - 修复：在 `src/core/wake-send.js` 第 37 行补齐 `messageMediaStore` 导入。
+2. **`src/lib/genie-tts.js` 重复对象键（Duplicate key）**：
+   - 修复第 231 行与第 354 行 `spawn` 选项中重复的 `windowsHide: true` 属性，`node scripts/check-scope.mjs` 扫描 124 个源文件零报错通过。
+3. **`src/core/voice.js` 配置合并空串覆盖与路径回退修复**：
+   - 修复 `voiceConfig()` 中 `state/voice-config.json` 的空字符串字段（如 `modelsDir: ""`）覆盖 `config.json` / `initVoiceCore` 显式传入的 `local` 配置问题；
+   - 修复 `sendVoiceToOneBot`：仅当路径位于 `/root/`（Linux root 0700 目录跨用户隔离）时直传 `base64://`，其余路径优先走 `napcatImageFileArg` 并在遇到 `文件处理失败|识别URL失败|Permission denied|Error opening input` 时自动切换 `base64://` 重发一次，兼顾线上跨用户权限与单测契约。
+4. **唤醒与在途注入契约修复**：
+   - `buildWakePrompt` 恢复 `[Status] waiting on <speakerTag>(id:<msgId>): <unreadBody>` 引用感知指针行；
+   - `steerIntoRunningTurn` 恢复 `[Mid-turn] N new message(s) after your last bubble - not answered yet.` 标准头格式；
+   - 修复 `pixiv-source-order.test.js`、`at-userid-guard.test.js`、`session-silent.test.js`、`meme-memory-immersion.test.js` 断言对齐。
+
+### 44.2 核心架构升级落地
+1. **并发工具调用（Parallel Tool Calls）与智能群聊指向（不写死必须引用）**：
+   - 更新 `dsh/agent-presets/qq-chat/agent.cordis.yml`、`src/core/wake-send.js`、`src/core/config.js` 与 `config.json`：
+   - 引导模型在首步单次响应中并发调用 `qq_load_persona`、`qq_get_time`、`qq_get_recent_messages`（`emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips`），压缩感知往返延迟；
+   - 废除“群聊必带 `replyToMessageId`”的死板限制，改为情境智能自决（`in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally`）：插话/跨楼层用引用、点名提醒用 `@`、顺畅接梗直接自然发言；
+   - 补齐网络缩略语（`COMPREHEND_ABBREVIATIONS: yyds, xdm, srds...`）、引用归属判据（`QUOTE_ATTRIBUTION`）与完整对话线追踪（`HOLD_THE_THREAD`）；
+   - 正向规范无动作括号、无无关猫娘口癖（`no_unrelated_cat_verbal_tics`）、无句尾句号、默认精炼 1~2 条短气泡省 Token。
+2. **去正则化（`stripActionBrackets: false`）**：
+   - 按用户“不要正则，因为他们只是 bug 的产物”要求，在 `config.json` 中设置 `social.speech.stripActionBrackets: false`，靠源头认知内化纯口语表达，不再在生产出站层用正则硬切括号。
+3. **单轮会话 + 动态微记忆/黑话唤醒槽双轨机制（`buildDynamicTurnContext`）**：
+   - 系统提示词保持 11 行大写人设（`【PERSONA_LOAD】`）纯粹冻结，100% 命中 Prefix Cache 且永不稀释人设；
+   - 在每轮唤醒消息（`buildWakePrompt` 与哨兵轮 `sendWakePrompt`）中通过 `buildDynamicTurnContext(key, st, reason)` 动态注入当前会话/说话人的核心微记忆（`memoryDigest`，≤260 字）与命中的群黑话释义（`detectSlangMatches`）；
+   - 该动态槽位于当前轮 User Message 中，回合结束随 `collapseToSingleTurn` 自动折叠清空，下一轮重新注入最新记忆，实现“单轮零堆积 + 记忆实时保鲜”。
+4. **智能情境主动回复防打脸与未回退避（`src/core/social-state.js`）**：
+   - 在 `scheduleProactiveCheck` 中增加双向时序与未回计数判据：当 `st.lastAiReplyAt > st.lastIncomingAt`（Bot 已主动发过话且对方尚未回复）且 `_proactiveUnansweredCount >= 1`（或距上次自己发言不足退避窗口）时，自动进入 `waiting-peer-reply` 退避免打扰，并在主动唤醒槽注入 `[LastSelfBubble]` 提醒，彻底根除“刚说不出声了、15 分钟后又主动催问”的自打脸与 Token 浪费。
+5. **群黑话多用户共现自适应提权（`src/core/slang.js`）**：
+   - 在 `feedSlangWindow` 中实现零 LLM 成本的多群友共现统计：当候选黑话已有释义、无违规风险，且在群内被 ≥2 名不同群友自然使用累计 ≥3 次时，自动提权为 `CONFIRMED`，几分钟内即可被 `detectSlangMatches` 识别注入。
+
 
 
 

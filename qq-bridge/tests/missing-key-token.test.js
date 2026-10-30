@@ -155,7 +155,7 @@ await t('缺 key：回可执行提示（指名去哪一行取），且不是 sch
   /* 2026-09-22 改口径：缺 key 的提示现在指向**唤醒正文的 [Session] 行**（[Token] 只出现在"缺 token"
    * 那条分支里，而本用例走的是"缺 key"分支）。断言改成按实际契约来，不再钉死旧文案。 */
   assert.equal(ambiguous.isError, true);
-  assert.ok(/缺\s*key/i.test(ambiguous.text), '提示文案不对：' + ambiguous.text.slice(0, 200));
+  assert.ok(/missing\s*key|缺\s*key/i.test(ambiguous.text), '提示文案不对：' + ambiguous.text.slice(0, 200));
   assert.ok(/\[Session\]/.test(ambiguous.text), '提示里要指名去 [Session] 行取 key：' + ambiguous.text.slice(0, 200));
   assert.ok(!/Invalid input|Invalid arguments/.test(ambiguous.text));
 });

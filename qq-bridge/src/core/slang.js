@@ -390,6 +390,32 @@ export function feedSlangWindow(key, sender, plainContent) {
   const win = slangWindows.get(key);
   win.push({ sender: String(sender || '未知'), text: text.slice(0, 200), time: Date.now() });
   if (win.length > 80) win.splice(0, win.length - 80);
+  // 轻量级群黑话多用户共现自适应提权（MaiBot 启发，零 LLM 消耗）：
+  // 候选词若已有释义、无敏感风险，且在群内被 ≥2 名不同群友累计自然共现 ≥3 次，自动确认为正式黑话
+  try {
+    const lower = text.toLowerCase();
+    let promoted = 0;
+    for (const entry of slangEntries) {
+      if (!entry || entry.status !== SLANG_STATUS.CANDIDATE || !entry.content || !entry.meaning) continue;
+      const scope = String(entry.scope || 'global').trim();
+      if (scope !== 'global' && scope !== key) continue;
+      if (/违规|敏感|政治|色情|赌博|违法/.test(String(entry.risk || ''))) continue;
+      if (lower.includes(String(entry.content).trim().toLowerCase())) {
+        entry.count = (Number(entry.count) || 0) + 1;
+        const ev = Array.isArray(entry.evidence) ? entry.evidence : [];
+        ev.push(`${sender}: ${text.slice(0, 60)}`);
+        entry.evidence = ev.slice(-20);
+        const uniqueSpeakers = new Set(entry.evidence.map((line) => String(line).split(':')[0].trim()).filter(Boolean));
+        if (entry.count >= 3 && uniqueSpeakers.size >= 2) {
+          entry.status = SLANG_STATUS.CONFIRMED;
+          entry.updatedAt = new Date().toISOString();
+          promoted += 1;
+          log(`[slang] 群内多用户共现自适应确认黑话 (${key}): "${entry.content}" (count=${entry.count}, speakers=${uniqueSpeakers.size})`);
+        }
+      }
+    }
+    if (promoted > 0) saveSlangStore();
+  } catch { /* 共现统计不阻断主流程 */ }
   maybeQueueSlangExtraction(key);
 }
 
