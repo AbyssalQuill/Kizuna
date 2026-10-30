@@ -25,6 +25,15 @@ export const TUNABLE_SPECS = [
   // 潜水模式下现在也是每条普通消息都交给模型自己判断。这个键只作为"记录值"出现在唤醒正文的 [WakeRef] 行里。
   { key: 'wakeActiveProbability', path: ['social', 'wake', 'activeProbability'], type: 'float', min: 0, max: 1, label: '活跃模式搭话记录值(不再当概率用)', desc: '2026-09-30 起不再决定"每条消息被随机唤醒的概率"：群里每条普通消息都会被送到模型面前、由它自己判断接不接。这个键只剩记录/展示作用（0 也不再表示关闭；要静默某个群请用群静默名单）。' },
   { key: 'wakeMaxPerHour', path: ['social', 'wake', 'maxWakePerHour'], type: 'dur', min: 0, max: 600, label: '群每小时唤醒上限', desc: '额度保险丝：同一群每小时最多唤醒多少次（默认 12，0=不限）。调小最直接地省额度' },
+  // ── 群聊发言闸门（2026-10-30，参考 MaiBot turn_trigger）────────────────
+  // 拦截点只有一个：scheduleWake（所有唤醒的唯一入口），所以 probability / replyCheck /
+  // proactiveCheck 三条自唤醒链都受同一套额度约束。@/点名/提问/关键词/拍一拍/私聊 完全不受限。
+  { key: 'speechGateEnabled', path: ['social', 'speech', 'enabled'], type: 'bool', label: '群聊发言闸门', desc: 'true=群聊里"没被点名"的自唤醒要过闸门（间隔+配额+别抢话+概率门）；false=全部放行。被 @/点名/提问/关键词 叫到的永远不受影响' },
+  { key: 'speechMinGap', path: ['social', 'speech', 'minGapMs'], type: 'dur', min: 0, max: 1800000, label: '群发言最短间隔', desc: '两次"主动接话"之间至少隔多久（默认 120000ms）。被叫醒但没说话也算占用，避免沉默一轮又立刻被叫醒' },
+  { key: 'speechMaxPerWindow', path: ['social', 'speech', 'maxPerWindow'], type: 'float', min: 0, max: 30, label: '窗口内最多主动说几条', desc: '滑动窗口配额，按**已发出**的消息数算（叫醒后选择沉默不消费额度）。取整，0=不限' },
+  { key: 'speechWindow', path: ['social', 'speech', 'windowMs'], type: 'dur', min: 300000, max: 21600000, label: '配额窗口长度', desc: '上面的配额按多长时间统计（默认 1800000ms = 30 分钟）' },
+  { key: 'speechMaxSelfRatio', path: ['social', 'speech', 'maxSelfRatio'], type: 'float', min: 0, max: 1, label: '自己占比上限', desc: '近 5 分钟消息里"自己说的占比"超过它就闭嘴（默认 0.35；至少 4 条才算）。群体吵不吵看这个最准，0=不限' },
+  { key: 'speechLikelihoodThreshold', path: ['social', 'speech', 'likelihoodThreshold'], type: 'float', min: 0, max: 1, label: '接话概率门限', desc: '叫醒模型前先用 logistic 估一次"它大概会开口"的分数，低于门限就不叫（默认 0.30，0=关掉这道）。参考 MaiBot 的 reply_likelihood' },
   { key: 'dndWindows', path: ['social', 'dndWindows'], type: 'str', label: '免打扰时段', desc: '如 23:00-08:00 或 23:00-08:00,13:00-14:00;空=关闭。免打扰内不主动找话,但被@/私聊仍秒回' },
   { key: 'proactiveFreshOnly', path: ['social', 'proactive', 'freshContextOnly'], type: 'bool', label: '主动需有话题', desc: 'true=主动开口前需有新消息或近2h群友话题,避免凌晨空转(默认 true)' },
   // —— 打字节拍（2026-09-15 定稿：只保留"按字数"一种）——

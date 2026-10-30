@@ -204,20 +204,11 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
 
   // @ 或引用回复机器人
   if ((atSelf || quoteTargetIsSelf) && (tr.atMention || tr.anyMessage)) return 'atMention';
-  /* 2026-10-30 主人：「还是无脑接话」。实测 35 分钟内人类 39 条、机器人 53 条 —— 它比人还说得多，
-   * 而且是每张图、每句闲聊都接。提示词那层已经在正文里给了（[turn] 可以沉默），但模型仍倾向开口，
-   * 所以这里加**确定性预算**：没被点名的普通消息，同一群 2 分钟内最多接一次。
-   * 被 @ / 叫名字 / 关键词 / 明确提问 一律不受限 —— 那些是真在找它。 */
-  const cooldownMs = Math.max(0, Number(cfgRef?.social?.wake?.groupReplyCooldownMs ?? 120000));
-  if (tr.anyMessage) {
-    const lastReply = Number(st?.lastAiReplyAt) || 0;
-    if (cooldownMs > 0 && lastReply > 0 && (Date.now() - lastReply) < cooldownMs) {
-      /* 留一行日志：预算挡掉多少条，是判断"群聊还吵不吵"的唯一直接证据（静默 return null 会让人以为没接线）。 */
-      log(`[group-budget] 跳过 ${key}：距上次发言 ${Math.round((Date.now() - lastReply) / 1000)}s < ${Math.round(cooldownMs / 1000)}s（未点名）`);
-      return null;
-    }
-    return 'anyMessage';
-  }
+  /* 2026-10-30 修正：这里的"2 分钟群聊预算"是错层的，已删除（当时 8 小时 0 条日志，一次没跑过）。
+   * 原因：它挂在 `tr.anyMessage` 分支里，而主力群是 diving + probability，永远走不到；
+   * 而且 replyCheck / proactiveCheck 这两条自唤醒链压根不经过本函数。
+   * 现在统一由 core/speech-gate.js 在 scheduleWake 入口拦截，本函数只管"这条消息是否算被叫到"。 */
+  if (tr.anyMessage) return 'anyMessage';
   if (tr.atMention && (atSelf || quoteTargetIsSelf)) return 'atMention';
   if (tr.nameMention && calledName) return 'nameMention';
 

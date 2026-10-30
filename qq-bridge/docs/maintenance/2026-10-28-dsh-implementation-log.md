@@ -1267,6 +1267,54 @@ keeps_face_flat_while_being_sweet
   `[style]` 的 `no_question_by_default` → `question_only_when_genuinely_unsure`。
 - 同一个教训第二次出现：**「允许例外」要写边界，「要求形状」也要留余地** —— 两头都会把模型压成模板。
 
+## 34. 条目 51（2026-10-30 10:20）：去 GitHub 看了同类项目怎么做，顺手查出「预算一次没跑过」
+
+### 34.1 上一版的群聊预算写错了层（8 小时 0 条日志）
+- 2026-10-30 早上加的「同一群 2 分钟最多接一次」写在 `evaluateWakeTrigger` 的 `if (tr.anyMessage)` 分支里。
+- 实测：`journalctl -u qq-bridge --since "-8h" | grep -c group-budget` → **0**。
+- 真实配置（`state/social-state.json` → `conversations`）：
+  - `group:868756515` = `mode=diving`、`anyMessage=false`、`probability=0.15`、`confirmedBy=mark_read`
+  - 另外两个群才是 `active + anyMessage`，但 `lastAiReplyAt` 一直是 0（那一轮根本没往那两个群发过消息）。
+- 也就是说：**话最多的那个群走的是 probability 分支**，我的预算挂在 anyMessage 分支上，一次都没进过。
+  这和条目 50 是同一类错误 —— 代码写了，但写在了不会被执行的那条路上。
+
+### 34.2 真正让它说个不停的是两条自唤醒链
+- 日志原文（改前）：`02:17:44 唤醒 group:***（probability）` → `02:17:56 工具统一发送 2/2 条`
+  → `02:17:56 已安排回复检查唤醒，23s 后检查` → `02:18:18 唤醒 group:***（replyCheck）`。
+  34 秒一个循环，发完自己再把自己叫醒。
+- 另一条是「主动机会」：`已安排主动机会检查，约 8~20min 后`，`social.proactive.probability 0.6`。
+- 两条都走 `dispatchWake`，**完全绕开 `evaluateWakeTrigger`**。所以只在触发判定里加闸门，等于没加。
+
+### 34.3 GitHub 上同类项目怎么做的（MaiBot `src/maisaka/turn_trigger/`）
+同一问题域（QQ/NapCat 群聊、中文、LLM），拆成四个文件：
+| 文件 | 干什么 |
+| --- | --- |
+| `scheduler.py` | 流水线：消息防抖 → 快速续接 → 静默消费 → @强制 → 空闲退避 → 动态门控 |
+| `reply_likelihood.py` | 逻辑回归估「这批消息会引出一次 reply」的概率（8 个特征，权重来自它自己 Planner 的拟合） |
+| `dynamic_gate.py` | 闭环：目标回复数 = 频率 × 预计回复数；窗口内实际回复超出就收紧保留比例，阈值从历史分数分布里取 |
+| `idle_backoff.py` | 连续空闲后 base×2^n 退避（有上限，待处理够多可绕过） |
+- 关键设计：**门控在「消息进不掉进 Planner」这一层，而不是在「模型该不该说话」这一层**；并且按**实际回复数**闭环，不按唤醒数。
+- AstrBot 那侧同一件事只有 `astrbot/core/config/default.py` 里的一个概率配置 —— 说明这不是某家的独门，是这类机器人的共同必需件。
+
+### 34.4 改法：闸门收到唯一入口 `scheduleWake`（`src/core/speech-gate.js`）
+四条规则，按顺序短路：
+1. `directed` 放行：@ / 点名 / 提问 / 关键词 / 拍一拍 / 私聊 / 超时续接一律不过闸门，也不占额度。
+2. `gap`：距上次放行或上次真发言不足 `minGapMs`（默认 120s）→ 拦。用唤醒时刻而不是只看 `lastAiReplyAt`，否则「叫醒后沉默」会立刻被再叫一次。
+3. `quota`：近 `windowMs`（默认 30min）已发 `≥ maxPerWindow`（默认 5）条 → 拦。**按已发出的气泡数算，不按唤醒数** —— 叫醒后选择沉默不该消费额度。
+4. `domination`：近 5 分钟自己占比 > `maxSelfRatio`（默认 0.35，至少 4 条才算）→ 拦。
+5. `likelihood`：`estimateReplyLikelihood()` 的分数 < 0.3 → 拦。8 个特征照抄 MaiBot，只有 `recent_self_ratio` 取了负号（见文件头「分歧①」：MaiBot 那边靠 dynamic_gate 闭环纠偏，我们直接当「别抢话」信号）。
+- 接线三处：`scheduleWake`（消息触发，且必须在推进 `_wakeIntendedSeq` 水位**之前**，否则看门狗会把被拦的消息当成「收下没交付」重排）、`proactiveCheck` 定时器、`replyCheck` 定时器。
+- 删掉 `wake-send.js` 里那段跑不到的预算，留注释指向新位置。
+
+### 34.5 验证
+- 单元：6 个合成用例逐条命中（`atMention` ALLOW、私聊 ALLOW、10s BLOCK gap、5条 BLOCK quota、3/5 BLOCK domination、带问号的正常批次 ALLOW score 0.49、纯图片 BLOCK likelihood score 0.15）。**「每张图都接话」正是被 likelihood 挡掉的那条。**
+- 部署：`speech-gate.js f4c970d1…`、`social-state.js b1e098c8…`、`wake-send.js 08f65c8a…`、`tunables.js 00801ccb…`，重启后 active，无报错。
+- 现场验证待补：`[speech-gate] 拦下 …` 日志行。
+
+### 34.6 可调项（管理端「口头调参」里能直接改）
+`social.speech.enabled / minGapMs / maxPerWindow / windowMs / maxSelfRatio / likelihoodThreshold`。
+
+
 
 
 

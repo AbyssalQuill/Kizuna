@@ -21,6 +21,8 @@ import { isSessionSilent } from '../lib/session-silent.js';
 import { bjMinutes, parseClockMin } from '../lib/time.js';
 // 会话重置时"必须跨着重置活下来"的已回复账本（真机事故见本文件 resetConversationKeepingLedger 注释）
 import { carryReplyLedger } from './send-idempotency.js';
+// 群聊发言闸门（2026-10-30）：所有内部自唤醒的唯一拦截点，见 speech-gate.js 文件头
+import { checkSpeechGate } from './speech-gate.js';
 
 let cfgRef = null;
 /** main 启动时调用：注入 cfg（此后不再变） */
@@ -912,7 +914,14 @@ export function scheduleProactiveCheck(key) {
       busy: isConversationBusy(key, st)
     });
     if (gate.fire) {
-      void dispatchWake(key, 'proactiveCheck').catch((error) => log(`[default] proactive 唤醒异常 ${key}:`, error?.message ?? error));
+      /* 主动机会走 dispatchWake，绕开了 scheduleWake 的闸门 —— 这里补一次，
+       * 否则"8~20 分钟一次、有话题就开口"会成为绕开群聊额度的免费通道。 */
+      const sgProactive = checkSpeechGate({ key, st, reason: 'proactiveCheck', cfg: cfgRef });
+      if (sgProactive.allow) {
+        void dispatchWake(key, 'proactiveCheck').catch((error) => log(`[default] proactive 唤醒异常 ${key}:`, error?.message ?? error));
+      } else {
+        log(`[speech-gate] 拦下 ${key} reason=proactiveCheck why=${sgProactive.why} ${sgProactive.detail}`);
+      }
     } else {
       log(`[default] proactive 本轮不开口(${gate.why}) ${key}`);
     }
@@ -974,6 +983,16 @@ export function scheduleWake(key, reason) {
     return;
   }
   const st = getSocialState(key);
+  /* 2026-10-30 主人：「为什么群里还是这样」「无脑至极」。
+   * 上一版的群聊预算写错了层：它挂在 evaluateWakeTrigger 的 `if (tr.anyMessage)` 分支里，
+   * 而主力群实际是 diving + probability 0.15 —— 那条分支一次都没进过（8 小时 0 条日志，
+   * 这是"要求没执行"的直接证据）。外加 replyCheck / proactiveCheck 两条自唤醒链根本不经过
+   * evaluateWakeTrigger。所以闸门收拢到 scheduleWake —— 所有唤醒的唯一入口。 */
+  const speechGate = checkSpeechGate({ key, st, reason, cfg: cfgRef });
+  if (!speechGate.allow) {
+    log(`[speech-gate] 拦下 ${key} reason=${reason} why=${speechGate.why} ${speechGate.detail}`);
+    return;
+  }
   // 2026-09-12 投递看门狗的"意图水位"：只要 scheduleWake 被调用，就说明桥已经决定把这条消息交给模型，
   // 于是把水位推进到"此刻 unread 的最高 seq"。看门狗（sweepUndelivered）只兜这一类：
   //   `seq <= _wakeIntendedSeq（桥打算交付） && seq > lastDeliveredSeq（但没交出去）`。
@@ -1423,6 +1442,13 @@ export function scheduleReplyCheck(key) {
       return;
     }
     st._lastReplyCheckAt = Date.now();
+    /* replyCheck 同样走 dispatchWake。它是"发完消息 15~29 秒后再叫一次"的自唤醒链：
+     * 02:17:44 发完 → 02:18:18 又被 replyCheck 叫醒，34 秒一个循环，是群里话多的主发动机之一。 */
+    const sgReplyCheck = checkSpeechGate({ key, st, reason: 'replyCheck', cfg: cfgRef });
+    if (!sgReplyCheck.allow) {
+      log(`[speech-gate] 拦下 ${key} reason=replyCheck why=${sgReplyCheck.why} ${sgReplyCheck.detail}`);
+      return;
+    }
     void dispatchWake(key, 'replyCheck').catch((error) => log(`[default] replyCheck 唤醒异常 ${key}:`, error?.message ?? error));
   }, delay);
   st.replyCheckTimer.unref?.();
