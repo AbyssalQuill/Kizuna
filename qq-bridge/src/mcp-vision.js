@@ -19,6 +19,8 @@
 //   本服务**只读图片**，且只能读三个允许的目录：NapCat 临时目录、桥的 image-tmp、
 //   DSH 附件目录 —— 别的一律拒绝。它不是通用文件读取工具。
 import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -130,6 +132,32 @@ async function bridgeApi(pathname, init = {}) {
   return body;
 }
 
+/* ── GIF / 动态图分帧（2026-10-30）─────────────────────────────────────────────
+ * 现场：主人说「识图还是不准」。多模态模型对**动图**基本只看得到第一帧，
+ * 于是表情包里的"动作"（打滚、拍桌、笑喷）全被读成一帧静止画面，语义自然错。
+ * 做法：ffmpeg 把动图抽成最多 4 张等间隔的 PNG，按顺序一起交给模型 ——
+ * 它能同时看到"怎么开始、怎么结束"，而不是一张快照。
+ * 失败一律回退成单帧（绝不因为抽帧失败就不给图）。 */
+const GIF_MAX_FRAMES = 4;
+function extractAnimatedFrames(real) {
+  let tmpDir;
+  try {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vision-gif-'));
+    const out = path.join(tmpDir, 'f%02d.png');
+    // fps=2 抽 2 帧/秒，再由 -frames:v 限制总数；对短表情包足够覆盖起止
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-i', real, '-vf', 'fps=2,scale=512:-1:flags=lanczos', '-frames:v', String(GIF_MAX_FRAMES), out], { timeout: 15000 });
+    const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.png')).sort().map((f) => path.join(tmpDir, f));
+    return { dir: tmpDir, files };
+  } catch (e) {
+    try { if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    log('抽帧失败，回退单帧：' + String(e?.message ?? e).slice(0, 120));
+    return { dir: null, files: [] };
+  }
+}
+function cleanupDir(dir) {
+  try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
+
 const server = new McpServer({ name: 'vision', version: '0.1.0' });
 
 server.tool(
@@ -141,6 +169,29 @@ server.tool(
   async ({ file }) => {
     const r = await imageBlockFromFile(file);
     if (r.error) return { content: [{ type: 'text', text: r.error }], isError: true };
+    // 动图：抽出多帧一起交给模型（只看第一帧会把动作读错）
+    if (String(r.meta?.format || '').toLowerCase() === 'gif') {
+      const { dir, files } = extractAnimatedFrames(r.meta.file);
+      try {
+        if (files.length > 1) {
+          const blocks = [];
+          for (const f of files) {
+            const one = await imageBlockFromFile(f);
+            if (one?.block) blocks.push(one.block);
+          }
+          if (blocks.length > 1) {
+            return {
+              content: [
+                { type: 'text', text: JSON.stringify({ ...r.meta, animated: true, frames: blocks.length, note: 'GIF 已按时间顺序抽帧：先看整体动作，再看首尾差异' }, null, 2) },
+                ...blocks,
+              ],
+            };
+          }
+        }
+      } finally {
+        cleanupDir(dir);
+      }
+    }
     return { content: [{ type: 'text', text: JSON.stringify(r.meta, null, 2) }, r.block] };
   }
 );

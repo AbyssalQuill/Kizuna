@@ -98,6 +98,19 @@ export function prunePersonaResults(session) {
   const nodes = session.surface && Array.isArray(session.surface.nodes) ? [...session.surface.nodes] : [];
   if (!nodes.length) return 0;
   const names = callNameMap(session);
+  /* 2026-10-30：人设卡片是唯一要常驻的那一份 —— 只剪旧副本，保留最近一次加载。
+   * 为什么：守卫有 30 分钟新鲜窗口（qq-tool-restrict 的 PERSONA_FRESH_MS），模型不会每轮都去重读，
+   * 而这里每回合末把结果清零，两边一凑就变成「整场只在第 1 轮手里有人设」。
+   * 线上实测（session-94f4c1b9，00:56–00:59）：6 个回合只加载过 1 次，后面几轮全靠模仿自己上一句，
+   * 语气开始自我复述、冷脸萌一次都没发出去。保留最近一份 = 恒定一条副本，成本可控，且不依赖模型自觉。 */
+  let keepSeq = -1;
+  for (const seq of nodes) {
+    const ev = session.eventAt?.(seq);
+    if (!ev || ev.type !== 'tool/result') continue;
+    const t = textOf(ev.data?.message);
+    if (!t.includes(PERSONA_MARK) || t.includes('ephemeral_turn_pruned')) continue;
+    if (seq > keepSeq) keepSeq = seq;
+  }
   let replaced = 0;
   for (const seq of nodes) {
     const event = session.eventAt?.(seq);
@@ -111,6 +124,7 @@ export function prunePersonaResults(session) {
     /* 用 marker 判断"剪过没有"，别用长度：get_time 这类短结果本来就没几百字，
      * 用 STUB.length+40 当门槛会把它们当成已剪过，永远不动。 */
     if (text.includes('ephemeral_turn_pruned')) continue;
+    if (seq === keepSeq) continue;   // 最近一次人设加载：常驻，不剪
     try {
       session.append('tool/result', { ...event.data, message: { ...message, content: stubContent(message) } }, {
         surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq },

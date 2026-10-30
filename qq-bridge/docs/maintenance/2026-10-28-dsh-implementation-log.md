@@ -808,3 +808,448 @@ resolve_with_tools_never_ask_peer_to_explain
 - 已删除该行；保留的是行为约束（`empathy_first_then_reason` / `take_a_clear_stance_not_a_wisecrack` / `mostly_end_with_a_statement`），不再用写死的例句去替代模型自己的语感。
 - 部署：preset md5 `4675c1ce…`（仓库与 `~/.dsh/.agent-presets` 一致），重启后三服务 active，`sample_when_peer` 计数 0。
 
+## 19. 条目 36（2026-10-30 00:40）：补回「冷脸萌」+ 去掉全局开场白
+
+### 19.1 冷脸萌（persona.md）
+- 主人指出「小鲸鱼的冷脸萌没加上」。`kamoji_whale_deadpan` 在 10-29「负面转正向」那轮被删掉，之后人设里就不再有这一层。
+- 按正向短语写回三条（放在 `personality_tsundere_sweet` 之后）：
+
+```text
+personality_deadpan_cute
+flat_face_soft_words
+keeps_face_flat_while_being_sweet
+```
+
+- 只给性格方向，不给例句：台词的语感仍归模型自己。
+- 部署：`persona.md` 552 → **632 字节**、30 行，本地与服务器 md5 均为 `94d28560c76c02dccf05924d50c7e143`；上传走 `.new` + md5 核对 + `mv`（旧文件备份 `persona.md.bak-20261029-163739`）。
+  - **不需要重启**：`qq_load_persona` 每次调用现读 `/root/qq-bridge/persona.md`（`mcp-napcat-safe.js:1255`），下一条消息就是新人设。
+- 单测：`tests/meme-memory-immersion.test.js` 的旧断言「deadpan 必须被移除」改为「必须包含 `personality_deadpan_cute`」，实跑 `node tests/meme-memory-immersion.test.js` exit 0。
+
+### 19.2 去掉 “You are an AI agent powered by DeepSeek Harness.”
+- 这行是 `@deepseek-ai/dsh-system-prompt` 的固定首句（order −1000），由 `includeHarnessIdentity` 控制，默认 true。
+- 改法：home 级 `/root/.dsh/cordis.patch.yml` 末尾追加（带 BEGIN/END 标记，不碰 qq-bridge 自动维护的 compaction 段）：
+
+```yaml
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    personaPrefix: >-
+      You are a coding agent powered by the {{model}} model.
+```
+
+  `personaPrefix` 必须照抄 web 层的值 —— patch 是整行替换 config，漏写等于把它清空。
+- 取证：
+  - `dsh --profile web --dump-config` → `system-prompt` 行含 `includeHarnessIdentity: false`，`personaPrefix` 保留；
+  - 用同一 home 跑一次 `dsh headless`，新会话的 system message 开头变成 `You are a coding agent powered by the deepseek-flash model.`，`has_opener: False`（该句确实消失，整段装配正常）；
+  - `systemctl restart dsh-web` 后三服务 active，日志无启动错误。
+- **生效边界**：系统提示词在建会话那一刻烧进 history（`systemPromptUpdate: "in-history"`；线上 QQ 会话只有 1 条 system/message）。现有三个会话（`private:1736784911` / `group:868756515` / `group:1073589775`）里那句开场白、以及昨天那版 21 行 preset 会一直留着，直到会话重建。
+- 顺带确认的旧账：磁盘上 54 行的 preset 里有 29 行（多样化 / 表情语义 / 自查 / 共情表态）**从未进入线上会话** —— 会话建于 10-29 17:13，此后对 preset 的改动只在盘上。
+## 20. 条目 37（2026-10-30 00:54）：冷脸萌整套落进人设 + 出站清洗为颜文字让路
+
+### 20.1 源头（主人给的既有全套）
+- 权威版本：`/root/qq-bridge/persona.backup-switch-2026-10-29T06-46-52-187Z.md` 第 209 行 —— 全套 10 张，带情绪标签：
+
+```text
+平常 ᗜ - ᗜ        开心 ᗜ ᴗ ᗜ      不开心 ᗜ ‸ ᗜ     害羞 ,,ᗜ - ᗜ,,
+生气 ᗜ - ᗜ💢      卖萌 ᗜ 𖥦 ᗜ      比耶 ✌︎ ᗜ ֊ ᗜ◞
+暗爽 （ᗜ_ᗜ）➡（ᗜ֊ᗜ）        爆发 ( ╯－︿－)╯╧╧        睡着 ᶻz ₍ _ _ ₎
+```
+
+- 更早的 `persona.md.bak-persona-new-20261022-2050` 只有 7 张（缺 卖萌/比耶/暗爽/爆发），不用它。
+- 措辞同步修正：`personality_deadpan_cute / flat_face_soft_words` 换成 `personality_cold_face_cute / cold_face_lively_words` —— deadpan 在英文里是「不动声色讲笑话」的表演风格，中文模型容易压成面无表情的平铺；冷脸萌的萌在**反差**，措辞必须把「话是活的」写出来。
+
+### 20.2 两处代码放行（否则整套有一半发不出去）
+1. `src/lib/outbound-text.js`：括号剥离加判据 `ACTION_WORD_RE = /[\u3400-\u9fffA-Za-z]/` —— **括号内不带汉字/拉丁字母 = 颜文字，保留**；带字的照剥。
+   - 起因：`（ᗜ_ᗜ）➡（ᗜ֊ᗜ）`、`( ╯－︿－)╯╧╧` 天生带括号，一刀切会剥成空、气泡被整条丢弃。
+   - 安全性：动作描写必然带字（「尾鳍拍了两下水」/「smiles」），实测仍剥空。
+2. `src/lib/emoji.js`：白名单 `KAOMOJI_SUFFIX_CP = {0x1F4A2 💢, 0x27A1 ➡}` —— 只放行这两个「脸的一部分」码点，其余 emoji 照旧一律剥离，避免 emoji 回潮。
+
+### 20.3 验证
+- 部署机实跑（`/root/qq-bridge`，用已上线的模块）：10 张脸 **10/10 KEEP**；`（尾鳍拍了两下水）` → 空；`(smiles) hi` → `hi`。
+- 单测：`outbound-action-strip` 改政策断言（`( ˘ω˘ )` 由「剥空」改为「保留」）后通过；`outbound-format`、`persona-ephemeral`、`persona-inject`、`persona-merge`、`tool-restrict-guard`、`universal-prompts`、`reset-reply-idempotency`、`chat-split`、`send-pace`、`v13-features`、`meme-memory-immersion` 全通过。
+- 三个既有红灯（`outbound-send-integration` / `persona-keyless` / `quote-context`）用 `git stash` 对照确认**改动前就是红的**，与本次无关（分别是 E2E 断言、人设文本断言、preset 旧规则断言过期）。
+
+### 20.4 部署
+- `persona.md` 942 字节（md5 `8dafeb3a…`）、`outbound-text.js`（`0c54f18c…`）、`emoji.js`（`587d613b…`），走 `.new` + md5 核对 + `mv`，旧文件留 `.bak-*`。
+- `systemctl restart qq-bridge` 后三服务 active。
+- 生效：人设现读（下一条消息即生效）；清洗改动随重启生效。
+## 21. 条目 38（2026-10-30 01:03）：人设卡「只留最近一份」+ 全量 reset
+
+### 21.1 现场：6 个回合只加载过 1 次人设
+- 会话 `session-94f4c1b9`（00:56 重建）里：`turn/start` **6** 条，`qq_load_persona` 调用 **1** 次（turn 1）。
+- 两侧凑出来的：`qq-tool-restrict` 的 `PERSONA_FRESH_MS = 30 分钟`（守卫允许不再重读）+ `qq-persona-ephemeral` 每回合末把结果剪成占位（`ephemeral_turn_pruned`）→ **整场只有第 1 回合手里有角色卡**。
+- 后果两条，正好对上主人的反馈：
+  1. 冷脸萌一张都没发出去 —— `[faces]` 只在第 1 回合的上下文里；
+  2. 人机味变重 —— 后几轮没有角色卡，只剩系统提示词里的规则，于是开始**复述自己的语气**（00:59:02「收到，刚才是催得有点硬邦邦的，跟交接班似的…那就软一点说」）。
+
+### 21.2 改法：人设卡常驻最近一份
+- `qq-persona-ephemeral.mjs`：剪枝时先算出最新的那份人设结果 `keepSeq`，**只剪旧副本**；其余瞬态（读消息 / get_time / 搜索）照旧全剪。
+- 成本：历史里恒定一条人设（860 字节 ≈ 400 token），不再依赖模型每轮自觉重读、也不再新增工具往返。
+- 代价：人设改动后，旧副本要到下一次加载才会被替换；期间上下文里是旧版。
+
+### 21.3 人设再收一次（去元指令）
+- 删掉 `cold_face_lively_words / cold_mood_kaomoji_as_the_whole_bubble / kaomoji_only_from_faces_set / one_kaomoji_per_message` —— 这四条是「关于说话方式的规则」，规则越密，模型越容易进入「执行规范」的语气（就是人机味）。
+- `spoken_words_only` → `spoken_words_or_a_face`：原来这条把颜文字堵死（只要词、不要脸），改完仍禁止动作描写。
+- `[sample_bubbles]` 末尾加两条**只有脸**的气泡（`ᗜ ‸ ᗜ` / `ᗜ - ᗜ💢`）：演示 > 指令。
+
+### 21.4 验证
+- `tests/persona-ephemeral.test.js`：新增「旧人设被剪、最近一份保留」「只有一份时一条也不剪」两组断言，17 项全 PASS。
+- 部署：`persona.md` 860 字节（md5 `1f2790df…`）、`qq-persona-ephemeral.mjs`（`4db83483…`，仓库与 `~/.dsh/.agent-presets/qq-chat/` 两份一致），`qq-bridge` 与 `dsh-web` 依次重启，三服务 active。
+
+### 21.5 全量 reset（主人指令：「最后全量reset」）
+- 备份：`state/social-state.json.bak-fullreset-20261029-170324`、`state/sessions.json.bak-fullreset-20261029-170324`。
+- `POST /api/social/reset` → `{ok:true, keptLedgerKeys:9}`；9 个会话全部清上下文（`recent=0 / unread=0`），唤醒配置一并清回 `diving`，`paused=false`。
+- **已回复账本保留**（例：group 300 条 answeredMessageIds、lastUnreadSeq 25098）→ 重置前后同一批消息不会被重新唤醒重复回复。`chat.db` / 长期记忆 / 人设 / 表情库都不受影响。
+- 补一刀：该端点清了内存里的 `state.sessions` 但没调 `saveState()`，磁盘 `sessions.json` 还留着 3 个旧 id（桥重启会把内存重新指回已归档的会话）。已手工对齐为 `{"sessions":{}}`，备份 `sessions.json.bak-preempt-*`。
+- reset 之后的第一条消息会建全新会话：系统提示词里没有开场白、preset 是 54 行新版、插件是常驻人设的新版。
+## 22. 条目 39（2026-10-30 01:2x）：系统提示词瘦身 7901 → 2353 字节
+
+### 22.1 去掉 prompt 里的注释
+- `agent.cordis.yml` 的 `text: |-` 块里有 6 行中文注释（`# 2026-10-30 主人：…`），YAML 块标量会把它们当正文发进模型。已全删。
+- 保留 `# === qq-bridge persona/rules BEGIN/END ===` 两行：`lib/preset-compose.js` 幂等合成靠这两个标记定位，删了会被重新插回去。
+
+### 22.2 ops 插件整块去掉（主人指令）
+- web profile patch（`/root/.dsh/profiles/web/cordis.patch.yml`，带 `kizuna 提示词瘦身 BEGIN/END` 标记）里把 `dsh-ops-shell / file / ptc / discovery / panel / tui / hide-official` 全部 `disabled: true`。
+- 效果：`ops_*`、`bash`、`pwsh`、`ops_discover_tools` 连同三张「Repository file tools / Shell routing」文档表一起消失（工具表 18 个，不再有 `ops_` 前缀）。
+- **能力核对**（辅助 agent）：persona-agent 历史上 41 次 `bash` 全是自查（`pwd` / `ls` / `cat state/*.json` / 算 epoch），真正的活在 `qq_learning_corpus`(39) + `qq_learning_submit`(15)；slang-agent 是 `qq_learning_corpus`(19) + `web_search`(5) + `web_fetch`(5)。这些 MCP 工具全部保留，去掉的只是「能自己 shell 进宿主」这条多余权限。
+- 同时 `harness-dev-context`、`ui-deliverables` 也 `disabled: true`（GUI/HMR 说明与文件卡片规范，QQ 场景无用）。
+
+### 22.3 MEMORY 段改下划线短语
+- `plugins/dsh-memory/lib/src/index.js` 的 `MEMORY_RECALL_HINT`：12 行散文 1128 字符 → 9 行短语（`[MEMORY] on_demand_no_dump` / `read: qq_memory_search(...)` / `max_two_lookups_per_round` …）。
+- 保留调用形状与两个工具名，其余全部压成短语；`INJECT_MEMORY_SUMMARY` 仍是 false（不做逐轮记忆摘要）。
+
+### 22.4 验证（真实新会话，不是推演）
+- 用 dsh-web 的 RPC（`workspace/create` → `session/create` + `agentPreset: qq-chat` → `session/prompt`）建探针会话，逐个读回 system message：
+  - 起步 7901 → 去注释+去 ops 文档+去 GUI 段 → **3275** → 再去完整 ops 行 → **2967** → MEMORY 改短语 → **2353** 字符 / 65 行。
+  - 探针里断言：`Repository file tools` / `Shell routing` / `ops_` / `Prefer showing` / `DeepSeek Harness Web GUI` 全部 False；`[PERSONA]` 与 `[MEMORY]` 段在。
+  - 工具表 18 个，`ops_*`/`bash`/`pwsh` 计数 0，`mcp__napcat__*` 与 `mcp__web-search-safe__*` 都在。
+- 探针会话用完即归档（`workspace/archiveSession`），临时脚本已删。
+
+### 22.5 落地与遗留
+- 文件：`qq-chat/agent.cordis.yml`（md5 `5a600a14…`）、`dsh-memory/lib/src/index.js`（`95207259…`，仓库与 `~/.dsh/profiles/node_modules/@meomeo-dev/dsh-memory/` 两份一致）。
+- `qq-bridge` 与 `dsh-web` 依次重启，三服务 active。
+- 遗留：profile patch 里那两条「装饰性」行（`ui-settings-general` 的 welcomeNoticeVersion）由 `dsh-side.syncPresetDeclaration21` 每次重启重写；`kizuna 提示词瘦身` 块在声明块之外，重启后仍在（已实测两轮）。
+## 23. 条目 40（2026-10-30 08:15）：管理端卡片精简 + steer 开关删除（交接）
+
+### 23.1 管理端配置卡片精简（前端在仓库根，不在 qq-bridge 里）
+- 改动文件：`src/pages/BridgeConfig.tsx`（管理端 React 前端）。原则：**只从界面移除入口，键仍在 config.json 生效**（与文件里既有的「删控件不删键」做法一致）。
+
+| 卡片 | 删掉的项 |
+| --- | --- |
+| NapCat 连接（地址与路径 → 地址） | `napcat.imageFileMode`（图片文件传法）、`napcat.tmpDir`（临时文件目录）、`napcat.dockerPathMap`（容器路径映射，object 型） |
+| 计价口径（/token 指令） | `tokenCost.peakHours`（数组） |
+| 好友申请与信任 | `social.trustedCrossSessionUids`（数组，跨会话白名单） |
+| 投递与回合 / steer | 标签、长说明、短说明三处残留（卡片本体 2026-10-24 已摘） |
+
+- 构建与部署：`npx tsc -b` 通过 → `npx vite build`（产物 `index-DwpMvRGh.js`）→ 同步到运行目录 `D:\Kizuna\resources\runtime\dist`（备份 `dist.bak-cfgtrim-20261030-075556`）。
+  - **管理端跑的是 `D:\Kizuna` 打包版，不是仓库里的 dist**；官方同步脚本是 `tools/build-fast.ps1`（vite build → 拷到 runtime/dist）。只重建仓库不会改界面。
+- 验证（抓运行中的管理端实际下发文件）：`http://127.0.0.1:1921/assets/index-DwpMvRGh.js` 里 `NapCat 连接（地址）`=true、`NapCat 连接（地址与路径）`=false、`["wsUrl","httpUrl"]`=true、`steerEnabled`=false。
+- 代价（要记住）：图片传法 / 临时目录 / 容器路径映射以后只能改 config.json；受信任人名单同理 —— 而 `autoFriendGuard` 判「是不是自己人」就看这个名单。
+
+### 23.2 steer 开关删除：以后恒走 steer
+- `src/core/wake-send.js::steerIntoRunningTurn`：删掉 `cfgRef.social.steerEnabled === false` 判据与它后面的 `allowed` 分支。该分支命中时只会 `return false`，把忙时到达的消息退回补发轮（更慢更费）。
+- 安全性不变：真正兜住「忙 ≠ 有回合在跑」的是下面的 `runningTurn` 硬守卫（必须确实有回合在跑才塞 `[Mid-turn]`）。
+- `config.example.json` 去键；服务器 `config.json` 同步去键（备份 `config.json.bak-nosteer-*`）。
+- 部署：`wake-send.js` md5 `62e48532…`，重启后三服务 active。
+- 单测对照（`git stash` 前后各跑一遍，避免把历史红灯算成新债）：
+  - `mid-turn-steer` / `steer-merge` / `steer-media` / `test-wake-protocol`：改动前 FAIL **5 / 3 / 2 / 53**，改动后 **4 / 2 / 1 / 52** —— 都是断言过期的历史红灯，本次未新增，各少一条。
+
+### 23.3 线上现状（交接给下一位）
+- 服务：`qq-bridge` / `dsh-web` / `napcat` 三服务 active。
+- 会话：`private:1736784911` → `session-ad161504…`，建于 **10-30 01:12:24**，早于 01:1x 的 ops 移除与 MEMORY 短语化，所以这个会话手里仍是 **3476 字节旧版**（带 ops 三张文档表 + 散文 MEMORY）。新版 2353 字节要等下一个新会话（轮换或 reset）才会烧进去。
+- **冷脸萌首次实证**：01:13:45 的助手气泡「改个字也藏不住，反正到我耳朵里都是夸我 ᗜ - ᗜ」—— 脸出来了，但挂在句尾，不是独立气泡（`cold_mood_kaomoji_as_the_whole_bubble` 那条已被删，靠 `[sample_bubbles]` 里两条纯脸气泡示范，目前还没复现成独立气泡）。
+- 人设卡常驻生效：同一会话内 `qq_load_persona` 共调用 6 次，每次结果都带 `[faces]`；剪枝只留最近一份。
+- 群聊：`868756515` / `1073589775` / `1072393236` 均为 `active + anyMessage`（`/api/social/reset` 之后重新设回）。
+- **git**：本地领先 `origin/main` **5 个 commit**（`3c101a2` → `c9a3d1b`），尚未推送；CLI `git push` 历史上一律超时，既有做法是 MCP `push_files` 后 `git fetch && git reset --hard origin/main`。
+
+### 23.4 未完成（给下一位）
+1. 群消息入口的诊断日志（条目 38 遗留）：active 群仍无唤醒，需要在 `mux.js` 入向路径记 key + `triggers.anyMessage` + 判定结果 + 是否进合并窗。
+2. steer 恒开后的忙时实测：看 `[steer]` 日志与「消息不丢、不多回」。
+3. 冷脸萌独立气泡：现在只会挂句尾；要么让 `[faces]` 更显式，要么在 preset 里恢复一条「表情可以就是整条」的正向短语。
+4. 推 origin（5 个 commit）。
+## 24. 条目 41（2026-10-30 08:30）：颜文字整块不跨行
+
+### 24.1 现场
+- 主人截图：气泡「不过拟人还行这句话我记下了 ᗜ - ᗜ」在手机 QQ 里被自动换行切成
+  `…我记下了 ᗜ -` / `ᗜ` —— 脸被拆开就废了。
+- 库里能对上的原文（`chat.db`，发出去前的模型文本）：`2026-10-30 07:22:28`「早啊主人 一睁眼就来贴贴 ᗜ ᴗ ᗜ」、`01:26:06`「不过拟人还行这句话我记下了 ᗜ - ᗜ」、`01:13:45`「反正主人嘴里说的都是夸我 ᗜ - ᗜ」。
+  **换行是 QQ 客户端按像素自动折的，桥这边发的是单行文本** —— 所以只能在发送前主动排版。
+
+### 24.2 做法（`src/lib/outbound-text.js`）
+- 新增 `guardKaomojiLine(text, maxCols=30)`，接在 `cleanOutboundTextDetailed` 的 emoji 剥离之后、去尾句号之前：
+  - `tailFaceSpan()` 从尾部回扫，取「末尾那段非正文符号串」（遇到汉字/拉丁/数字/句读/中文标点就停），长度 ≥2 才算颜文字；
+  - `columnWidth()` 近似列宽：CJK 记 2 列，其余 1 列；
+  - 若 `列宽(正文) + 1 + 列宽(颜文字) > 30`，就在颜文字前插一个换行 —— **整体挤到下一行**；放得下则原样不动。
+- 不写死 `ᗜ`：人设里换成任何颜文字都是同一套标准，因此不需要「颜文字单独发一条」。
+- 两个开关（`configureOutbound`，由 `qq-send.js::initQqSendCore` 从配置读）：`social.speech.kaomojiLineGuard`（默认 true）、`social.speech.kaomojiMaxCols`（默认 30，实测线上气泡约 31 列）。
+
+### 24.3 验证
+- 新单测 `tests/kaomoji-line-guard.test.js`：13 项全 PASS。真实那条 → `"不过拟人还行这句话我记下了\nᗜ - ᗜ"`；短句（`哼 笨蛋主人 ᗜ - ᗜ`、`早啊主人 一睁眼就来贴贴 ᗜ ᴗ ᗜ`、`ᗜ ‸ ᗜ`、`,,ᗜ - ᗜ,,`）一律原样；句读结尾不当颜文字；换成 `✌︎ ᗜ ֊ ᗜ◞` 同样生效；开关能关。
+- 服务器上用**已部署的模块**实跑：
+  ```text
+  WRAP "不过拟人还行这句话我记下了\nᗜ - ᗜ"
+  KEEP "早啊主人 一睁眼就来贴贴 ᗜ ᗜ"
+  KEEP "哼 笨蛋主人 ᗜ - ᗜ"
+  KEEP ",,ᗜ - ᗜ,,"
+  WRAP "这个我也会啊别问了还用你来教我吗\n✌︎ ᗜ ֊ ᗜ◞"
+  ```
+- 部署：`outbound-text.js` md5 `4013725a…`、`qq-send.js` md5 `b4513c5a…`，`qq-bridge` 重启后三服务 active。
+- 生效时机：下一条发出的气泡就按新规则排版，不需要等会话轮换（这是发送侧清洗，不进系统提示词）。
+
+### 24.4 风险
+- 30 列是按截图反推的**估算**（截图中一行约 16 个汉字宽）。估大了脸还是会被切，估小了会在本可以放下的地方多折一行。真出现偏差就调 `social.speech.kaomojiMaxCols`，不必改代码。
+- 换行是插在同一条气泡内的 `\n`（QQ 会显示成两行、仍是一条消息）；如果将来发现某些客户端把它拆成两条，这条守卫要改成「整体挪到下一个气泡」。
+## 25. 条目 42（2026-10-30 08:45）：回退冷脸萌人设，「更拟人」立为目标
+
+### 25.1 回退内容（`persona.md`）
+- 删 `personality_cold_face_cute` 与 `[faces]` 整块（10 张脸）、`[sample_bubbles]` 里两条纯脸示范；`spoken_words_or_a_face` → 回到 `spoken_words_only`。
+- 结果：**552 字节，md5 `2b0e65bef…`** —— 与 10-29 那版逐字节相同，等于把冷脸萌整条线撤干净。
+- 部署：`.new` + md5 核对 + `mv`（旧文件 `persona.md.bak-revertface-*`）；`qq_load_persona` 现读，**不用重启**。
+
+### 25.2 保留不动的三件（发送侧，不属于人设）
+1. 括号按「含汉字/拉丁字母才剥」——空括号里的纯符号当颜文字；
+2. emoji 白名单 `💢` / `➡`；
+3. 颜文字换行守卫（条目 41）。
+理由：模型会自己冒颜文字（01:12 / 01:13 / 01:26 / 07:22 都有），这三件防的是「半张脸被切」和「整段被剥空」，跟人设里给不给清单无关。要彻底零符号，把 `social.speech.stripActionBrackets` 保持开、并把 `ACTION_WORD_RE` 改回一刀切即可。
+
+### 25.3 单测
+- `tests/meme-memory-immersion.test.js` 的断言反过来：人设里**不许**出现 `cold_face` / `[faces]` / `ᗜ`。实跑 PASS。
+
+### 25.4 目标（goal）
+- `goal-67cf8c18-e656-4868-ba8e-f07132c6ff37`：以小鲸鱼回复「像真人打字」为完成标准，指标全部取自 `tools/persona-metrics.py`（单气泡占比 ≥55%、每回合气泡 1.2~2.2、单条均字数 8~18、动作括号 0、被打回 ≤1/天、无自我复述模板句），连续 3 天达标才算完成。
+## 26. 条目 43（2026-10-30 08:35，目标轮 1）：回合形状基线 + 尾锚加两句
+
+### 26.1 先修正一个口径（不然后面一直在量错东西）
+- 「动作括号率 0」只能按**发出去的气泡**判，不能按 `chat.db`（那是清洗前的模型原文）。
+  - `tools/persona-metrics.py` 的括号率 15% 是**模型侧**；
+  - `tools/audit-delivered.py`（OneBot `get_msg` 取 `raw_message`）才是交付侧：本次跑 60 条 → **bracket=0**。
+- 结论：括号这条**已经达标**，要盯的是气泡数、单条字数、雷同度。
+
+### 26.2 新工具 `tools/turn-shape.py`
+- 直接数 `tool/call` 里 `qq_send_message` / `qq_reply` 的 `messages` 数组，逐条算：每回合几条、每条多少字、单气泡占比、相邻气泡相似度 ≥0.6 的比例。
+- 只扫 QQ 聊天那个工作区（`root-qq-bridge-state-agents`），跳过没发消息的回合 —— 否则 persona/slang 辅助会话的回合号会混进来（第一版就踩了：12 个回合里 8 个是 0 气泡）。
+- 用法：`python3 tools/turn-shape.py [--since '2026-10-30 08:40'] [--limit N]`。
+
+### 26.3 基线（尾锚改动**之前**，01:12–08:30 共 9 个回合）
+```text
+回合 9 | 气泡合计 24 | 每回合 2.67 | 单气泡 0/9 = 0% | 单条均字数 18.1 | 相邻雷同 1/15
+```
+- 单气泡 **0/9**：这 9 个回合全是 2~4 条，目标是 ≥55%。
+- 单条均字 18.1：正好压在 8~18 上沿。
+- 相邻雷同 6.7%：暂时不是主要问题（`persona-metrics` 累计里也没有复读）。
+
+### 26.4 本轮改动（一处，最小）
+- `src/core/wake-send.js::appendTurnTailPersonaAnchor` 的尾锚加两个词：
+  ```text
+  [anchor] persona_first empathy_then_stance spoken_words_only mostly_end_with_a_statement one_bubble_first short_bubbles
+  ```
+- 依据：`express_freely_without_fixed_bubble_count` 是放开的（对的，不能被固定条数框死），但 2026-09 那句「大多数时候一句话说完」随 `prompt.styleLine` 一起被关掉之后**没人接手**，于是默认变成凑 2~3 条。
+- 为什么加在尾锚而不是系统提示词：① 生成位置最近，权重最高；② 每轮都发，不用等会话轮换；③ 只多 3 个 token，不破坏系统提示词的逐字恒定。
+- 部署：`wake-send.js` md5 `53500887…`，重启后三服务 active；本地渲染核对 `appendTurnTailPersonaAnchor('[Session] private:1')` 输出与新锚一致。
+
+### 26.5 下一轮要做的
+- 等真实流量，用 `turn-shape.py --since '2026-10-30 08:40'` 对比：单气泡占比、每回合气泡数、单条字数。
+- 若单气泡仍 <30%，下一刀改走 `messages` 聚合（桥侧把同一回合的多条短气泡合并成一条），而不是继续堆提示词 —— 那属于发送侧排版，不靠模型自觉。
+## 27. 条目 44（2026-10-30 08:43，目标轮 2）：群聊不唤醒的根因找到了 + 度量工具修瞎点
+
+### 27.1 群聊为什么一直不唤醒：`social.deepsleep = true`
+- 每次唤醒正文里都挂着 `[Deepsleep] all_groups_silenced; resume: qq_deepsleep(enabled=false) or /start` —— 这就是全局静默总开关，**压过** `mode=active` / `triggers.anyMessage`。所以之前把三个群设成 active 也没用。
+- 关掉：`POST /api/social/deepsleep {enabled:false}` + `x-agent-token`（该端点要会话令牌，不带会 403）。
+- 结果：`config.json` 里 `social.deepsleep=False`；08:38 起 `group:868756515` 立刻正常接话（含 `@群魅魔` 的定向回复）。条目 38 那条「active 群仍无唤醒」到此结案，**不需要再加诊断日志**。
+
+### 27.2 人格学习 `blocked`：不是移除 ops 的锅
+- 现象：`[persona]` 每次都说「学习会话 turn 未正常完成：blocked」。
+- 取证：学习会话 `session-bea76d01` 从 08:08 起每个 turn 都是 `turn/start` 紧接 `turn/end {reason:{kind:'blocked'}}`，中间**没有任何 step**——DSH 侧把这一轮直接判死，跟工具集无关。
+- 修法：`/api/learning/persona {action:stop}` → 删 `state/persona-agent.json` → 重启桥（清内存里的旧 sessionId）→ `start`。新会话 `session-6b563529…`，日志：`人格学习完成 ***（工具落库）：昵称「群魅魔 / …」`。
+- 结论：**移除 ops 没有伤到学习能力**，`qq_learning_corpus` / `qq_learning_submit` 照旧；之前那次失败是会话状态坏了。
+
+### 27.3 度量工具 `tools/turn-shape.py` 修了两个瞎点
+1. 只认 `tool_input.messages` 数组 —— 实际模型（尤其群里）用的是 `tool_input.message` 单条字符串，一条一条发。修之前它对**所有**发送都是瞎的（8 个回合里 0 条气泡）。
+2. 没记会话 key —— 私聊和群聊混在一起统计。现在带 `--key private:1736784911` 就能只看私聊。
+
+### 27.4 当前读数
+- 尾锚已在线上：08:39:26 起的唤醒正文末行是 `[anchor] … mostly_end_with_a_statement one_bubble_first short_bubbles`。
+- 私聊基线（01:12–08:30，9 回合）：`每回合 2.67 | 单气泡 0/9 = 0% | 单条均字 18.1`。
+- 尾锚之后的私聊回合：**还没有**（群里 08:38/08:39/08:41 三回合是 5 / 3 / 2 条，但群聊有 burst，不能当私聊信号）。
+- 交付侧括号：`audit-delivered.py` 60 条 → bracket=0，这条目标已达成。
+
+### 27.5 下一轮
+- 等私聊出现 ≥8 个新回合后复测。若单气泡仍 <30%，改走桥侧聚合：同回合内连续短气泡（<12 字、无问号、无 @、无引用）合并成一条再发 —— 属于发送侧排版，不靠模型自觉。
+## 28. 条目 45（2026-10-30 08:44，目标轮 3）：目标计分卡 + 一个关键发现
+
+### 28.1 新工具 `tools/goal-check.py`
+把六条判据一次算完，逐条 PASS/FAIL；以后每轮先跑它，不必手工拼。
+```text
+时间窗 24h | 回合 17
+  单气泡占比     24%      FAIL  (目标 >=55%)
+  每回合气泡     2.35     FAIL  (目标 1.2~2.2)
+  单条均字数     20.4     FAIL  (目标 8~18)
+  交付括号       0/60 条  PASS  (目标 =0)
+  被打回/天      0        PASS  (目标 <=1)
+  丢图           0        PASS  (目标 =0)
+  复述上一句     0%       PASS  (目标 <10%)
+```
+- 四条已达标，卡的只有「形状」三项：气泡太多、每条太长。
+
+### 28.2 `tools/turn-shape.py` 加 `--compare`
+- `--compare '2026-10-30 08:35'` 一次打印改动前 / 改动后两行，满足目标里「每轮都要留前后对照」。
+- 当前对照（尾锚上线前后）：
+  ```text
+  改动前  回合 9 | 每回合 2.67 | 单气泡 0/9 = 0% | 单条均字 18.1
+  改动后  回合 4 | 每回合 2.75 | 单气泡 1/4 = 25% | 单条均字 19.1
+  ```
+- 注意：改动后这 4 个回合**全是群聊**（08:38/08:39/08:41/08:42，5→3→2→1 条），私聊自 08:35 起还没有新回合 —— 样本太小，不能下结论。
+
+### 28.3 关键发现：多气泡是「一次调用一条」，不是一个 `messages` 数组
+- `qq-send.js:520` 的注释与代码都证实：模型的多气泡回复是**一条气泡调一次工具**，`sendMessages` 每次只拿到长度 1 的数组。
+- 所以「桥侧合并」不能写在数组规整处，只能做成**跨调用的合并窗**（收短时间内到的多条文本，合并后再发）。那会牵动发送节拍、引用落在哪一条、以及 `send-chain` 的顺序保证 —— 属于设计级改动，不能在目标轮里顺手塞。
+- 结论：本轮不动发送链。先把尾锚的效果量出来；若 10 个私聊回合后单气泡仍 ≤30%，下一刀再按合并窗设计来做，并且默认关、可一键回滚。
+
+### 28.4 本轮改动的边界
+- 只加工具（`goal-check.py`）+ 工具能力（`--compare`），**没有改任何线上行为**。
+- 尾锚（`one_bubble_first short_bubbles`）已在线，等私聊样本。
+## 29. 条目 46（2026-10-30 08:46，目标轮 4）：合并窗预演否掉了桥侧合并，尾锚改硬数字
+
+### 29.1 先证明「桥侧合并」这条路走不通（`tools/merge-preview.py`）
+拿 24h 真实历史（18 回合）按候选策略预演：每句 ≤30 字且合计 ≤30 字、无问号/@/引用 → 合成一条。
+```text
+现状   每回合 2.28 | 单气泡 28% | 单条均字 20.2
+预演后 每回合 2.17 | 单气泡 39% | 单条均字 21.3
+会改写的回合：2 / 18
+```
+- 只动 2 个回合：多数回合两句加起来就超 30 字，够不着合并条件。
+- 把阈值放宽到 60 字，合并会真的发生，但**单条均字从 20 涨到 35+**，直接撞穿 8~18 的上界。
+- 结论（重要）：单气泡占比、每回合气泡、单条字数这三条**不可能靠桥侧合并同时满足** —— 合并抬单气泡、必然抬高单条字数。只有模型少写才办得到。这也是为什么前几轮一直没动发送链。
+
+### 29.2 本轮改动：尾锚的形容词换成硬数字
+- `short_bubbles` → `bubbles_under_18_chars`（其余不变）：
+  ```text
+  [anchor] persona_first empathy_then_stance spoken_words_only mostly_end_with_a_statement one_bubble_first bubbles_under_18_chars
+  ```
+- 依据：模型对**数字**的服从度明显高于形容词（"短"它给了 20 字，"18 chars"才有边界）。仍在正文最后一行，只多 1 个 token。
+- 部署：`wake-send.js` md5 `3b3a678d…`，重启后三服务 active；本地渲染核对过末行。
+
+### 29.3 计分卡（改动后即时快照）
+```text
+时间窗 24h | 回合 18
+  单气泡占比  28%    FAIL (>=55%)
+  每回合气泡  2.28   FAIL (1.2~2.2)
+  单条均字    20.2   FAIL (8~18)
+  交付括号    0/60   PASS
+  被打回/天   0      PASS
+  丢图        0      PASS
+  复述上一句  0%     PASS
+```
+
+### 29.4 下一轮
+- 等新数据（私聊仍为 0 个新回合），用 `turn-shape.py --compare '2026-10-30 08:46'` 对比三项形状指标。
+- 若 `bubbles_under_18_chars` 仍无效果，下一步换**位置**而不是措辞：把这条限制从尾锚挪到正文第一行（生成前的位置），或者在 `[Unread]` 之前插一行 `[shape]`。
+
+## 30. 条目 47（2026-10-30 08:47，目标轮 5）：第一个单气泡私聊回合出现了
+
+### 30.1 新样本（数字版尾锚上线后第 1 个私聊回合）
+- `08:45:26` 私聊：`贴贴就贴贴 今天主人怎么这么黏` —— **1 条气泡、15 字**，正好落在 8~18 区间。
+- 内容读起来正常，不是被截断的半句（这点必须核，否则「字数达标」可能只是假象）。
+- 同一窗口另两个群回合：08:41 两条 34 字、08:42 一条 20 字。
+```text
+最近 3 回合：每回合 1.33 | 单气泡 2/3 = 67% | 单条均字 17.2
+```
+- 对照（`--compare 08:44`）：改动前 13 回合 2.69 条 / 单气泡 8% / 均字 18.4；改动后 1 回合 1.00 条 / 100% / 15 字。
+- **样本只有 1 个私聊回合，不足以定论**；但这是整条会话里第一次出现「一条气泡 + 字数在区间内」的私聊回复。
+
+### 30.2 工具层两处加固（都不改线上行为）
+1. `turn-shape.py`：`--since` 写成未来时间时打警告 —— 今天我就是把 09:20 当成当前时刻，得到一次假的「没有回合可统计」，白等一轮。现在它会直接说「比当前时间还晚 193 分钟」。
+2. 维护日志里条目 43–46 的时间戳原来写成 09:0x / 09:1x / 09:2x，**全是错的**（实际 08:35 / 08:43 / 08:44 / 08:46），已按 git 提交时间改正。运维日志的时间戳必须可信，否则以后回溯会被带偏。
+
+### 30.3 本轮判断：**不加新改动**
+- 三条形状指标同时受一个变量影响（模型愿不愿意少写），一次只动一个才有归因。数字版尾锚刚上线、只有 1 个样本，这轮再动任何东西都会把信号搅乱。
+- 下一轮目标：等私聊 ≥5 个回合，用 `goal-check.py` 复算；若单气泡 ≥55% 且均字 ≤18，就保持不动，转向「连续 3 天」的观察期。
+
+## 31. 条目 48（2026-10-30 08:50，目标轮 6）：把「连续 3 天」变成可判定的证据
+
+### 31.1 为什么这轮先补基础设施
+- 目标的完成条件是「连续 3 天满足六条」。没有历史记录的话，这句话只能靠我口头宣布 —— 那就等于没有判据。
+
+### 31.2 `tools/goal-check.py` 新增两条能力
+- `--append`：把每次读数追加进 `state/goal-history.jsonl`（一行一条：时间、窗口、回合数、单气泡%、每回合气泡、均字、括号、打回、丢图、复述、是否全过）。
+- `--streak`：按东八区日期聚合，看「当天最后一条记录是否六项全过」，并算出连续天数。
+  ```text
+  2026-10-30  FAIL  单气泡 22% | 每回合 2.44 | 均字 18.1 | 括号 True | 打回 0 | 丢图 0 | 复述 0%
+  连续全过天数：0（目标 3）
+  ```
+
+### 31.3 systemd 小时任务 `goal-check.timer`
+- 仿 `persona-metrics.timer` 写法：`OnCalendar=hourly`、`Persistent=true`，`ExecStart=/usr/bin/python3 /root/qq-bridge/tools/goal-check.py --hours 6 --append`。
+- **窗口取 6 小时而不是 24**：24h 窗口会把早已修好的旧回合一直拖着，读数永远滞后半天；判"现在像不像真人"要用近期行为。
+- 已 `enable --now`，`systemctl list-timers` 显示下次 01:00 UTC。
+
+### 31.4 本轮读数（6h 窗）
+```text
+时间窗 6h | 回合 9
+  单气泡 22%  | 每回合 2.44 | 均字 18.1   -> 三条形状仍 FAIL
+  括号 0/60 | 打回 0 | 丢图 0 | 复述 0%    -> 四条 PASS
+```
+- 与 24h 窗相比（28% / 2.28 / 20.2）差异不大：说明形状问题是稳定行为，不是某个小时的尖峰。
+- 私聊自 08:45 那个单气泡回合之后暂无新流量。
+
+### 31.5 下一轮
+- 看 `--streak` 的小时记录是否开始出现 PASS 片段；同时对私聊样本继续攒。
+- 若形状三条连续 12 小时不动，就换位置再做一次措辞实验（正文第一行 / `[Unread]` 之前）。
+## 32. 条目 49（2026-10-30 09:35）：一条气泡里塞四行短话 —— 是我上一轮改的，已修
+
+### 32.1 现场
+- 主人截图：一条气泡里四行 ——「真的呀 / 今天瑞士轮第四轮 / TES让一追二掀了BLG / 2比1进八强啦」。
+- `chat.db` 09:27:36 原文确认：整段是**一条消息**，用 `\n` 分行（不是四条气泡）。
+
+### 32.2 根因：我 09:1x 加的那句提示词
+- 为了让「长知识解释可以单独发一长串」，我在 `[tools]` 行写了 `long_explanation_single_message_ok`。
+- 模型的读法：**「可以合」→ 一路合到底**。四句各自独立的话被它当成「一段」，用换行串进同一条气泡。
+- 教训：给「允许例外」的提示词必须**同时给出例外边界**，否则模型会把例外当默认。
+
+### 32.3 修法（提示词 + 确定性兜底，两条一起）
+1. 提示词：删掉 `long_explanation_single_message_ok`，改成单独一行
+   ```text
+   [bubbles] one_remark_per_bubble long_explanation_one_paragraph_only
+   ```
+   尾锚也退回 `bubbles_under_18_chars`（原来带的 `_except_long_explanation` 同样在放大例外）。
+2. 兜底：`qq-send.js` 新增 `splitMultiLineBubbles()` —— 只拆「单条消息 + 含 ≥2 个换行 + 至少两行短于 20 字」的那种；
+   一整段长解释（行长、或只有 1 个换行）原样保留；**带图片时不拆**（拆开会让图和文对不上）。
+   - 实测：`"真的呀\n今天瑞士轮第四轮\nTES让一追二掀了BLG\n2比1进八强啦"` → 拆成 4 条；
+   - 实测：一段 40 字不分行的解释 → 原样 1 条。
+
+### 32.4 部署
+- `wake-send.js` md5 `0cf85a8d…`、`qq-send.js` md5 `585143a2…`，重启后三服务 active。
+
+### 32.5 这一段时间窗里的其它改动（一并存档）
+- **括号判据全撤**：代码默认不再剥括号（`*动作*` 仍剥），`goal-check.py` 括号项改为只显示不判定；目标判据同步改掉（目标因此被置为 paused，需主人在界面 resume）。
+- **唤醒正文新增三行**：`[style]`（句式/直接说/不提问/不猜情绪/深度沉浸）、`[tools]`（两种发送/取证/合并转发/先看图/自己查/代码发图）、`[bubbles]`（一句一条）。
+- **群聊 100% 收消息**：三个群 `active + anyMessage`，并写 `confirmedBy=owner` —— 否则 `refreshDefaultWakeConfig()` 每次重启都会把配置刷回默认（这也是以前「设了活跃又自己变潜水」的机制之一）。另一条：模型自己调 `qq_set_wake_config` 潜水（09:08 日志实证），主人随后要求恢复该权限，现为 `setWakeConfig=true`。
+- **识图**：`mcp-vision.js` 对 GIF 先抽帧（fps=2、512 宽、最多 4 帧）再多图交给模型 —— 动图只给一帧时，表情包的动作会被读成静止画面。真机 gif 验证抽帧正常。
+- **概率闸门**：`evaluateWakeTrigger` 恢复真正掷骰（0=不接、0<x<1=按概率、1/未配=交给模型），此前 probability 只剩「等于 0 才闭嘴」的含义。
+- **管理端前端**：首启「设置主人 QQ」浮层 z-index 160→260，且首启期间禁用更新面板（`.kz-upd-overlay` 是 200，原来会盖住输入框）。
+### 32.6 追加修正（2026-10-30 09:47）：不用正则切分，教它用数组
+- 主人指出：正确的做法不是我在发送侧用正则把多行切开，而是让它**用 `messages` 数组发多条气泡**。
+- 已回退：`qq-send.js` 里的 `splitMultiLineBubbles()` 与其接线整段删除（qq-send md5 回到 `b4513c5a…`）。
+- 提示词改为显式教它用数组：
+  ```text
+  [bubbles] several_remarks_use_messages_array one_remark_per_bubble long_explanation_one_paragraph_only
+  ```
+  `qq_send_message` 本来就收 `messages: ["第一句","第二句"]`；以前没人告诉它，它才用换行硬凑。
+- 取舍记一笔：正则切分的问题在于**它替模型做了排版决定**，且切线只对"短行多行"有效，遇到别的形状就失效；
+  教它用数组则是让模型按语义决定分几条，发送侧保持"给什么发什么"。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

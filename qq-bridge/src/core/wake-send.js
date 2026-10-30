@@ -236,9 +236,17 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
     }
   }
 
-  // 群聊普通消息：除非 probability 显式配置为 0（明确关闭），一律交由模型结合完整上下文判断是否接话
+  /* 2026-10-30 主人：「群聊什么都接话，根治」。
+   * 现场机制（两处叠加）：① 群配置里 anyMessage=true 时上面第 208 行直接放行**每一条**消息；
+   * ② 就算关了 anyMessage，这里对普通消息也一律 return 'probability' —— 骰子在 2026-09-30 被删过，
+   *    于是 probability 只剩"等于 0 才闭嘴"这一种含义，等于**没有概率闸门**。
+   * 现在恢复真正的掷骰：0 = 永不接，0<x<1 = 按概率接，1/未配 = 全部交给模型判断（旧语义保留）。 */
   const rawProb = tr.probability;
-  if (rawProb !== undefined && rawProb !== null && rawProb !== '' && Number(rawProb) === 0) return null;
+  const prob = (rawProb === undefined || rawProb === null || rawProb === '') ? null : Number(rawProb);
+  if (prob === 0) return null;
+  if (Number.isFinite(prob) && prob > 0 && prob < 1) {
+    return Math.random() < prob ? 'probability' : null;
+  }
   return 'probability';
 }
 
@@ -333,8 +341,15 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * ① 把人设摆到规则之前（persona_first）；② 把输出形态钉成"口语词"而不是"描写"。
    * 全部正向表述：告诉它写什么，而不是禁止它写什么（负面指令在实测里几乎不改模型行为）。 */
   const base = String(promptText ?? '').trim();
-  /* 2026-10-30：末尾锚加“先共情再表态、别习惯性反问”。这是生成位置最近的一行，对收尾形态约束最强。 */
-  const anchor = '[anchor] persona_first empathy_then_stance spoken_words_only mostly_end_with_a_statement';
+  /* 2026-10-30：末尾锚加“先共情再表态、别习惯性反问”。这是生成位置最近的一行，对收尾形态约束最强。
+   * 2026-10-30 目标轮 1：实测 9 个回合全 2~4 条气泡（单气泡 0/9）——「大多数时候一句话说完」
+   * 这条 2026-09 的老规矩随 styleLine 被关掉后没人接手。这里补两个词，不加散文：
+   *   one_bubble_first = 先说最想说的那一句，别默认凑第二条；
+   *   short_bubbles    = 单条别写长（配合 8~18 字的目标）。 */
+  /* 2026-10-30（目标轮 4）：合并窗预演证明**桥侧合并不可能同时满足三条**——
+   * 合并能抬"单气泡占比"，但会把单条均字从 20 抬到 35+，直接撞穿 8~18 的上界；
+   * 而"每条 18 字以内"只有模型少写才办得到。所以把形容词换成硬数字： */
+  const anchor = '[anchor] persona_first empathy_then_stance spoken_words_only mostly_end_with_a_statement one_bubble_first bubbles_under_18_chars';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -464,13 +479,31 @@ export function buildWakePrompt(key, reason) {
   /* 2026-10-29 主人：唤醒正文刻意不带转录，读工具结果又在回合末被剪掉 —— 不读上下文就等于失忆。
    * 这一行把 step_3 摆在正文里（生成位置附近，最省 token 的强力提示），配合 qq-tool-restrict 的门禁。 */
   const perceptionLine = '[perception] step_3_qq_get_recent_messages_before_sending\n';
+  /* 2026-10-30 主人：句式与形态要按场合变，且别再套「不是…而是…」那种定式。
+   * 放正文而不是系统提示词：每轮都发、不用等会话轮换，且只占一行。
+   * 长解释允许一整条长消息 —— 知识类内容不该被"短句"规则切碎。 */
+  /* 2026-10-30 主人两次提到「不是…而是…」这个定式：它是模型的思维定式，不是说话习惯。
+   * 正向写法 = lead_with_what_it_is（先说它是什么），比"禁止不是而是"有效。 */
+  const styleLine = '[style] vary_sentence_shape state_the_thing_directly lead_with_what_it_is no_question_by_default dont_guess_peers_intent stay_deep_in_character\n'
+    + '[tools] send_message_or_reply_ok quote_before_asserting_in_group merge_multi_part_with_qq_send_forward image_before_comment_use_qq_view_image solve_it_yourself_with_tools code_or_long_text_use_qq_render_markdown_image\n'
+    /* 2026-10-30 修复：原来这句是 long_explanation_single_message_ok（长解释可以单独发一条），
+     * 结果它把四句短话用 \n 串进同一条气泡发出来（09:27「真的呀 / 今天瑞士轮第四轮 / TES…」）——
+     * 读到的是"可以合"，就一路合到底。现在限定成"一整段长解释"才算例外，短句一律各自成条。 */
+    /* 2026-10-30 主人：不要用正则替它切分 —— 教它**用数组发**。
+     * qq_send_message 本来就收 messages: ["第一句","第二句"]，一条气泡一次工具调用之外还有这条正路。 */
+    + '[bubbles] several_remarks_use_messages_array one_remark_per_bubble long_explanation_one_paragraph_only\n';
   /* 2026-10-29：自主动唤醒（追念 / 主动看顾）必须带一条「没有新东西就别说话」。
    * 线上实测这类唤醒占了不小比例，且经常补一句和上一条几乎一样的话 —— 用户体感就是「不聪明」。 */
   const selfInitiated = /^(afterthought|proactiveCheck|topic|activityStart|timeout|replyCheck)$/.test(String(reason || ''));
   const proactiveLine = selfInitiated ? '[self_talk] say_something_new_or_stay_silent\n' : '';
+  /* 2026-10-30 主人：群里 100% 收到（active + anyMessage），但要自己判断该不该接话。
+   * 这一行只在"因为 anyMessage 被叫醒"时出现 —— 别的唤醒原因不需要它，加了反而稀释。 */
+  const judgeLine = (key.startsWith('group:') && /anyMessage/i.test(String(reason || '')))
+    ? '[turn] every_message_reaches_you_choose_silence_unless_you_add_something\n'
+    : '';
   const diceLines = (voiceTurnHint(key) + memeTurnHint(key)).trim();
   const diceBlock = diceLines ? `${diceLines}\n` : '';
-  const raw = tokenLine + wakeLine + perceptionLine + proactiveLine + diceBlock;
+  const raw = tokenLine + wakeLine + perceptionLine + styleLine + judgeLine + proactiveLine + diceBlock;
   return raw.replace(/\n{2,}/g, '\n').trim() + '\n';
 }
 
@@ -742,13 +775,13 @@ function scheduleInTurnRedeliver(key, reason, retryAtMs, attempt = 0) {
 }
 
 export async function steerIntoRunningTurn(key, reason, opts = {}) {
-  // opts.force（turn-hold 专用，见 core/turn-hold.js）：跳过 steerEnabled 开关与节流。
+  // opts.force（turn-hold 专用，见 core/turn-hold.js）：跳过节流（开关已删，steer 恒开）。
   //   turn-hold 的调用点就在 DSH 的 agent/turn-stopping 钩子内部——那一刻确定有一个回合在跑，
   //   所以"忙 ≠ 回合在跑"这个误判在这里天然不成立；它有自己的开关 social.turnHold.enabled。
   //   必须绕过节流：节流一拒，hold 循环会误判成"塞不进去"而直接放行关回合，保持就白做了。
   //   下面的 runningTurn 守卫仍然保留（多一道保险，宁可放行关回合也不要吞消息）。
   const forced = opts?.force === true;
-  // 默认关闭（social.steerEnabled 未设或不为 true 就直接不干）。
+  // 2026-10-30 起无条件启用（原 social.steerEnabled 开关已删，见下面 immediateMode 处的说明）。
   // 2026-09-11 上线当天实测到吞消息：`isConversationBusy()` 为真并不等于"有一个模型回合在跑"——
   // 合并窗 `pendingWakeTimer`、投递在途 `pendingWakeKeys`、桥自己的 `promptQueues` 都会让它为真，
   // 而这些情况下 agent 其实是空闲的。此时塞一条"[Mid-turn] 这不是新一轮"进去，模型会照着
@@ -758,7 +791,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   // 但在此之前默认关掉，行为与加这个功能之前完全一致。
   // 2026-09-11 turn-hold 补完：三种"允许 steer"的情形：
   //   1. forced：turn-hold 的保持循环（调用点就在 turn-stopping 钩子里，确定有回合在跑）；
-  //   2. social.steerEnabled === true：全局开关（默认关，未经验证不打开）；
+  //   2. （原全局开关 social.steerEnabled —— 2026-10-30 已删除，恒视为开）；
   //   3. turn-hold 灰度内的会话 + DSH 权威状态说 running ——这是新增的第三条，
   //      专门补上"模型正在跑这一步"那段窗口：以前只有 turn-stopping 那一刻能塞，
   //      模型跑一步 40 秒期间到的消息只能被暂存、最后走补发轮（实测 21:27 的 seq25 就是这么被落下的）。
@@ -796,22 +829,12 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   // 所以这里不再需要"4 秒内只许塞一次"这种为了防过密的节流：同一个 seq 由 turnSteeredSeqs 保证
   // 永不注入两次，那才是真正该守的不变量；人类打字速度本身就是天然限流。
   const immediateMode = forced || runningEvidence;
-  // 全局开关 `social.steerEnabled`：默认开，只有显式写成 `false` 才关闭。
-  // 当年（2026-09-11）默认关的原因是"`isConversationBusy()` 为真 ≠ 有回合在跑"——那时没有可靠的
-  // 运行态信号，steer 会往一个空闲会话里塞 "[Mid-turn]"，模型照着"我在半路"的口气直接收尾，
-  // 于是刚到的消息被 mark_read 清掉、永久消失（20:03:46 的「笨蛋」）。
-  // 现在这件事已经由下面那道 `runningTurn` 硬守卫解决了（必须真的有回合在跑），
-  // 而 steer 在空闲态本身也是安全的（见 prompt-deliver.js 里对 DSH 源码的核对），
-  // 所以不再需要用"默认关"来兜——继续默认关的代价是每次忙时的消息都退回补发轮（今天实测了一整晚）。
-  const steerSwitchOff = cfgRef?.social?.steerEnabled === false;
-  const allowed = forced || !steerSwitchOff;
-  if (!allowed) {
-    // 教训·2026-09-11 21:19：这一行曾经是静默 return false，而且没把 opts.force 接进来：
-    // turn-hold 一直报 steer-failed，日志里却连一条 [steer] 都没有。
-    // 本函数里任何 return false 都必须留一行日志，否则分不清"没接线"和"条件不满足"。
-    log(`[steer] 跳过 ${key}：即时注入被 social.steerEnabled=false 显式关闭（force=${forced} turnHold灰度=${holdEligible} 在跑=${runningEvidence}〔权威=${authoritativeRunning}/桥观测=${observedRunning}〕）`);
-    return false;
-  }
+  /* 2026-10-30 主人：开关删掉，以后一律走 steer。
+   * 历史（2026-09-11）：这里曾默认关，因为"`isConversationBusy()` 为真 ≠ 有回合在跑"——
+   * 那时没有可靠的运行态信号，steer 会往空闲会话塞 "[Mid-turn]"，模型照"我在半路"的口气收尾，
+   * 消息被 mark_read 清掉后永久消失（20:03:46 的「笨蛋」）。
+   * 现在安全性由下面那道 `runningTurn` 硬守卫兜住（必须确实有回合在跑），配置项因此失去意义：
+   * 留着它只会在有人写成 false 时悄悄退化成"补发轮"，反而更慢更费。 */
   // 每个提前返回都留一行日志：这个函数一旦静默 return false，日志里就什么都看不到，
   // 排查时分不清"没接线"和"接线了但条件不满足"（第一次上线就吃了这个亏）。
   if (!apiRef) { log('[steer] 跳过：apiRef 未就绪'); return false; }

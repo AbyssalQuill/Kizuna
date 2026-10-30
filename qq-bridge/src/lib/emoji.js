@@ -12,6 +12,13 @@ export function isEmojiLikeCp(cp) {
     (cp >= 0x1F1E6 && cp <= 0x1F1FF);      // 国旗/地区
 }
 
+/* 2026-10-30：颜文字后缀用的符号保留 —— 冷脸萌整套里的"生气 ᗜ - ᗜ💢"，💢 是脸的一部分，
+ * 不是正文里的输入法 emoji。只放行这一个码点，其余照旧一律剥离。 */
+const KAOMOJI_SUFFIX_CP = new Set([
+  0x1F4A2, // 💢 生气
+  0x27A1,  // ➡ 暗爽那张脸里的「变脸」箭头（（ᗜ_ᗜ）➡（ᗜ֊ᗜ））
+]);
+
 // 剥离普通文本里的输入法 emoji，但保留 [CQ:...]（原生表情段）与颜文字（U+FE0E 文本变体时保留）。
 export function stripImeEmoji(text) {
   let s = String(text ?? '');
@@ -25,7 +32,7 @@ export function stripImeEmoji(text) {
     const next = chars[i + 1];
     // U+FE0E 文本呈现符：把前面字符按"文本样式"保留（✌︎ 这类颜文字组成部分）
     if (next === '\uFE0E') { out.push(ch, next); i++; continue; }
-    if (isEmojiLikeCp(cp)) continue; // 输入法 emoji / ♥❤ 符号一律剥离（QQ 会自动渲染成彩色 emoji）
+    if (isEmojiLikeCp(cp) && !KAOMOJI_SUFFIX_CP.has(cp)) continue; // 输入法 emoji / ♥❤ 符号一律剥离（QQ 会自动渲染成彩色 emoji）
     out.push(ch);
   }
   s = out.join('');

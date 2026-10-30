@@ -102,18 +102,15 @@ const INJECT_MEMORY_SUMMARY = false;
  *     memory-update 就是入口。
  */
 export const MEMORY_RECALL_HINT = [
-    '[MEMORY - FETCHED ON DEMAND] This prompt intentionally carries NO memory dump: a per-turn',
-    'dump invalidates the prompt cache, so long-term memory is loaded only when you ask for it.',
-    'The memory store itself is unchanged - look a thing up before you claim you do not know it,',
-    'and never invent a memory.',
-    '- QQ bridge sessions (this deployment): qq_memory_search(query=<keywords>, sender=<nickname or QQ>,',
-    '  key=<group:<gid> | private:<qq>>, token=<this wake\'s [Token]>, limit=<small>) reads the stored',
-    '  memory and transcript; qq_memory_remember records or corrects one durable fact. The plugin\'s own',
-    '  remember / recall / memory-find / memory-update are denied by this preset\'s tool guard.',
-    '- Plain DSH sessions (no qq_* tools): memory-find for an exact id or a type/domain/scope listing,',
-    '  recall for a semantic query; write with remember, amend with memory-update.',
-    '- At most two lookups a round, same step when you can. Use what you find silently: say what you',
-    '  found, never that you searched.',
+    /* 2026-10-30 主人：别写散文，就下划线短语；调用形状留着，否则模型不知道传什么参数。 */
+    '[MEMORY] on_demand_no_dump',
+    '[MEMORY] lookup_first_before_saying_unknown',
+    '[MEMORY] never_invent_a_memory',
+    '[MEMORY] read: qq_memory_search(query,sender,key,token,limit)',
+    '[MEMORY] write: qq_memory_remember(one_durable_fact)',
+    '[MEMORY] max_two_lookups_per_round',
+    '[MEMORY] say_what_you_found_not_that_you_searched',
+    '[MEMORY] plain_dsh_session: memory-find | recall | remember | memory-update',
 ].join('\n');
 /** 召回节点 system prompt(固定,非配置项)。 */
 const NODE_RECALL_SYSTEM = '你是长期记忆召回节点。给定一组记忆条目(每条一行,格式 `[id|type|domain|scope] 条目文本`)与一个查询,仅返回与查询相关的条目的**整行**(含方括号前缀),一行一条,照抄原文,不返回任何解释。无相关条目时返回空。';

@@ -50,7 +50,12 @@ export function initQqSendCore(cfg) {
   setSendLinearCfgReader(() => (cfgRef?.social?.send ?? null));
   // 动作括号剥离开关：默认开，config.social.speech.stripActionBrackets=false 可整条关掉（回滚用）
   try {
-    configureOutbound({ stripActionBrackets: cfg?.social?.speech?.stripActionBrackets !== false });
+    configureOutbound({
+    stripActionBrackets: cfg?.social?.speech?.stripActionBrackets !== false,
+    // 2026-10-30：颜文字整块不跨行。一行按多少列算由 config.social.speech.kaomojiMaxCols 调（默认 30）。
+    kaomojiLineGuard: cfg?.social?.speech?.kaomojiLineGuard !== false,
+    kaomojiMaxCols: cfg?.social?.speech?.kaomojiMaxCols,
+  });
   } catch { /* 读不到就是默认开 */ }
 }
 /** NapCat 网关就绪后注入 bot（NapCat client） */
