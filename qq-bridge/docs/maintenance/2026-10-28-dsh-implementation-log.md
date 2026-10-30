@@ -1463,6 +1463,34 @@ else { UNC_MAX = 16; }
 - `loop-guard.js`、`outbound-text.js`、`send-idempotency.js`、`console-server.js` 已同步，
   persona 已改，重启后 active。
 
+## 38. 条目 55（2026-10-30 13:00）：自称与标点改回提示词，桥上不写死
+
+### 38.1 主人的口径
+「都别写死，提示词里强调就行」。所以上一轮加在 `outbound-text.js` 里的「人家→我」正则整段撤回，
+`normalizeFirstPersonSelfCall` 恢复成 **故意的空实现**（注释里写清楚这次为什么空着，免得下次又当成 bug 修回去）。
+
+### 38.2 规则挪进 `[style]` 行（每轮都投递，见条目 50 的教训）
+```text
+[style] … stay_deep_in_character self_call_wo_only inner_punctuation_kept tail_no_period
+```
+- `self_call_wo_only` —— 自称用"我"，不走"人家"那条路（persona 里也有同名 token 兜一层）
+- `inner_punctuation_kept` —— 句中的 ，！？～ 照写，不省
+- `tail_no_period` —— 句尾不用句号（问号/叹号/波浪号照常）
+
+### 38.3 桥上还留着哪些"写死"，为什么
+| 位置 | 行为 | 性质 |
+| --- | --- | --- |
+| `stripTrailingPeriod` | 出站去掉句尾的 。 / . | **既有清洗**（不是本次加的）。留着的理由：它属于"投递前必然发生"的规范化，和`tail_no_period`同向，不会替模型改词。要改成纯提示词，说一句就撤。 |
+| `send-idempotency` near-dup | 近 90 秒同一句挡下 | 防重复，不改写文本 |
+| `loop-guard.normForCompare` | 只归一空白 + 句尾句号 | 同上，是判重口径不是措辞口径 |
+| `console-server` `[send-lint]` | 风格提醒只写日志 | 上一轮已经不给模型看 |
+
+### 38.4 验证
+- `cleanOutboundText` 实测：「人家又不是挂件 笨蛋主人。」→「人家又不是挂件 笨蛋主人」（**不再改自称**，只去句尾句号）；
+  「主人你看！这个皮肤真好看。」→ 去句尾句号、叹号保留；「朋友，你来了？」→ 原样。
+- 部署：`outbound-text.js` / `wake-send.js`，重启后 active。
+
+
 
 
 

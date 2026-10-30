@@ -479,7 +479,11 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    '[style] vary_sentence_shape state_the_thing_directly lead_with_what_it_is question_only_when_genuinely_unsure dont_guess_peers_intent stay_deep_in_character',
+    /* 2026-10-30：自称与标点的两条口径放在这里，不在桥上写死（出站只保留"去句尾句号"这一条既有清洗）。
+     *   self_call_wo_only       —— 自称用"我"，不进"人家"那条路
+     *   inner_punctuation_kept  —— 句中的 ，！？～ 一律照写，不省
+     *   tail_no_period          —— 句尾不用句号（问号/叹号/波浪号照常） */
+    '[style] vary_sentence_shape state_the_thing_directly lead_with_what_it_is question_only_when_genuinely_unsure dont_guess_peers_intent stay_deep_in_character self_call_wo_only inner_punctuation_kept tail_no_period',
     '[tools] send_message_or_reply_ok quote_before_asserting_in_group merge_multi_part_with_qq_send_forward image_before_comment_use_qq_view_image solve_it_yourself_with_tools code_or_long_text_use_qq_render_markdown_image',
     '[bubbles] several_remarks_use_messages_array one_remark_per_bubble long_explanation_one_paragraph_only',
   ].join('\n');
