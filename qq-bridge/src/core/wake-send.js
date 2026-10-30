@@ -479,10 +479,10 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    /* 2026-10-30：拟人与多样化回复，打破三段论定式；严禁“人家”自称，自然省主语；单气泡优先；群聊适当引用回复 */
+    /* 2026-10-30：拟人与多样化回复，打破三段论定式；严禁“人家”自称，自然省主语；单气泡优先；群聊适当引用回复；OK闭环 */
     '[style] break_rigid_templates vary_sentence_shape state_the_thing_directly question_only_when_genuinely_unsure dont_guess_peers_intent stay_deep_in_character ban_self_call_renjia use_wo_or_drop_subject inner_punctuation_kept tail_no_period',
     '[bubbles] single_bubble_by_default_most_turns two_bubbles_only_when_natural_progression break_fixed_count_routine one_remark_per_bubble',
-    '[tools] in_group_reply_peer_use_replyToMessageId group_treat_all_as_netizens_never_call_master send_message_or_reply_ok merge_multi_part_with_qq_send_forward image_before_comment_use_qq_view_image solve_it_yourself_with_tools',
+    '[tools] in_group_reply_peer_use_replyToMessageId group_treat_all_as_netizens_never_call_master send_message_or_reply_ok merge_multi_part_with_qq_send_forward image_before_comment_use_qq_view_image solve_it_yourself_with_tools closure_reply_literal_ok_never_speak_dialogue_in_text',
   ].join('\n');
 }
 

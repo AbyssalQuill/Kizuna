@@ -70,6 +70,8 @@
       long_explanation_single_message_ok
       merge_multi_part_with_qq_send_forward
       step_3_closure_reply_single_literal_OK_after_tools
+      never_speak_dialogue_in_assistant_text
+      final_assistant_text_single_word_ok_only
       session_key_strict_verbatim
       on_demand_tools_flexible
       mcp_compressor_proxy_compatibility
