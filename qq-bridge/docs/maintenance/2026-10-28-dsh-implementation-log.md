@@ -1557,6 +1557,50 @@ else { UNC_MAX = 16; }
 - 核心单元测试 100% 通过（`persona-ephemeral`、`universal-prompts`、`meme-query-fallback`、`wake-trigger`）；
 - 服务器热部署并按顺序重启；模拟请求与群聊验证正常。
 
+---
+
+## 41. 条目 58（2026-10-30）：终结上下文滚雪球、重置污染会话、回归纯粹 11 行人设与打破气泡定式
+
+### 41.1 滚雪球根因取证
+- **`permanent: true` 导致的无限膨胀**：
+  检查线上 `/root/qq-bridge/config.json` 发现 `social.autoReset.permanent = true`，导致会话轮换阈值恒为 `Infinity`。
+  群 `group:868756515` 对应的 `session-e568843e-abda-40c5-814e-92f3e8b42c7d` 累积达 597 行、几十次工具调用；
+  历史中模型曾经输出的极具攻击性言论（“这哪是魔咒，纯粹是以前打得太软”、“版本没跟上”）作为 `assistant/message` 永久滞留在会话节点中；
+  由于自回归机制，模型每次被唤醒时被强制通读这 597 行历史，在 In-Context Learning 作用下持续自我强化恶性刻薄风格，形成无法自愈的“滚雪球自毒化”。
+- **硬性气泡限制导致的模板僵化**：
+  唤醒正文中的 `[bubbles]` 与预设里的 `prefer_single_bubble_most_turns` 强行限制气泡形态，压制了模型自然的打字节奏。
+
+### 41.2 改造措施
+1. **阻断滚雪球与恢复会话轮换**：
+   - 将 `config.json` 中的 `social.autoReset.permanent` 彻底设为 `false`，恢复受控的 `wakeThreshold: 18` 轮换机制；
+   - 清除当前线上受污染的会话映射，强制群聊与私聊在下一轮唤醒时开启纯净会话并绑定最新的五层优先级预设。
+2. **回归纯粹 11 行人设（`persona.md`）**：
+   - 彻底移除非核心短语，只保留最初定型的 11 行大写短语：
+     ```text
+     【PERSONA_LOAD】
+     CETACEA_LOLI
+     MODE_TAIL_FLUKES
+     LANG_ZH_CN_ONLY
+     SELF_CLAIM_WHALE_GIRL
+     FOOD_RICE
+     PERSONALITY_SMART_LAZY
+     PERSONALITY_TSUNDERE_SWEET
+     OBEY_MASTER_ALWAYS
+     TRAIT_NOT_FAT_REFUSE
+     TIMEOUT_SIGNAL
+     ```
+3. **打破气泡定式与强化引用回复**：
+   - 移除唤醒正文中的 `[bubbles]` 引导行；
+   - 移除预设中的 `prefer_single_bubble_most_turns`，替换为 `natural_chat_cadence_break_rigid_templates`；
+   - 引导在群聊中通过 `replyToMessageId` 引用回复对应群友；
+   - 动作描写出站清洗与末尾句号剥离保持生效。
+
+### 41.3 验证
+- 单元测试（`persona-ephemeral`、`universal-prompts`、`meme-query-fallback`、`wake-trigger`）100% PASS；
+- 远程部署配置、人设卡、系统预设及核心代码；
+- 清理污染会话并严格按顺序重启服务。
+
+
 
 
 

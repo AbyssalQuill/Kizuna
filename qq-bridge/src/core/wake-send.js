@@ -479,9 +479,8 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    /* 2026-10-30：松弛拟人与友善互动；纯口语打字，绝无动作括号；自称用我或自然省主语；单气泡优先；无句尾句号 */
+    /* 2026-10-30：松弛拟人与友善互动；纯口语打字，绝无动作括号；自称用我或自然省主语；无句尾句号；自然气泡节奏 */
     '[style] friendly_internet_tone pure_spoken_words no_action_brackets use_wo_or_drop_subject tail_no_period',
-    '[bubbles] single_bubble_preferred natural_pacing',
     '[tools] in_group_reply_peer_use_replyToMessageId group_treat_all_as_netizens send_message_or_reply_ok closure_reply_literal_ok',
   ].join('\n');
 }
