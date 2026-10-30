@@ -111,7 +111,7 @@ import {
   recentChatMessages, fetchUnreadChatMessages, markMessagesRead, markChatRecalled,
   formatMemory, appendMemory, initMemoryCore,
   // 2026-09-21 记忆架构升级：分层记忆的写入/检索/置顶/统计（/api/social/memory-remember 等）
-  rememberEntry, listMemoryEntries, setMemoryPinned, memoryDigest, memoryStats, pruneExpiredMemory,
+  rememberEntry, listMemoryEntries, setMemoryPinned, memoryDigest, memoryStats, pruneExpiredMemory, warmQueryEmbedding,
   // 2026-09-24 聊天记录分家到 state/chat.db：管理端「聊天记录」页要的总量计数/会话列表/token 口径
   chatCounters, chatConvList, chatDbStats, tokenUsageSummary, recountChatCounters, rebuildChatFts,
 } from './memory.js';
@@ -4077,9 +4077,11 @@ export function startConsoleServer() {
         if (token && !ToolEnabled('memorySearch')) { sendJson({ ok: false, error: '工具未启用：qq_memory_search' }, 403); return; }
         const uidParam = String(url.searchParams.get('uid') ?? '').trim();
         const uid = uidParam || (key.startsWith('private:') ? key.split(':')[1] : '');
+        const qStr = String(url.searchParams.get('query') ?? '').trim();
+        if (qStr) { try { await warmQueryEmbedding(qStr); } catch {} }
         const r = listMemoryEntries({
           uid: uid || undefined,
-          query: String(url.searchParams.get('query') ?? '').trim() || undefined,
+          query: qStr || undefined,
           category: String(url.searchParams.get('category') ?? '').trim() || undefined,
           tier: String(url.searchParams.get('tier') ?? '').trim() || undefined,
           limit: Number(url.searchParams.get('limit')) || 20,
@@ -4218,6 +4220,7 @@ export function startConsoleServer() {
         let memoryHits = [];
         if (query) {
           try {
+            await warmQueryEmbedding(query);
             const memRes = listMemoryEntries({ query, limit: 10 });
             if (memRes?.ok && Array.isArray(memRes.entries)) {
               memoryHits = memRes.entries.map((e) => ({

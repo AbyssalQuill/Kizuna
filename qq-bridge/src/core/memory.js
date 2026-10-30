@@ -36,6 +36,10 @@ import { ROOT } from '../lib/paths.js';
 import { beijingTs } from '../lib/time.js';
 import { log } from '../lib/log.js';
 import { ftsUsable, ftsQueryOf } from '../lib/fts.js';
+import {
+  BGE_DIM, bgeModelFilesReady, embedBgeAsync, getBgeCached,
+  embedFallbackSync, vectorToBlob, blobToVector, cosineSimilarity,
+} from '../lib/embedding.js';
 // 聊天记录库（state/chat.db）：本模块只用到"总量计数 + 索引重建 + 状态"这几件事，
 // 其余聊天函数通过下面的 re-export 透出给调用方。
 import { chatCounters, chatDbStats, rebuildChatFts } from './chat-db.js';
@@ -112,6 +116,7 @@ export function ensureMemoryIndex(db = memDb) {
     ['source', "TEXT DEFAULT ''"],
     ['tier', "TEXT DEFAULT ''"],
     ['updated_at', 'INTEGER DEFAULT 0'],
+    ['embedding', 'BLOB'],
   ];
   for (const [name, decl] of cols) {
     if (tableHasColumn(db, 'memory_entries', name)) continue;
@@ -177,7 +182,57 @@ export function ensureMemoryIndex(db = memDb) {
       setTimeout(() => { try { rebuildMemoryFts({ reason: 'schema-upgrade' }); } catch { /* 已内记日志 */ } }, 0);
     }
   } catch { /* 忽略 */ }
+  // ⑤ 后台异步回填存量记忆条目的 512 维 BGE 语义向量（不阻塞启动）
+  if (bgeModelFilesReady()) {
+    setTimeout(() => { backfillMemoryEmbeddings().catch(() => {}); }, 200);
+  }
   return out;
+}
+
+/** 异步预热查询词的 512 维 BGE 向量到内存缓存，使紧随其后的同步 listMemoryEntries / memoryDigest 直接命中神经网络向量。 */
+export async function warmQueryEmbedding(query) {
+  if (!query || !String(query).trim()) return null;
+  try { return await embedBgeAsync(String(query).trim(), { isQuery: true }); } catch { return null; }
+}
+
+/** 将单条记忆异步编码为 512 维 BGE 向量并写入 SQLite memory_entries.embedding */
+async function updateEntryBgeEmbedding(id, content) {
+  if (!id || !content) return;
+  try {
+    const vec = await embedBgeAsync(content, { isQuery: false });
+    if (!vec || !memDb) return;
+    const blob = vectorToBlob(vec);
+    if (blob) {
+      memDb.prepare('UPDATE memory_entries SET embedding = ? WHERE id = ?').run(blob, Number(id));
+    }
+  } catch { /* 忽略单条向量异步写入异常 */ }
+}
+
+/** 批量回填尚未生成 512 维 BGE 向量的存量记忆条目 */
+export async function backfillMemoryEmbeddings({ batchSize = 200 } = {}) {
+  const db = initMemoryDb();
+  if (!db || !bgeModelFilesReady()) return { ok: false, updated: 0 };
+  try {
+    // length(embedding) != 2048 表示尚未存储 512 维 Float32 (512 * 4 = 2048 bytes) BGE 向量
+    const rows = db.prepare('SELECT id, content FROM memory_entries WHERE embedding IS NULL OR length(embedding) != ? LIMIT ?')
+      .all(BGE_DIM * 4, batchSize);
+    if (!rows.length) return { ok: true, updated: 0 };
+    let updated = 0;
+    const stmt = db.prepare('UPDATE memory_entries SET embedding = ? WHERE id = ?');
+    for (const r of rows) {
+      const vec = await embedBgeAsync(r.content, { isQuery: false });
+      if (!vec) continue;
+      const blob = vectorToBlob(vec);
+      if (blob) {
+        stmt.run(blob, Number(r.id));
+        updated += 1;
+      }
+    }
+    if (updated > 0) log(`[memory] 已回填 ${updated} 条记忆的 bge-small-zh-v1.5 语义向量`);
+    return { ok: true, updated };
+  } catch (err) {
+    return { ok: false, updated: 0, error: err?.message ?? String(err) };
+  }
 }
 
 /** 重建全文索引（幂等；大库会跑几秒，因此只在版本变化或手动调用时执行）。
@@ -579,13 +634,20 @@ export function rememberEntry(o = {}) {
                           ELSE MAX(expires_at, ?) END
         WHERE id = ?`)
         .run(now, now, row.tier, row.tier, row.pinned, row.importance, row.tier, row.expiresAt, row.expiresAt, Number(hit.id));
+      updateEntryBgeEmbedding(Number(hit.id), row.content).catch(() => {});
       return { ok: true, id: Number(hit.id), deduped: true, tier: row.tier };
     }
+    const initVec = getBgeCached(row.content, { isQuery: false, triggerWarmup: false }) || embedFallbackSync(row.content);
+    const initBlob = vectorToBlob(initVec);
     const info = db.prepare(`INSERT INTO memory_entries
-      (uid, category, content, created_at, updated_at, tier, pinned, importance, expires_at, conv_key, tags, source)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(row.uid, row.category, row.content, now, now, row.tier, row.pinned, row.importance, row.expiresAt, row.convKey, row.tags, row.source);
-    return { ok: true, id: Number(info.lastInsertRowid), deduped: false, tier: row.tier };
+      (uid, category, content, created_at, updated_at, tier, pinned, importance, expires_at, conv_key, tags, source, embedding)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(row.uid, row.category, row.content, now, now, row.tier, row.pinned, row.importance, row.expiresAt, row.convKey, row.tags, row.source, initBlob);
+    const newId = Number(info.lastInsertRowid);
+    if (!initVec || initVec.length !== BGE_DIM) {
+      updateEntryBgeEmbedding(newId, row.content).catch(() => {});
+    }
+    return { ok: true, id: newId, deduped: false, tier: row.tier };
   } catch (error) {
     log(`[memory] 写记忆失败: ${error?.message ?? error}`);
     return { ok: false, error: error?.message ?? String(error) };
@@ -612,7 +674,23 @@ export function setMemoryPinned(id, pinned = true) {
   }
 }
 
-/** 列表/检索记忆条目。query 有值走 FTS5（BM25 排序），否则按层级+重要性+时间排。 */
+/** 计算单行记忆与查询向量的语义相似度（优先 512 维 bge-small-zh-v1.5 向量，兼容 128 维同义概念簇回退） */
+function scoreMemorySemantic(row, qBgeVec, qFallbackVec) {
+  const rowVec = row.embedding ? blobToVector(row.embedding) : null;
+  if (qBgeVec && rowVec && rowVec.length === BGE_DIM) {
+    return { sim: cosineSimilarity(qBgeVec, rowVec), mode: 'bge' };
+  }
+  const docBge = getBgeCached(row.content, { isQuery: false, triggerWarmup: true });
+  if (qBgeVec && docBge && docBge.length === BGE_DIM) {
+    return { sim: cosineSimilarity(qBgeVec, docBge), mode: 'bge' };
+  }
+  const docFallback = (rowVec && rowVec.length === qFallbackVec.length)
+    ? rowVec
+    : embedFallbackSync(row.content);
+  return { sim: cosineSimilarity(qFallbackVec, docFallback), mode: 'fallback' };
+}
+
+/** 列表/检索记忆条目。query 有值走 Hybrid RRF（FTS5 BM25 + bge-small-zh-v1.5 语义向量融合重排），否则按层级+重要性+时间排。 */
 export function listMemoryEntries(opts = {}) {
   const db = initMemoryDb();
   if (!db) return { ok: false, error: '记忆库不可用', entries: [] };
@@ -624,17 +702,68 @@ export function listMemoryEntries(opts = {}) {
   if (opts.convKey) { where.push('conv_key = ?'); params.push(String(opts.convKey)); }
   if (opts.tier) { where.push('tier = ?'); params.push(String(opts.tier)); }
   if (!opts.includeExpired) { where.push('(expires_at = 0 OR expires_at > ?)'); params.push(Date.now()); }
-  const ftsQ = opts.query ? ftsQueryOf(opts.query) : '';
+  const rawQuery = String(opts.query ?? '').trim();
+  const ftsQ = rawQuery ? ftsQueryOf(rawQuery) : '';
   try {
-    if (ftsQ && ftsUsable(db, 'mem_fts')) {
-      const conds = [...where, 'mem_fts MATCH ?'];
-      const rows = db.prepare(
-        `SELECT memory_entries.* FROM memory_entries JOIN mem_fts ON mem_fts.rowid = memory_entries.id
-         WHERE ${conds.join(' AND ')} ORDER BY bm25(mem_fts) ASC LIMIT ?`
-      ).all(...params, ftsQ, limit);
-      return { ok: true, ranked: true, entries: rows.map(rowToMemoryEntry) };
+    if (rawQuery) {
+      // 1. 路 A：FTS5 Trigram BM25 字面检索
+      let ftsRows = [];
+      if (ftsQ && ftsUsable(db, 'mem_fts')) {
+        const conds = [...where, 'mem_fts MATCH ?'];
+        ftsRows = db.prepare(
+          `SELECT memory_entries.* FROM memory_entries JOIN mem_fts ON mem_fts.rowid = memory_entries.id
+           WHERE ${conds.join(' AND ')} ORDER BY bm25(mem_fts) ASC LIMIT ?`
+        ).all(...params, ftsQ, limit * 2);
+      } else {
+        const likeConds = [...where, 'content LIKE ?'];
+        ftsRows = db.prepare(
+          `SELECT * FROM memory_entries WHERE ${likeConds.join(' AND ')}
+           ORDER BY pinned DESC, importance DESC, COALESCE(updated_at, created_at) DESC LIMIT ?`
+        ).all(...params, `%${rawQuery}%`, limit * 2);
+      }
+
+      // 2. 路 B：bge-small-zh-v1.5 稠密向量余弦相似度语义检索（支持跨字面同义召回，如“夜宵”召回“烧烤炸鸡”）
+      const qBgeVec = getBgeCached(rawQuery, { isQuery: true, triggerWarmup: true });
+      const qFallbackVec = embedFallbackSync(rawQuery);
+      const candidates = db.prepare(
+        `SELECT * FROM memory_entries${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY pinned DESC, importance DESC, COALESCE(updated_at, created_at) DESC LIMIT 400`
+      ).all(...params);
+
+      const vecScored = [];
+      for (const r of candidates) {
+        const { sim, mode } = scoreMemorySemantic(r, qBgeVec, qFallbackVec);
+        const threshold = mode === 'bge' ? 0.43 : 0.25;
+        if (sim >= threshold) {
+          vecScored.push({ row: r, sim });
+        }
+      }
+      vecScored.sort((a, b) => b.sim - a.sim);
+      const vecRows = vecScored.slice(0, limit * 2).map((x) => x.row);
+
+      // 3. RRF (Reciprocal Rank Fusion, k=60) 混合重排
+      const RRF_K = 60;
+      const rrfMap = new Map();
+      ftsRows.forEach((r, idx) => {
+        const id = Number(r.id);
+        const cur = rrfMap.get(id) || { row: r, score: 0 };
+        cur.score += 1.2 / (RRF_K + idx + 1); // 字面精确命中赋予 1.2 权重保障高精确度
+        rrfMap.set(id, cur);
+      });
+      vecRows.forEach((r, idx) => {
+        const id = Number(r.id);
+        const cur = rrfMap.get(id) || { row: r, score: 0 };
+        cur.score += 1.0 / (RRF_K + idx + 1);
+        rrfMap.set(id, cur);
+      });
+
+      const merged = [...rrfMap.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map((x) => rowToMemoryEntry(x.row));
+      return { ok: true, ranked: true, hybrid: true, entries: merged };
     }
-    if (opts.query) { where.push('content LIKE ?'); params.push('%' + String(opts.query) + '%'); }
+
     const rows = db.prepare(
       `SELECT * FROM memory_entries${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
        ORDER BY pinned DESC, importance DESC, COALESCE(updated_at, created_at) DESC LIMIT ?`
@@ -676,13 +805,9 @@ export function pruneExpiredMemory() {
 }
 
 /**
- * 每轮注入的记忆摘要（永久层 + 与该会话/该人相关的高重要度条目）。
+ * 每轮注入的记忆摘要（永久层 + 与当前对话语境/该人最相关的长期记忆条目）。
  *
- * 为什么是"摘要"而不是"全部"：系统提示词/唤醒正文里的每一个字符都是每一步都要付钱重读的。
- * 把永久记忆压到几百字符、并且内容稳定（同样输入 → 逐字节相同的输出），既能保证"永远记得"，
- * 又不破坏前缀缓存。排序完全确定（pinned → importance → 时间），不掺随机数。
- *
- * @param {{uid?:string, convKey?:string, limit?:number, maxChars?:number}} o
+ * @param {{uid?:string, convKey?:string, query?:string, limit?:number, maxChars?:number}} o
  */
 export function memoryDigest(o = {}) {
   const db = initMemoryDb();
@@ -700,6 +825,7 @@ export function memoryDigest(o = {}) {
   const limit = Math.max(1, Math.min(30, Number(o.limit) || 12));
   const maxChars = Math.max(120, Math.min(4000, Number(o.maxChars) || 700));
   const now = Date.now();
+  const contextQuery = String(o.query ?? '').trim();
   try {
     const rows = db.prepare(`
       SELECT * FROM memory_entries
@@ -708,12 +834,30 @@ export function memoryDigest(o = {}) {
         AND (uid = ? OR uid = '' OR ? = '')
       ORDER BY pinned DESC, importance DESC, COALESCE(updated_at, created_at) DESC
       LIMIT ?`).all(now, String(o.uid ?? ''), String(o.uid ?? ''), limit);
-    const others = db.prepare(`
+    let others = db.prepare(`
       SELECT * FROM memory_entries
       WHERE pinned = 0 AND tier != 'permanent' AND category NOT IN ('rule','owner','identity','persona')
         AND (expires_at = 0 OR expires_at > ?) AND (uid = ? OR uid = '' OR ? = '')
       ORDER BY importance DESC, COALESCE(updated_at, created_at) DESC LIMIT ?`)
-      .all(now, String(o.uid ?? ''), String(o.uid ?? ''), limit);
+      .all(now, String(o.uid ?? ''), String(o.uid ?? ''), Math.max(limit * 4, 40));
+
+    // 当传入当前对话上下文 query 时，利用 bge-small-zh-v1.5 语义向量动态提权与当前话题最相关的记忆
+    if (contextQuery && others.length > 1) {
+      const qBgeVec = getBgeCached(contextQuery, { isQuery: true, triggerWarmup: true });
+      const qFallbackVec = embedFallbackSync(contextQuery);
+      others = others
+        .map((r) => {
+          const { sim } = scoreMemorySemantic(r, qBgeVec, qFallbackVec);
+          const impScore = (Number(r.importance) || 0) / 100;
+          return { r, score: sim * 1.5 + impScore * 0.5 };
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map((x) => x.r);
+    } else {
+      others = others.slice(0, limit);
+    }
+
     const list = [...rows, ...others];
     if (!list.length) return '';
     const seen = new Set();
@@ -748,6 +892,8 @@ export function memoryStats() {
     profiles: one('SELECT COUNT(*) AS c FROM profiles'),
     entries: one('SELECT COUNT(*) AS c FROM memory_entries'),
     permanent: one("SELECT COUNT(*) AS c FROM memory_entries WHERE pinned = 1 OR tier = 'permanent'"),
+    embedded: one('SELECT COUNT(*) AS c FROM memory_entries WHERE embedding IS NOT NULL AND length(embedding) = ?', BGE_DIM * 4),
+    embeddingModel: bgeModelFilesReady() ? 'bge-small-zh-v1.5-int8-512d' : 'semantic-cluster-128d',
     // 聊天记录在 state/chat.db：条数与索引状态都从那边取（本库里已经没有那张表了）
     chat: Number(chatCounters()?.total) || 0,
     ftsChat: (() => { const cs = chatDbStats(); return cs?.fts?.ok ? Number(cs.fts.indexed) : -1; })(),

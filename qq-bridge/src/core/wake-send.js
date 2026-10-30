@@ -11,7 +11,7 @@ import { getComposedPersonaStamp } from '../lib/preset-compose.js';
 import { currentMode, selfNickname, isSessionAllowedInCurrentMode } from './mode.js';
 import { state, saveState } from './config.js';
 import { createStandbySession, ensureSession } from './dsh-session.js';
-import { formatMemory, formatProfileText, formatContactsLine, recentChatMessages, fetchUnreadChatMessages, markMessagesRead, memoryDigest } from './memory.js';
+import { formatMemory, formatProfileText, formatContactsLine, recentChatMessages, fetchUnreadChatMessages, markMessagesRead, memoryDigest, warmQueryEmbedding } from './memory.js';
 import { formatGroupInfoLine, formatGroupListLine } from './group-cache.js';
 // 语音/表情包：唤醒正文里注入一行「本轮轮到哪一种」的抽签数据（概率与冷却在管理端配：
 // 语音在「语音」页，表情包在桥配置页的「表情包」卡）。两边都关着/概率 0 时不会注入多余内容。
@@ -505,11 +505,11 @@ function buildDynamicTurnContext(key, st, reason) {
     const unreadList = Array.isArray(st.unread) ? st.unread : [];
     const lastUnread = unreadList.length ? unreadList[unreadList.length - 1] : null;
     const activeUid = String(lastUnread?.userId || (String(key).startsWith('private:') ? String(key).slice('private:'.length) : '') || '');
-    const mem = memoryDigest({ uid: activeUid, convKey: key, limit: 4, maxChars: 260 });
+    const textSample = unreadList.map((m) => String(m?.plain || m?.text || '')).join('\n');
+    const mem = memoryDigest({ uid: activeUid, convKey: key, query: textSample, limit: 4, maxChars: 260 });
     if (mem) {
       parts.push(`[Memory]\n${mem}`);
     }
-    const textSample = unreadList.map((m) => String(m?.plain || m?.text || '')).join('\n');
     if (textSample && Array.isArray(slangEntries) && slangEntries.length) {
       const slangBlock = detectSlangMatches(textSample, slangEntries, key, 4);
       if (slangBlock) parts.push(slangBlock);
@@ -1694,6 +1694,10 @@ export async function sendWakePrompt(key, reason) {
     } catch { /* 读不到就不加标记 */ }
   }
   const trustedHereTag = trustedSpeakerHere ? `[OWNER-HERE] owner_qq: ${cfgRef?.ownerQQ ?? '?'}\n` : '';
+  try {
+    const unreadSample = (Array.isArray(st.unread) ? st.unread : []).map((m) => String(m?.plain || m?.text || '')).join('\n').trim();
+    if (unreadSample) await warmQueryEmbedding(unreadSample);
+  } catch { /* 向量预热异常不阻断唤醒 */ }
   if (st._promptInjected) {
     // —— 架构：后续轮一律「哨兵轮」，正文只留"令牌 + 唤醒原因 + 数据"，规则全在系统提示词里。 ——
     // 被 @ 时给一句定位（unread 返回不保证带 at 标记），避免隔得远瞎猜；此句仅 @ 场景出现。

@@ -1667,17 +1667,25 @@ else { UNC_MAX = 16; }
    - 引导模型在首步单次响应中并发调用 `qq_load_persona`、`qq_get_time`、`qq_get_recent_messages`（`emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips`），压缩感知往返延迟；
    - 废除“群聊必带 `replyToMessageId`”的死板限制，改为情境智能自决（`in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally`）：插话/跨楼层用引用、点名提醒用 `@`、顺畅接梗直接自然发言；
    - 补齐网络缩略语（`COMPREHEND_ABBREVIATIONS: yyds, xdm, srds...`）、引用归属判据（`QUOTE_ATTRIBUTION`）与完整对话线追踪（`HOLD_THE_THREAD`）；
-   - 正向规范无动作括号、无无关猫娘口癖（`no_unrelated_cat_verbal_tics`）、无句尾句号、默认精炼 1~2 条短气泡省 Token。
+   - 正向规范无动作括号、无无关猫娘口癖（`no_unrelated_cat_verbal_tics`）、无句尾句号、气泡数量自然随心（`natural_bubble_count_freely_by_context_and_mood`）。
 2. **去正则化（`stripActionBrackets: false`）**：
-   - 按用户“不要正则，因为他们只是 bug 的产物”要求，在 `config.json` 中设置 `social.speech.stripActionBrackets: false`，靠源头认知内化纯口语表达，不再在生产出站层用正则硬切括号。
+   - 按用户“不要正则，因为他们只是 bug 的产物”要求，在 `config.json`、`src/lib/outbound-text.js` 与 `src/core/qq-send.js` 中将 `stripActionBrackets` 默认设为 `false`，靠源头认知内化纯口语表达，不再在生产出站层用正则硬切括号（根除 `console.log(a);` 被误切为 `console.log;` 的隐性 Bug）。
 3. **单轮会话 + 动态微记忆/黑话唤醒槽双轨机制（`buildDynamicTurnContext`）**：
    - 系统提示词保持 11 行大写人设（`【PERSONA_LOAD】`）纯粹冻结，100% 命中 Prefix Cache 且永不稀释人设；
-   - 在每轮唤醒消息（`buildWakePrompt` 与哨兵轮 `sendWakePrompt`）中通过 `buildDynamicTurnContext(key, st, reason)` 动态注入当前会话/说话人的核心微记忆（`memoryDigest`，≤260 字）与命中的群黑话释义（`detectSlangMatches`）；
+   - 在每轮唤醒消息（`buildWakePrompt` 与哨兵轮 `sendWakePrompt`）中通过 `buildDynamicTurnContext(key, st, reason)` 动态注入当前会话/说话人的核心微记忆（`memoryDigest`，≤260 字，结合本轮未读语境语义提权）与命中的群黑话释义（`detectSlangMatches`）；
    - 该动态槽位于当前轮 User Message 中，回合结束随 `collapseToSingleTurn` 自动折叠清空，下一轮重新注入最新记忆，实现“单轮零堆积 + 记忆实时保鲜”。
-4. **智能情境主动回复防打脸与未回退避（`src/core/social-state.js`）**：
+4. **本地 Embedding 小模型（`bge-small-zh-v1.5` 512d Int8 ONNX）+ FTS5 Trigram 混合 RRF 长期记忆检索（`src/lib/embedding.js` & `src/core/memory.js`）**：
+   - 新增 `src/lib/embedding.js`：内置零外部依赖的纯 JS BERT WordPiece 分词器，基于 `onnxruntime-node` 本地离线加载 `Xenova/bge-small-zh-v1.5` Int8 量化模型（`state/models/bge-small-zh-v1.5/model_quantized.onnx`，仅 24MB，512 维 L2 归一化），并配备 128 维中文同义概念簇同步回退向量；
+   - 在 `memory_entries` 表新增 `embedding BLOB` 列，启动时后台自动执行 `backfillMemoryEmbeddings` 为存量记忆补齐 512 维 BGE 向量，新记忆写入 `rememberEntry` 时自动编码落库；
+   - 重构 `listMemoryEntries`：将 FTS5 Trigram BM25 字面检索与 `bge-small-zh-v1.5` 余弦相似度语义检索通过 RRF（Reciprocal Rank Fusion，$k=60$）混合重排，实现零字面重合下的跨词同义精准召回（如搜“夜宵”精准召回“半夜点烧烤和炸鸡”、搜“宠物”精准召回“布偶猫团子”）；
+   - 重构 `memoryDigest`：结合当前唤醒轮的用户消息文本（`query`）进行 BGE 语义相似度动态提权，使与当前话题最契合的长期记忆自动浮现到当轮 `[Memory]` 槽中。
+5. **智能情境主动回复防打脸与未回退避（`src/core/social-state.js`）**：
    - 在 `scheduleProactiveCheck` 中增加双向时序与未回计数判据：当 `st.lastAiReplyAt > st.lastIncomingAt`（Bot 已主动发过话且对方尚未回复）且 `_proactiveUnansweredCount >= 1`（或距上次自己发言不足退避窗口）时，自动进入 `waiting-peer-reply` 退避免打扰，并在主动唤醒槽注入 `[LastSelfBubble]` 提醒，彻底根除“刚说不出声了、15 分钟后又主动催问”的自打脸与 Token 浪费。
-5. **群黑话多用户共现自适应提权（`src/core/slang.js`）**：
+6. **群黑话多用户共现自适应提权（`src/core/slang.js`）**：
    - 在 `feedSlangWindow` 中实现零 LLM 成本的多群友共现统计：当候选黑话已有释义、无违规风险，且在群内被 ≥2 名不同群友自然使用累计 ≥3 次时，自动提权为 `CONFIRMED`，几分钟内即可被 `detectSlangMatches` 识别注入。
+7. **失效 DSH 会话 `follow` 流指数退避与风暴抑制（`src/dsh-client.js`）**：
+   - 修复 `eventsMux` 对已在 DSH 侧失效的历史 `sessionId` 每 `500ms` 无限重连刷屏 `follow 流终结 ... (error)` 的隐性缺陷，增加 `followFailCount` 与 `followBackoffUntil` 指数退避（2s -> 4s -> 8s ... 最高 300s）。
+
 
 
 
