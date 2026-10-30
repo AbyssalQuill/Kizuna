@@ -971,6 +971,18 @@ export const PEER_TYPING_HOLD_MAX_MS = 2500;
 export function scheduleWake(key, reason) {
   if (cfgRef.social?.enabled === false) return;
   if (social.paused) return;
+  /* 2026-10-30 主人：「/deepsleep 没生效」。现场取证：deepsleep 于 02:32:49 打开，之后群里
+   * 164 条消息一条没回（守卫生效），但 03:49:12 有一条 `唤醒 group:***（recall）` 漏了过去 ——
+   * 撤回事件的 scheduleWake 在 bridge.js，不经过 mux 的群消息守卫，于是它发了两条。
+   * 守卫收到这个唯一入口：以后任何新加的群唤醒路径（撤回/拍一拍/定时/…)都自动遵守 deepsleep。 */
+  if (String(key ?? '').startsWith('group:')) {
+    const gid = String(key).split(':')[1] || '';
+    const silentGroups = Array.isArray(cfgRef.social?.deepsleepGroups) ? cfgRef.social.deepsleepGroups.map(String) : [];
+    if (cfgRef.social?.deepsleep === true || silentGroups.includes(gid)) {
+      log(`[deepsleep] 跳过群唤醒 ${key}（${reason}）`);
+      return;
+    }
+  }
   if (!isSessionAllowedInCurrentMode(key)) {
     log(`[default] 跳过计划唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
     return;

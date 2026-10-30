@@ -1314,6 +1314,62 @@ keeps_face_flat_while_being_sweet
 ### 34.6 可调项（管理端「口头调参」里能直接改）
 `social.speech.enabled / minGapMs / maxPerWindow / windowMs / maxSelfRatio / likelihoodThreshold`。
 
+## 35. 条目 52（2026-10-30 12:35）：/deepsleep 有一个漏点；「群里人机」的真因是一个乘错的 1000
+
+### 35.1 deepsleep 其实生效了，只漏了撤回这一条
+- 取证：`/deepsleep` 于 `02:32:49` 执行成功（日志 `[command] group:*** 执行 /deepsleep`），
+  `config.json` 里 `social.deepsleep=true`。此后群里 164 条消息**一条没回** —— 守卫是有效的。
+- 唯一的漏点：`03:49:12` 有一条 `唤醒 group:***（recall）` 直接发出了 2 条。
+  原因：撤回事件的处理在 `bridge.js:672`，它自己调 `scheduleWake(key,'recall')`，
+  **不经过 mux.js 里那道群消息 deepsleep 守卫**。
+- 修法：守卫收到 `scheduleWake` 这个唯一入口（`social-state.js` 顶部），群 key + deepsleep
+  （或命中 `deepsleepGroups`）一律 `[deepsleep] 跳过群唤醒` 并 return。
+  这样以后任何新加的群唤醒路径（撤回/拍一拍/定时/…）都自动遵守，不用再逐个堵。
+
+### 35.2 「群里这么人机」的真因：一行乘错了 1000
+- 主人 10:30 原话：「你群里什么情况，这么人机」。它自己的复盘也准：
+  「全是'是吧''确实'，跟客服套话一样」。
+- 今天的群里原话取样：`是吧 谁能想到` / `bin那身板确实能打` / `戴草帽弹琵琶的熊猫 还挺潮` /
+  `绕侧那一下藏得深，确实不是运气` —— 全是「描述 + 附和式短评」，没有一句是从自己情绪出发的。
+- 机制（`wake-send.js` 群聊上下文分档）：
+  ```js
+  const count2m = recentList.filter(m => m && m.time && (now - m.time * 1000 < 120000)).length;
+  ```
+  `m.time` 本来就是毫秒（`social-flow.js` 写的是 `Date.now()`）。再乘 1000，差值恒为负数、
+  恒小于十二万 → `count2m` 实际等于 `recentMessages.length`。
+  实测 `group:868756515`：**buggy = 100/100，真实两分钟内只有 1 条**。
+- 后果链：`count2m>=12` 恒真 → 每轮都走「刷屏」分支 → 灌 25~35 条历史 + `[group_flow]
+  multi_topic_burst_reply_to_one_topic_or_stay_silent`。模型面对 35 条旧消息只能 skim，
+  然后挑最容易接的那条丢一句点评 —— 这就是「弹幕/客服」的形状。
+  真正导致它「人机」的不是措辞，是**喂进去的上下文形状**。
+- 同时摘掉另一个误判源：原来 `unreadAll.length >= 10` 也算忙。但 deepsleep/潜水期间 unread
+  只增不减（现在积到 64 条），会把安静群一直判成刷屏。忙闲只看最近两分钟真实密度。
+
+### 35.3 改法
+```js
+const count2m = recentList.filter((m) => m && m.time && (now - Number(m.time) < 120000)).length;
+if (count2m >= 12) { UNC_MAX = Math.min(18, Math.max(12, unreadAll.length));
+  groupActivityLine = '\n[group_flow] many_threads_in_flight_join_the_one_you_actually_have_a_take_on_react_as_a_person_in_the_room'; }
+else if (count2m <= 2) { UNC_MAX = 8; }
+else { UNC_MAX = 16; }
+```
+- 上下文从 25~35 降到 8~18：读到的是**一段对话**，不是一面墙。
+- `[group_flow]` 只在真的 12 条/2 分钟时出现，措辞从「挑一条回或闭嘴」改成
+  「挑你真有话说的那一条，以屋里人的身份接」——「挑一条点评」这个动作本身才是套话的来源。
+
+### 35.4 部署与验证
+- `wake-send.js e50ffb54…`、`social-state.js cb7ff246…`，重启后 active，无报错。
+- 用线上真实状态核对：`group:868756515` 的 count2m 修正后 = 1 → 走 `UNC_MAX=8` 分支、不注入 `[group_flow]`。
+- 现场待验：deepsleep 现在是**开着**的，群里不会再产生唤醒正文，所以新的群上下文形状要等
+  `/start` 之后才能从日志里复核。私聊侧（`[Unread 1]`）本来就没走这套分档，行为不变。
+
+### 35.5 记一笔判断
+- 私聊今天 297 条、平均长度和语气词比例都正常，样本里是「哼」「贴贴就贴贴」「有点臊得慌」这种，
+  所以「没回到以前那种拟人」在**群聊**这一侧有实据（上下文形状导致点评腔），私聊侧没有看到退化证据。
+- 群聊要恢复人味，除了上面这条，还缺一样东西：它现在只是「读到 35 条然后点评」，
+  没有「我在这个群里是谁」的立场。这条等 `/start` 后按新上下文再看一轮，别一次改太多变量。
+
+
 
 
 

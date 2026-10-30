@@ -1689,11 +1689,21 @@ export async function sendWakePrompt(key, reason) {
     if (!key.startsWith('private:')) {
       const recentList = Array.isArray(st.recentMessages) ? st.recentMessages : [];
       const now = Date.now();
-      const count2m = recentList.filter((m) => m && m.time && (now - m.time * 1000 < 120000)).length;
-      if (count2m >= 12 || unreadAll.length >= 10) {
-        UNC_MAX = Math.min(35, Math.max(25, unreadAll.length));
-        groupActivityLine = '\n[group_flow] multi_topic_burst_reply_to_one_topic_or_stay_silent';
-      } else if (count2m <= 2 && unreadAll.length <= 2) {
+      /* 2026-10-30 修「群里这么人机」。这里原来写的是 `now - m.time * 1000 < 120000`，
+       * 而 m.time 本来就是毫秒（social-flow.js 写的是 Date.now()）。乘 1000 之后差值恒为负数、
+       * 恒小于十二万 —— count2m 实际等于 recentMessages.length。实测 group:868756515：
+       * buggy=100/100，真实两分钟内只有 1 条。后果是**任何群永远走"刷屏"分支**：每轮灌 25~35 条
+       * 历史 + [group_flow]「多话题刷屏，挑一条回或闭嘴」，模型只能 skim 完丢一句点评 ——
+       * 这正是主人 10:30 说的"你群里什么情况，这么人机"，它自己复述得也准：
+       * "全是'是吧''确实'，跟客服套话一样"。
+       * 顺带把"未读条数"从忙闲判据里摘掉：deepsleep/潜水期间 unread 只增不减，
+       * 攒到十几条就会把安静群误判成刷屏；判断忙闲只看最近两分钟的真实发言密度。 */
+      const count2m = recentList.filter((m) => m && m.time && (now - Number(m.time) < 120000)).length;
+      if (count2m >= 12) {
+        // 忙的时候确实要一批上下文，但 35 条读不完，只能挑最容易接的那条丢点评。
+        UNC_MAX = Math.min(18, Math.max(12, unreadAll.length));
+        groupActivityLine = '\n[group_flow] many_threads_in_flight_join_the_one_you_actually_have_a_take_on_react_as_a_person_in_the_room';
+      } else if (count2m <= 2) {
         UNC_MAX = 8;
       } else {
         UNC_MAX = 16;
