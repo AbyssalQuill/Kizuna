@@ -1490,6 +1490,36 @@ else { UNC_MAX = 16; }
   「主人你看！这个皮肤真好看。」→ 去句尾句号、叹号保留；「朋友，你来了？」→ 原样。
 - 部署：`outbound-text.js` / `wake-send.js`，重启后 active。
 
+## 39. 条目 56（2026-10-30 13:25）：拟人与多样化回复打破定式，优化全链路提示词，严禁「人家」，支持群聊适当引用回复
+
+### 39.1 真实聊天记录与日志深度取证
+- **现场聊天证据（`chat.db` 04:42~04:50）**：
+  - `04:42:40 [group:868756515] 🤖: 人家又不是挂件 笨蛋主人`
+  - `04:48:45 [group:868756515] 🤖: 还有大肥鱼是什么东西啊，人家是鲸鱼，鲸鱼！这俩根本不是一回事。`
+  - `04:49:51 [group:868756515] 🤖: 哦，那个圆滚滚的就是大肥鱼啊，我看到了，主人你干嘛要拍拍人家还发这玩意儿。`
+  - `04:49:53 [group:868756515] 🤖: 星痕那位也别乱叫。人家是鲸鱼少女，不是那种东西。`
+- **问题根因定位**：
+  1. **“人家”自称与做作定式泛滥**：缺乏明确否定短语与省主语引导，LLM 默认套用二次元机械定式；
+  2. **死板 3 气泡三段论八股**：唤醒词中 `several_remarks_use_messages_array` 诱导模型每轮固定发 3 条连发；
+  3. **群聊称呼错乱**：`persona.md` 末尾诱导性 `[sample_bubbles]`（`哼 笨蛋主人`）被模型死板照搬；
+  4. **群聊缺乏适当引用回复**：工具描述与唤醒词中 `quote_only_when_ambiguous` / `skip it when unambiguous` 强力抑制引用，导致群聊多方交流时缺乏回复指向性。
+
+### 39.2 优化方案与实施
+1. **角色卡（`persona.md`）**：
+   - 彻底删除 `[sample_bubbles]` 诱导模板；
+   - 注入 `ban_self_call_renjia`、`strictly_forbid_saying_renjia`、`use_wo_or_drop_subject_naturally`、`drop_subject_naturally`、`master_private_only`、`never_call_peers_master_in_group`、`group_chat_treat_peers_as_fellow_netizens`、`prefer_single_bubble_most_turns`、`break_fixed_bubble_count_routine`、`group_quote_reply_appropriate`、`reply_peer_with_target_id` 等纯短语。
+2. **系统预设（`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 增加拟人多样化回复：`prefer_single_bubble_most_turns`、`break_fixed_bubble_count_routine`、`no_rigid_three_part_template`、`strictly_ban_self_call_renjia`、`use_wo_or_drop_subject_naturally`、`group_chat_reply_peer_use_replyToMessageId`、`quote_target_message_id_in_group`。
+3. **唤醒词（`src/core/wake-send.js`）**：
+   - `styleGuideLines` 重构为：单气泡优先（`single_bubble_by_default_most_turns`）、打破固定套路、禁止人家、自然省主语、群聊使用 `replyToMessageId` 回复群友；
+   - 统一精简 `[deepsleep]` 标签为纯下划线无散文格式；
+   - `burstGuidance` 优化为 `group_reply_with_replyToMessageId_for_target_peer`。
+4. **工具描述（`src/mcp-napcat-safe.js`）**：
+   - 优化 `qq_send_message` 主说明与 `replyToMessageId` 参数说明，明确推荐群聊中回复特定群友时使用引用回复。
+
+### 39.3 验证
+- 核心单元测试 100% 通过（`persona-ephemeral`、`universal-prompts`、`meme-query-fallback`、`wake-trigger`）。
+
 
 
 
