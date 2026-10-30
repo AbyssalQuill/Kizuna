@@ -1702,3 +1702,44 @@ else { UNC_MAX = 16; }
 
 
 
+
+## 40. 条目 56（2026-10-31 03:00）：图片/表情包看不到的根治；人设不再进系统提示词；管理端三处收尾
+
+### 40.1 图片看不到：不是抓取代码错了，是抓取时机错了
+真机日志（同一条消息，几分钟后模型再去看）：
+```text
+18:41:16 get_image 解析失败: file not found
+18:41:17 图片 URL 抓取失败：HTTP 400          ← multimedia.nt.qq.com.cn 的 rkey 已过期
+18:46:39 get_image 解析失败: get_image 响应超时
+18:46:41 图片 URL 抓取失败：HTTP 404          ← 表情包 gxh.vip.qq.com，链接已失效
+```
+四条最后都退化成 `[image_lost] [no_image_content]`。原来三层兜底（本地缓存件 → base64 → URL 下载）
+全都发生在"模型要看的时候"，而 QQ 直链在那时已经死了。
+
+根治 = **把抓取提前到消息刚收到的那一刻**，并把字节存盘：
+- 新增 `src/core/media-cache.js`：`state/media-cache/<key>.<ext>`，键 = `sha1(file + '|' + url去掉查询串)`。
+  url 的 `rkey/term` 每次都会变，所以签名参数不进键 —— 换了签名仍然命中同一条。
+  LRU：600 个文件 / 320MB 上限，超了按 mtime 删最旧；命中即刷新 mtime。
+- `media-pipe.js`：`fetchOneBotImage` 开头先查缓存（命中直接返回，不再发网络请求）；
+  每抓到一份字节先 `writeCachedMedia` 落盘、再交给原来的压缩逻辑（顺序不能反，否则存进去的是压缩图）。
+- `mux.js`：`appendSocialMessage` 存完媒体元数据后 `void prewarmMedia(mediaList)` —— 串行、最多 2 张、失败静默。
+- 冒烟（服务器实跑）：同一张图换 rkey 后键不变、写入后可读回、`stats` 正常；临时文件已清。
+
+### 40.2 人设不再进系统提示词
+- 现场只有一处人设类文本在系统提示词里：`/root/.dsh/cordis.patch.yml` 的
+  `personaPrefix: You are a coding agent powered by the {{model}} model.`
+  （preset 那边早已只剩 `call_tool_qq_load_persona_for_character` 一句，见 preset-compose.js 注释。）
+- 已删除该键（保留 `includeHarnessIdentity: false`），YAML 校验通过，`dsh-web` 已重启、桥已重连。
+  备份 `cordis.patch.yml.bak-personaprefix-*`。
+- **生效范围**：系统提示词在建会话那一刻烧进 history，只对**新会话**生效；老会话仍带旧首句。
+  要立刻全部换掉需跑 `python3 tools/reset-sessions.py`（未擅自执行）。
+
+### 40.3 管理端三处
+1. **灰字对齐**（`BridgeConfig.tsx` 表情包卡片）：原来是单个 flex-wrap 行，路径靠 `marginLeft:auto` 被推右、
+   说明文字退回下一行靠左。现在拆两行：第一行标识+计数+右侧删除按钮，第二行统一左起。
+   实测两条灰字 `top` 都是 621，同一基线。
+2. **config.json 键名换 AaCute**（`app.css`）：`.cute-ui code` → AaCute 圆体，JSON 编辑器/日志区仍等宽。
+   实测 `getComputedStyle` 为 `AaCute, AaCute-full, sans-serif`。
+3. **球体重构**（`NetCanvas.tsx`，参考 vasturiano/globe.gl 的大气层与 react-force-graph 的柔光）：
+   外圈大气光晕渐隐去硬边、球体左上受光 + 上半圈贴面高光、0.34/0.58/0.82R 三道虚线轨道环、
+   辐条直线改同向二次曲线（弓高 10% 弦长）、球心叠 2.3r 柔光。主图画布实测渲染正常。

@@ -2864,21 +2864,35 @@ function MemePacksCard({ remote }: { remote?: { id: string; name?: string } | nu
       {!loadErr && packs.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '4px 0 8px' }}>
           {packs.map((p) => (
-            <div key={p.dir} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', border: '1px solid var(--nc-content2, #eee)', borderRadius: 8, padding: '7px 10px' }}>
-              <b style={{ fontSize: 13.5, color: '#3d2b4f' }}>{p.id}</b>
-              <span className={`badge ${p.source === 'factory' ? 'badge-soft' : 'badge-success'}`}>{MEME_SOURCE_LABEL[p.source] ?? p.source}</span>
-              {p.character ? <span className="badge badge-soft">角色 {p.character}</span> : null}
-              {p.broken
-                ? <span style={{ fontSize: 12, color: '#b3261e' }}>
-                    <AlertTriangle size={12} style={{ verticalAlign: -2 }} /> 坏包：{p.broken}（磁盘上仍有 {p.imageCount} 张图）
+            /* 2026-10-31 主人：「把这个卡片的灰色字对齐」。
+               原来整行是一个 flex-wrap 容器，路径那行自带 marginLeft:auto 被推到最右、
+               而"位于 meme 目录"退回下一行左对齐 —— 两行灰字一行靠右一行靠左，看着是散的。
+               现在拆成两行：第一行是标识 + 计数 + 右侧操作；第二行统一左边起排，
+               路径占满剩余宽度（超长省略），灰色说明固定跟在它后面，两条灰字落在同一条基线上。 */
+            <div key={p.dir} style={{ display: 'flex', flexDirection: 'column', gap: 4, border: '1px solid var(--nc-content2, #eee)', borderRadius: 8, padding: '7px 10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <b style={{ fontSize: 13.5, color: '#3d2b4f' }}>{p.id}</b>
+                <span className={`badge ${p.source === 'factory' ? 'badge-soft' : 'badge-success'}`}>{MEME_SOURCE_LABEL[p.source] ?? p.source}</span>
+                {p.character ? <span className="badge badge-soft">角色 {p.character}</span> : null}
+                {p.broken
+                  ? <span style={{ fontSize: 12, color: '#b3261e' }}>
+                      <AlertTriangle size={12} style={{ verticalAlign: -2 }} /> 坏包：{p.broken}（磁盘上仍有 {p.imageCount} 张图）
+                    </span>
+                  : <span style={{ fontSize: 12, color: '#6b5f80' }}>
+                      {p.count} 张 · {p.tags.length} 个分类{p.imageCount !== p.count ? `（磁盘上 ${p.imageCount} 张，与索引不一致）` : ''}
+                    </span>}
+                {p.source === 'factory' ? null : (
+                  <span style={{ marginLeft: 'auto' }}>
+                    <button className="btn btn-outline-danger btn-sm" disabled={busy} onClick={() => void del(p)}><Trash2 size={13} /> 删除</button>
                   </span>
-                : <span style={{ fontSize: 12, color: '#6b5f80' }}>
-                    {p.count} 张 · {p.tags.length} 个分类{p.imageCount !== p.count ? `（磁盘上 ${p.imageCount} 张，与索引不一致）` : ''}
-                  </span>}
-              <span style={{ fontSize: 11.5, color: '#a99fc0', marginLeft: 'auto', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.dir}</span>
-              {p.source === 'factory'
-                ? <span style={{ fontSize: 12, color: '#a99fc0' }}>位于 meme 目录，本页不可删除</span>
-                : <button className="btn btn-outline-danger btn-sm" disabled={busy} onClick={() => void del(p)}><Trash2 size={13} /> 删除</button>}
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
+                <span title={p.dir} style={{ fontSize: 11.5, color: '#a99fc0', flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.dir}</span>
+                {p.source === 'factory'
+                  ? <span style={{ fontSize: 11.5, color: '#a99fc0', flex: '0 0 auto' }}>位于 meme 目录，本页不可删除</span>
+                  : null}
+              </div>
             </div>
           ))}
         </div>

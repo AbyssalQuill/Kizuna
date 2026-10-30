@@ -347,17 +347,58 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
        * 「空画布上一圈极淡的边框」，不像一颗球。现在在同样的半径里先铺一层柔和的径向渐变球
        * （左上受光、右下退暗），再把外缘提亮一点 —— 体积感只来自这层底纹，点与线的画法一概不动。
        * 只在中心模式（聚焦弹层）下画；主图没有球心，保持原来的通透观感。 */
+      /* 2026-10-31 重做球形底纹（参考 vasturiano/globe.gl 的「大气层光晕 + 受光渐变球」，
+       * 以及 react-force-graph 那种柔光节点的观感）：
+       *   ① 外圈大气：R → R*1.22 的径向渐变，最外圈完全透明 —— 球不再被一条硬边切住；
+       *   ② 球体：左上偏强的径向渐变 + 右下略沉，上半圈再补一道贴面高光；
+       *   ③ 轨道环：0.34 / 0.58 / 0.82 R 三道虚线同心圆，给纵深但不抢节点。
+       * 主图（无球心）保持通透：只留一圈更淡的外缘 + 一道虚线环，不铺实心球。 */
+      const dashRing = (rr: number, alpha: number, dash: number[]) => {
+        ctx.save();
+        ctx.setLineDash(dash);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(126,150,190,' + alpha + ')';
+        ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+      };
       if (cid) {
-        const ball = ctx.createRadialGradient(cx - R * 0.34, cy - R * 0.38, R * 0.08, cx, cy, R * 1.04);
-        ball.addColorStop(0, 'rgba(255,255,255,0.97)');
-        ball.addColorStop(0.55, 'rgba(232,240,251,0.8)');
-        ball.addColorStop(1, 'rgba(203,218,240,0.55)');
+        const halo = ctx.createRadialGradient(cx, cy, R * 0.92, cx, cy, R * 1.22);
+        halo.addColorStop(0, 'rgba(148,176,222,0.26)');
+        halo.addColorStop(0.55, 'rgba(148,176,222,0.10)');
+        halo.addColorStop(1, 'rgba(148,176,222,0)');
+        ctx.beginPath(); ctx.arc(cx, cy, R * 1.22, 0, Math.PI * 2);
+        ctx.fillStyle = halo; ctx.fill();
+
+        const ball = ctx.createRadialGradient(cx - R * 0.36, cy - R * 0.40, R * 0.06, cx + R * 0.10, cy + R * 0.12, R * 1.08);
+        ball.addColorStop(0, 'rgba(255,255,255,1)');
+        ball.addColorStop(0.42, 'rgba(238,245,255,0.92)');
+        ball.addColorStop(0.78, 'rgba(214,228,247,0.80)');
+        ball.addColorStop(1, 'rgba(186,206,235,0.62)');
         ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
         ctx.fillStyle = ball; ctx.fill();
-        ctx.strokeStyle = 'rgba(148,170,205,0.45)'; ctx.lineWidth = 1.2; ctx.stroke();
-      } else {
+
+        const rim = ctx.createLinearGradient(cx - R, cy - R, cx + R * 0.4, cy + R);
+        rim.addColorStop(0, 'rgba(255,255,255,0.95)');
+        rim.addColorStop(0.5, 'rgba(255,255,255,0.18)');
+        rim.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.beginPath(); ctx.arc(cx, cy, R - 0.8, Math.PI * 0.98, Math.PI * 1.62);
+        ctx.strokeStyle = rim; ctx.lineWidth = 2; ctx.stroke();
+
         ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(175,190,210,0.16)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = 'rgba(150,172,208,0.30)'; ctx.lineWidth = 1; ctx.stroke();
+
+        dashRing(R * 0.34, 0.22, [2, 5]);
+        dashRing(R * 0.58, 0.18, [2, 6]);
+        dashRing(R * 0.82, 0.14, [3, 7]);
+      } else {
+        const halo = ctx.createRadialGradient(cx, cy, R * 0.95, cx, cy, R * 1.14);
+        halo.addColorStop(0, 'rgba(148,176,222,0.10)');
+        halo.addColorStop(1, 'rgba(148,176,222,0)');
+        ctx.beginPath(); ctx.arc(cx, cy, R * 1.14, 0, Math.PI * 2);
+        ctx.fillStyle = halo; ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(168,186,210,0.20)'; ctx.lineWidth = 1; ctx.stroke();
+        dashRing(R * 0.55, 0.10, [3, 8]);
       }
 
       for (const p of arr) {
@@ -430,7 +471,20 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
           ctx.strokeStyle = lg;
           /* 同上：辐条宽度也只由互动强度决定，标注只改颜色（大图小图同一口径） */
           ctx.lineWidth = 0.8 + l.strength * 1.1;
-          ctx.beginPath(); ctx.moveTo(cObj.sx, cObj.sy); ctx.lineTo(o.sx, o.sy); ctx.stroke();
+          /* 2026-10-31：直线改同向二次曲线 —— 每根辐条朝同一侧轻微外弓，
+           * 一组辐条连起来就是一圈"从中心甩出去的流线"，比一堆等宽直线更像有机体。
+           * 弓高 = 弦长 10%，方向取弦的左法线（统一朝一侧，才形成旋涡感）。 */
+          ctx.beginPath();
+          ctx.moveTo(cObj.sx, cObj.sy);
+          const dx = o.sx - cObj.sx, dy = o.sy - cObj.sy;
+          const chord = Math.hypot(dx, dy) || 1;
+          const bow = chord * 0.1;
+          ctx.quadraticCurveTo(
+            (cObj.sx + o.sx) / 2 - (dy / chord) * bow,
+            (cObj.sy + o.sy) / 2 + (dx / chord) * bow,
+            o.sx, o.sy
+          );
+          ctx.stroke();
         }
       }
       ctx.globalAlpha = 1;
@@ -450,6 +504,16 @@ export function NetCanvas({ nodes, links, selectedUid, centerUid, relations, onE
         if (p.fixed) {
           const r = 12.6 * SZ * USCALE;
           /* 悬停／选中时给一点柔光：鼠标落在球心那位身上一眼可见（只加光，不改尺寸与命中半径） */
+          /* 2026-10-31：球心那位加两层柔光环（外 2.2r 极淡、内 1.5r 稍实），
+           * 和底纹的大气层同一套光感，视线自然落到中心。半径变化不进命中判据（hitAt 用的是 base 半径）。 */
+          ctx.save();
+          const g1 = ctx.createRadialGradient(p.sx, p.sy, r * 0.9, p.sx, p.sy, r * 2.3);
+          g1.addColorStop(0, 'rgba(224,150,180,0.28)');
+          g1.addColorStop(0.55, 'rgba(200,160,200,0.10)');
+          g1.addColorStop(1, 'rgba(200,160,200,0)');
+          ctx.beginPath(); ctx.arc(p.sx, p.sy, r * 2.3, 0, Math.PI * 2);
+          ctx.fillStyle = g1; ctx.fill();
+          ctx.restore();
           ctx.save();
           if (isHover || isSel) { ctx.shadowColor = 'rgba(52,74,110,0.35)'; ctx.shadowBlur = 13; }
           ctx.globalAlpha = 0.95;

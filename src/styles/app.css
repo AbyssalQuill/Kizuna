@@ -640,6 +640,24 @@ body textarea.json-text, body .log-viewer, body .log-viewer *, body .log-line {
   font-family: 'JetBrains Mono', monospace !important;
 }
 
+/* 2026-10-31 主人要求：功能配置页里 `social.meme.personaPacks` 这类 config.json 键名改用 AaCute 圆体。
+   它们读起来更像"配置名"而不是代码，混在中文句子里等宽字体显得突兀。
+   只作用于配置页（.cute-ui）—— JSON 编辑器、日志、更新页的 sha 仍然保持等宽。
+   优先级说明：上面 `body code` 带 !important（0,0,2），这里 .cute-ui code 是 (0,1,1)，同等 !important 下更具体者胜。 */
+.cute-ui code,
+.cute-ui code * {
+  font-family: 'AaCute', 'AaCute-full', sans-serif !important;
+  letter-spacing: 0.015em;
+  font-size: 12.5px;
+}
+/* 例外：配置页里的 JSON 编辑器/预览区仍然等宽（它们不是键名，是可编辑文本） */
+.cute-ui .json-text code,
+.cute-ui #bridge-json code,
+.cute-ui .log-viewer code {
+  font-family: 'JetBrains Mono', monospace !important;
+  letter-spacing: 0;
+}
+
 /* ===== 学习与用量页（v3.8，nc_pink 粉色主题） ===== */
 .lrn-body { max-width: 1360px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 .lrn-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; align-items: stretch; }

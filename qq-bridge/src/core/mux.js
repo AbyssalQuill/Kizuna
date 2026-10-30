@@ -180,7 +180,7 @@ import {
   findMessageMedia, recordSentMessages, initSocialFlowCore,
 } from './social-flow.js';
 import {
-  getImageDimensions, fetchOneBotImage, fetchFaceMedia, resolveMediaList, fetchMediaData,
+  getImageDimensions, fetchOneBotImage, fetchFaceMedia, resolveMediaList, fetchMediaData, prewarmMedia,
   MAX_MEDIA_BYTES, MAX_MEDIA_PIXELS, MAX_MEDIA_STORE_PER_KEY,
   initMediaPipeCore, setMediaPipeBot,
 } from './media-pipe.js';
@@ -347,6 +347,10 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       messageMediaStore.set(key, mediaByRef);
     }
     for (const ref of refsToStore) mediaByRef.set(ref, mediaList);
+    /* 2026-10-31：收到的那一刻就把图片字节存进磁盘缓存（不 await，不阻塞入库/唤醒）。
+     * QQ 直链几分钟后就 400/404，等模型想起来看时已经晚了 —— 这是 [image_lost] 的根因，
+     * 所以抓取时机必须提前到"刚收到"，而不是"要看的时候"。见 core/media-cache.js。 */
+    void prewarmMedia(mediaList).catch(() => {});
     // 防止无限增长：超过上限时删除最旧一条（Map 保持插入序）
     while (mediaByRef.size > MAX_MEDIA_STORE_PER_KEY) {
       const oldestKey = mediaByRef.keys().next().value;

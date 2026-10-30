@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { log } from '../lib/log.js';
 import { MAX_MEDIA_COUNT } from './session-state.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from '../safe-fetch.js';
+import { readCachedMedia, writeCachedMedia } from './media-cache.js';
 import { isProbablySafeImageFileRef, isSafeLocalMediaPath } from '../lib/media-guard.js';
 import { mimeFromBuffer, mimeFromUrl, base64FromMaybe } from '../lib/media-meta.js';
 import { finalizeImageBuffer, ensureDeliverableImage, IMAGE_HARD_MAX_SIDE } from '../lib/image-compress.js';
@@ -75,7 +76,18 @@ export async function fetchOneBotImage(media, opts = {}) {
    * 拒收的风险），但「把这张图转出去」要的是原图 —— 压缩过的副本转出去，对方拿到的就是
    * 二次编码的糊图。安全闸门照旧（字节上限、像素上限、魔术字校验），只是不做重编码。 */
   const raw = opts.raw === true;
+  /* 2026-10-31 根治「表情包/图片看不到」：先查磁盘缓存。
+   * QQ 图片直链寿命很短，等模型想起来看时常常已经 400/404（见 media-cache.js 顶部的真机日志）。
+   * 消息一进来 prewarmMedia() 就把字节存下来了，所以这里的命中率才是关键路径，
+   * 而不是"再抓一次"。缓存存的是**未压缩的原始字节**，raw 与压缩两条路都从它派生。 */
+  const cachedHit = readCachedMedia(media);
+  if (cachedHit) return await asIs(cachedHit.buffer, cachedHit.mimeType);
   const asIs = (buf, mime) => (raw ? { buffer: buf, mimeType: mime, compressed: false } : finalizeImageBuffer(buf, mime));
+  /** 抓到的原始字节先落盘，再交给 asIs 做（可选的）压缩 —— 顺序不能反，否则缓存里存的是压缩图。 */
+  const keepAnd = async (buf, mime) => {
+    try { writeCachedMedia(media, buf, mime); } catch { /* 缓存失败不影响主流程 */ }
+    return await asIs(buf, mime);
+  };
   // 优先使用 OneBot get_image 获取网关侧信息；只有 file 是安全缓存文件名时才允许交给网关。
   /* 2026-10-28 修「图还没加载出来」：NapCat 有些版本把 file 直接给成绝对路径
    * （/root/.config/QQ/nt_data/Pic/....jpg），旧的「只认简单文件名」判据会把这类图整条跳过 ——
@@ -104,7 +116,7 @@ export async function fetchOneBotImage(media, opts = {}) {
           } else if (!looksLikeImageBuffer(buf)) {
             log(`本地缓存文件不是可识别的图片格式，已跳过（${Math.round(buf.length / 1024)}KB）`);
           } else {
-            return await asIs(buf, mimeFromBuffer(buf));
+            return await keepAnd(buf, mimeFromBuffer(buf));
           }
         }
       }
@@ -119,7 +131,7 @@ export async function fetchOneBotImage(media, opts = {}) {
             if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
               log(`get_image 返回的图片像素超限，已跳过（${dims.width}x${dims.height}）`);
             } else {
-              return await asIs(buf, mimeFromBuffer(buf));
+              return await keepAnd(buf, mimeFromBuffer(buf));
             }
           }
         } else {
@@ -136,7 +148,7 @@ export async function fetchOneBotImage(media, opts = {}) {
           if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
             log(`get_image URL 图片像素超限，已跳过（${dims.width}x${dims.height}）`);
           } else {
-            return await asIs(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(obj.url));
+            return await keepAnd(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(obj.url));
           }
         } catch (fetchErr) {
           log(`get_image 内部 URL 抓取失败: ${fetchErr?.message ?? fetchErr}`);
@@ -155,7 +167,7 @@ export async function fetchOneBotImage(media, opts = {}) {
       if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
         log(`图片 URL 像素超限，已跳过（${dims.width}x${dims.height}）`);
       } else {
-        return await asIs(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(media.url));
+        return await keepAnd(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(media.url));
       }
     } catch (error) {
       log(`图片 URL 抓取失败: ${error?.message ?? error}`);
@@ -164,6 +176,22 @@ export async function fetchOneBotImage(media, opts = {}) {
   /* 失败必须留痕：否则线上只看到 [图片（获取失败）]，分不清是没文件、没 URL 还是下载挂了。 */
   log(`[media] 图片拿不到内容：file=${fileRefRaw ? fileRefRaw.slice(0, 96) : '(空)'} url=${media.url ? String(media.url).slice(0, 60) : '(空)'} kind=${media.kind ?? '(空)'}`);
   return null;
+}
+
+/** 消息刚到达时就把图片字节抓下来存缓存 —— 这是「根治」的关键一步：
+ *  QQ 直链在收到消息的当下是有效的，过几分钟就 400/404 了（见 media-cache.js 顶部日志）。
+ *  串行 + 最多 2 张：不抢带宽、不被某张慢图拖住消息处理；任何失败都静默（主流程照常）。 */
+export async function prewarmMedia(mediaList, limit = 2) {
+  const list = Array.isArray(mediaList) ? mediaList : [];
+  let done = 0;
+  for (const media of list) {
+    if (done >= limit) break;
+    if (!media || typeof media !== 'object') continue;
+    if (media.kind !== 'image') continue;
+    if (readCachedMedia(media)) continue;
+    done += 1;
+    try { await fetchOneBotImage(media, { raw: true }); } catch { /* 静默 */ }
+  }
 }
 
 export async function fetchFaceMedia(media, opts = {}) {
