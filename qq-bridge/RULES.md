@@ -140,3 +140,25 @@ POST /api/social/session-archive              → 立即巡检
 - 想彻底关闭机器人：停止桥接进程（start.bat 窗口 Ctrl+C）或 NapCat。
 - 修改白名单/角色/owner 后保存即热更新（控制台写入 config.json / state/*.json 后即时生效）；修改 preset（`~/.dsh/.agent-presets/qq-chat*/`）后重启 DSH 生效。
 - ⚠️ 桥接只能运行一个实例：消息异常时先检查任务管理器里是否有多余的 `node ...bridge.js`。
+
+## 工作纪律：改完提示词必须 reset 会话（2026-10-30 起强制）
+
+**背景（真实事故）**：`[style]`/`[tools]`/`[bubbles]` 三行指引曾写进 `buildWakePrompt()`，而它只在"首次注入完整 prompt"时调用；
+日常每轮走哨兵分支，于是这些要求**一整天没送到模型面前**，日志却全绿 —— 表现为"要求都没执行"，排查方向一度全错。
+
+### 三条硬规则
+1. **改完 preset / persona / 唤醒正文里的任何提示词 → 立刻 reset 会话**：
+   `python3 tools/reset-sessions.py`（逐个 `/api/session/reset`，保留唤醒配置与账本）。
+   原因：系统提示词在建会话那一刻烧进 history，改文件、重启 dsh-web 都不会回灌；不 reset 就等于白改。
+   **不要**用 `/api/social/reset`（那会连会话上下文 + 唤醒配置一起清，只在真要全清时用）。
+2. **改完必须验证"模型真的收到了"**：`python3 tools/wake-body-check.py`。
+   它读会话日志里**实际投递的唤醒正文**，检查 `[style]/[tools]/[bubbles]/[anchor]`；群聊 `anyMessage` 还要求 `[turn]`。
+   只看源码说"已经改了"不算验证 —— 这次的 bug 就是源码看着完全正确。
+3. **一次只改一个变量**：形状类要求（条数/字数/句式）互相叠加会把模型压成模板（实测：75% ≤18 字 + 只有 1% 带问号 = 齐得发假）。
+   要动就先量基线（`tools/turn-shape.py --compare`），改完再量，差多少写进维护日志。
+
+### 附：判断"生效没生效"的三处证据（按可信度排序）
+1. 会话日志里投递的 `user/message` 正文（`~/.dsh/sessions/*/session-*/session.v4.jsonl.zstd`）；
+2. `chat.db` 的模型原文（清洗前，只能证明"模型说了什么"，不能证明"发出去的是什么"）；
+3. `tools/audit-delivered.py`（OneBot `get_msg`）—— 只有它能证明"对方真的看到了什么"。
+
