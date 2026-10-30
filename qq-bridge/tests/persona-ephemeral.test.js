@@ -27,22 +27,32 @@ function fakeSession(events) {
 }
 
 const longPersona = '【persona_load】\n# 角色卡：DeepSeek 小鲸鱼\n' + '你是谁 '.repeat(400);
+const mkPersona = (seq, callId) => ({ seq, type: 'tool/result', data: { message: { role: 'tool', source: { kind: 'tool', callId }, content: [{ type: 'text', text: longPersona }] } } });
+
+/* 2026-10-30 政策：人设只剪「旧副本」，最近一次加载常驻 —— 否则守卫的 30 分钟新鲜窗口
+ * 会让整场会话只有第 1 轮手里有人设（线上 6 回合 1 次加载的现场）。 */
+console.log('== ① 旧人设被替换成占位，最近一份保留 ==');
 const events = [
   { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '在吗' }] } },
-  { seq: 2, type: 'tool/result', data: { message: { role: 'tool', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'text', text: longPersona }] } } },
+  mkPersona(2, 'c1'),
   { seq: 3, type: 'assistant/message', data: { content: [{ type: 'text', text: '在' }] } },
+  mkPersona(4, 'c2'),
 ];
-
-console.log('== ① 人设结果被替换成占位 ==');
 const s1 = fakeSession(events);
 const n1 = mod.prunePersonaResults(s1);
-ok('替换了 1 条', n1 === 1, 'got ' + n1);
+ok('只剪了旧的 1 条', n1 === 1, 'got ' + n1);
 const rep = s1.appended[0];
-ok('是同 seq 的 surfaceOp replace', !!rep && rep.opts?.surfaceOp?.op === 'replace' && rep.opts.surfaceOp.startSeq === 2 && rep.opts.surfaceOp.endSeq === 2, JSON.stringify(rep?.opts));
+ok('剪的是 seq 2 那份旧人设', !!rep && rep.opts?.surfaceOp?.op === 'replace' && rep.opts.surfaceOp.startSeq === 2 && rep.opts.surfaceOp.endSeq === 2, JSON.stringify(rep?.opts));
 ok('引用了被遮蔽的原事件', JSON.stringify(rep?.opts?.sourceEventSeqs) === '[2]');
 const newText = rep?.data?.message?.content?.map((b) => b.text).join('');
 ok('正文只剩占位（不含角色卡正文）', newText.includes('ephemeral_turn_pruned') && !newText.includes('你是谁'), String(newText).slice(0, 120));
 ok('调用痕迹保留', rep?.data?.message?.source?.callId === 'c1');
+ok('最新一份人设（seq 4）没被剪', s1.appended.every((a) => a.opts?.surfaceOp?.startSeq !== 4));
+
+console.log('== ①b 只有一份人设时一条也不剪（常驻） ==');
+const s1b = fakeSession([mkPersona(6, 'c3')]);
+ok('不替换', mod.prunePersonaResults(s1b) === 0);
+ok('没写多余事件', s1b.appended.length === 0);
 
 console.log('== ② 已剪过的不再重复剪 ==');
 const pruned = { seq: 4, type: 'tool/result', data: { message: { role: 'tool', source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'text', text: '【persona_load: ephemeral_turn_pruned】本轮人设已内化；正文已剪除以省上下文，需要时再调 qq_load_persona。' }] } } };

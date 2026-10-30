@@ -284,6 +284,8 @@ export default function App() {
       remote={scopeRemote}
       hasUpdate={hasUpdate}
       onUpdateChanged={checkForUpdates}
+      /* 2026-10-30：首启「设置主人 QQ」弹窗没关之前，更新面板一律禁用（它 z-index 200 会盖住首启弹窗） */
+      suppressUpdate={ownerOpen}
     />
   );
   if (view.name === 'cfg') return swap(<InstanceConfig state={state} instanceId={view.id} onBack={back} onRefresh={refresh} />);
@@ -310,7 +312,8 @@ export default function App() {
 
       {/* 首次启动弹窗：配置管理员本人 QQ */}
       {ownerOpen && (
-        <div className="help-overlay" style={{ zIndex: 160 }} onClick={closeOwner}>
+        /* z-index 260：必须压过更新面板（.kz-upd-overlay 是 200）——首次进应用先填 QQ 号，不能被别的浮层盖住 */
+        <div className="help-overlay" style={{ zIndex: 260 }} onClick={closeOwner}>
           <div className="help-panel" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
             <div className="help-head">设置主人 QQ</div>
             <div className="help-body" style={{ whiteSpace: 'normal' }}>

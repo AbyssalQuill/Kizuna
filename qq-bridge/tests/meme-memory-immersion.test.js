@@ -11,7 +11,12 @@ console.log('PASS: 文件名清洗通过:', cleanQuery);
 console.log('=== 验证 2：persona.md 格式与关键词检查 ===');
 const personaPath = path.resolve(import.meta.dirname, '../persona.md');
 const persona = fs.readFileSync(personaPath, 'utf8');
-assert.ok(!persona.includes('kamoji_whale_deadpan'), 'deadpan 必须被移除');
+// 2026-10-30 回退：主人要求去掉冷脸萌人设（[faces] 块 / cold_face 短语 / 纯脸示范气泡一并移除）。
+// 发送侧的颜文字换行守卫保留 —— 模型自己冒出来的颜文字也不会再被切成两半。
+assert.ok(!persona.includes('cold_face') && !persona.includes('deadpan'), '冷脸萌措辞已移除');
+assert.ok(!persona.includes('[faces]'), '[faces] 块已移除');
+assert.ok(!persona.includes('ᗜ'), '人设里不再带 ᗜ 系列颜文字');
+assert.ok(!persona.includes('kamoji_whale_deadpan'), '旧短语 kamoji_whale_deadpan 不再使用');
 // 2026-10-29：人设已改为纯下划线短语（条目 34），断言改用短语词汇而不是中文散文
 assert.ok(persona.includes('food_rice') || persona.includes('米饭'), '包含米饭/饮食设定');
 assert.ok(persona.includes('stay_in_character_always') || persona.includes('真人'), '包含沉浸拟真设定');

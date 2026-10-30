@@ -26,7 +26,10 @@ import { warmChatPage } from './ChatHistory';
 import Update from './Update';
 
 /** remote：连上服务器时把「服务端」那套传进来（配置读写服务端 /root/qq-bridge），null = 编辑本机 */
-interface Props { onBack: () => void; onRefresh: () => void; onOpenLearning: () => void; onOpenPortrait: () => void; onOpenChat: () => void; onOpenVoice: () => void; remote?: { id: string; name: string; host: string } | null; hasUpdate?: boolean; onUpdateChanged?: () => void; }
+interface Props { onBack: () => void; onRefresh: () => void; onOpenLearning: () => void; onOpenPortrait: () => void; onOpenChat: () => void; onOpenVoice: () => void; remote?: { id: string; name: string; host: string } | null; hasUpdate?: boolean; onUpdateChanged?: () => void;
+  /* 2026-10-30：首次启动的「设置主人 QQ」弹窗在屏上时，更新面板不许盖上去（它自己 z-index 200，比首启弹窗高）。
+   * 由 App 传下来：首启弹窗开着就禁掉更新入口，关闭后自然恢复。 */
+  suppressUpdate?: boolean; }
 
 /* 2026-09-12：隔离 DSH 里实际生效的模型段（settings.yaml 的 agent-default-model）。
  * 管理端保存模型配置时写的就是它；这里读回来只为两件事：
@@ -167,7 +170,7 @@ const LABEL: Record<string, string> = {
   // 通用
   security: '安全', interceptNotify: '拦截通知', burstIntervalMinMsLegacy: '（已废弃）连发间隔下限（旧键名）',
   // 投递 / 省额度（2026-09-12 新增到管理端）
-  steerEnabled: '在途回合注入', slimTools: '工具 schema 精简', schemes: '命名方案',
+  slimTools: '工具 schema 精简', schemes: '命名方案',
   // 回合保持（social.turnHold）：以前管理端完全没有露出来，被问"投递与回合那张卡没错吧"时才发现
   turnHold: '回合保持', maxExchanges: '最多来回次数', idleCloseMs: '空闲关闭时长', maxWaitMs: '最长保持时长',
   requestBudgetMs: '每段等待预算', privateOnly: '只对私聊保持', keys: '限定会话',
@@ -636,10 +639,7 @@ function mcpLabel(fullName: string) {
   'social.proactive.privateCheckIntervalMinMs': '私聊主动检查间隔下限（毫秒）：机器人主动私聊前的最小间隔，逻辑同群聊检查，私聊独立计时。',
   'social.proactive.privateCheckIntervalMaxMs': '私聊主动检查间隔上限（毫秒）：与下限构成私聊主动发起私聊的随机间隔区间。',
   'social.proactive.privateProbability': '私聊主动概率（0~1）：机器人主动私聊的概率。较高 ≈ 常主动问候或分享近况；较低 ≈ 基本只在收到消息时回复。',
-  // —— 投递与省额度 ——
-  'social.steerEnabled': '「在途回合注入」总开关，默认开启。开启时，模型思考（执行某一步）期间收到的新消息会被直接并入同一回合的下一个节点，模型在本次回复中一并考虑，可省去一整轮唤醒、一次整包重发与一次对话注入。'
-    + '关闭后，新消息一律等当前回合结束再作为新一轮处理，更慢也更费，且旧实现中曾出现消息滞留于 DSH 队列而不再产出的故障。'
-    + '真正的安全阀并非本开关，而是桥内「必须确有回合在运行」的守卫，故一般保持开启。',
+  // —— 省额度 ——
   'social.slimTools': '工具 schema 精简：名单内的 MCP 工具将不再注册给模型，其 JSON 描述自此不出现在任何一次请求中。'
     + '该举措效果最大的原因：单次请求约 85,800 字符中 tools 占 72,858（约 87%），且每一步都会重发一遍。'
     + '而 config 中「QQ 工具开关」一组仅在调用时返回拒绝（403），一个字符也省不掉。'
@@ -766,7 +766,6 @@ function mcpLabel(fullName: string) {
   'social.typing': '私聊打字等待：对方仍在输入时先等待再回复（最多等多久、多久刷新一次、多大概率打断直接回）。',
   'social.docx': 'Word 文档（qq_send_docx）：每天可生成与发送多少篇、单篇多少字、临时目录。',
   'social.deepsleep': '静默群聊：勾选表示这些群的消息完全不处理（连唤醒都不排队），用于临时静默。',
-  // social.steerEnabled 的说明见上方长条目，此处不再重复登记，否则 TypeScript 会报重复键。
 
   // ── 基础与会话 ──
   ownerQQ: '主人 QQ。填入后该对象的私聊带 [OWNER] 标记，可用自然语言修改配置，并可调用主人专属工具；留空表示没有主人（所有人均非主人）。须为机器人能看到消息的 QQ 号。',
@@ -942,7 +941,6 @@ const TIP: Record<string, string> = {
   'social.deepsleep': '群聊完全静默，私聊照常',
   'social.provideRecommendations': '一并把推荐参数交给模型',
   'social.deepsleepGroups': '每行一个群号，仅静默所列群',
-  'social.steerEnabled': '思考期间收到的新消息直接并入本轮',
   'social.turnHold.enabled': '一次唤醒内保留回合，连续补充无需重新唤醒',
   'social.turnHold.privateOnly': '群聊默认不保持；确有需要时关闭此开关并写明群号',
   'social.turnHold.requestBudgetMs': '须小于 DSH 插件侧的单次请求超时',
@@ -999,7 +997,7 @@ const EMPTY_CFG: any = {
   deny: { private: [], groups: [] },
 };
 
-export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpenPortrait, onOpenChat, onOpenVoice, remote, hasUpdate, onUpdateChanged }: Props) {
+export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpenPortrait, onOpenChat, onOpenVoice, remote, hasUpdate, onUpdateChanged, suppressUpdate }: Props) {
   const [tab, setTab] = useState<'common' | 'tools' | 'persona' | 'json' | 'profiles'>('common');
   /* 2026-09-14 修改要求：SSH 模式下这一页读写的是服务端 /root/qq-bridge/config.json：
    *  · target 记录本页当前编辑的是哪一套（local / remote）—— 横幅必须一眼看见，别让人以为在改本机；
@@ -1461,7 +1459,8 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
 
   return (
     <div className="page cute-ui">
-      {updateOpen && (
+      {/* 首启弹窗开着时绝不渲染更新面板：它 z-index 比首启高，会把输入 QQ 号盖住 */}
+      {updateOpen && !suppressUpdate && (
         <div className="help-overlay kz-upd-overlay" onClick={() => setUpdateOpen(false)}>
           <div className="kz-upd-dialog" onClick={(e) => e.stopPropagation()}>
             <Update modal onBack={() => { setUpdateOpen(false); onUpdateChanged?.(); }} />
@@ -1489,8 +1488,12 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d' }}>
             <Coffee size={14} /> 请作者喝奶茶
           </button>
-          <button className={`btn btn-soft${hasUpdate ? ' btn-update-breathe' : ''}`} onClick={() => setUpdateOpen(true)} title={hasUpdate ? '发现新版本可更新！点击打开更新面板' : '从上游仓库获取新版本，原地合并进安装目录'}>
-            <DownloadCloud size={14} /> 更新{hasUpdate && <span className="kz-upd-dot" />}
+          <button
+            className={`btn btn-soft${hasUpdate && !suppressUpdate ? ' btn-update-breathe' : ''}`}
+            onClick={() => { if (!suppressUpdate) setUpdateOpen(true); }}
+            disabled={suppressUpdate}
+            title={suppressUpdate ? '请先完成首次设置（填写主人 QQ），之后再来更新' : (hasUpdate ? '发现新版本可更新！点击打开更新面板' : '从上游仓库获取新版本，原地合并进安装目录')}>
+            <DownloadCloud size={14} /> 更新{hasUpdate && !suppressUpdate && <span className="kz-upd-dot" />}
           </button>
           <button className="btn btn-soft" onClick={onOpenPortrait} {...hoverWarm(warmPortraitPage)}>
             <Users size={14} /> 群友画像
@@ -2086,10 +2089,13 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
         </div>
       </GroupCard>
       {/* 令牌字段只保留下面那张卡：这里改白名单，仅列地址与运行路径等连接项。 */}
-      <GroupCard title="NapCat 连接（地址与路径）"
-        blocks={[{ path: 'napcat', only: ['wsUrl', 'httpUrl', 'imageFileMode', 'tmpDir', 'dockerPathMap'] }]}
+      {/* 2026-10-30 主人：这张卡只留通信地址。图片传法（imageFileMode）、临时目录（tmpDir）、
+          容器路径映射（dockerPathMap）都是部署期一次性参数，日常不需要改 —— 从界面移除，
+          键仍在 config.json 里原样生效（桥照旧读，见 config.js 的 napcat 段）。 */}
+      <GroupCard title="NapCat 连接（地址）"
+        blocks={[{ path: 'napcat', only: ['wsUrl', 'httpUrl'] }]}
         cfg={cfg} ch={ch} onHelp={onHelp}
-        desc="机器人与 NapCat 通信所用的地址与运行路径，本地一键启动时一般无需修改。注意：WebUI、HTTP、WS 三个令牌均不在本卡，统一在下方「NapCat 鉴权令牌」卡配置；该卡会同时写入 NapCat 自身配置与桥的配置，并重启 NapCat 生效。" />
+        desc="机器人与 NapCat 通信所用的地址，本地一键启动时一般无需修改。WebUI、HTTP、WS 三个令牌在下方「NapCat 鉴权令牌」卡配置。" />
       {/* 令牌要真正写进 NapCat 才生效：见 NapcatTokensCard 的注释 */}
       <NapcatTokensCard />
       {/* 2026-09-28 新增：Pixiv 卡。此前这三个键只登记了中文名与说明、没有任何卡片渲染它们，
@@ -2177,8 +2183,9 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       <GroupCard title="提示词与语感（[Style] 行）" path="prompt" cfg={cfg} ch={ch} onHelp={onHelp}
         only={['styleLine']}
         desc="唤醒正文每轮都会带的那一句语感提醒。它是离模型最近的一句话，对小模型的语气影响比几十 k 字符的系统提示词更直接 —— 觉得回话「像人机」就改这里。默认是一句英文提醒（更短、更像人自己写的旁白）；中英皆可，留空 = 不注入这一行。改完保存下一条消息就生效，不用重启桥、也不用等会话轮换。" />
+      {/* 2026-10-30 主人：高峰时段是数组型高级项，界面上不再暴露（键仍在 config.json 生效）。 */}
       <GroupCard title="计价口径（/token 指令）" path="tokenCost" cfg={cfg} ch={ch} onHelp={onHelp}
-        only={['pHit', 'pMiss', 'pOut', 'peakMult', 'peakHours']}
+        only={['pHit', 'pMiss', 'pOut', 'peakMult']}
         desc="QQ 里发 /token 时算钱用的单价（¥ / 百万 token）。默认值与管理端「学习」页的实测计量一致：命中按缓存价、未命中按输入价、输出按输出价，高峰时段整体乘一个倍率。改这里只影响 /token 报出来的钱，不影响计费本身。" />
       <GroupCard title="智能体总开关" path="social" only={['enabled']}
         cfg={cfg} ch={ch} onHelp={onHelp}
@@ -2187,9 +2194,10 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       {/* <GroupCard title="投递与回合（速度 / 不吞消息）" blocks={[{ path: 'social', only: ['steerEnabled'] }, { path: 'social.turnHold' }]}
         cfg={cfg} ch={ch} onHelp={onHelp}
         desc="「在途回合注入」：模型正在思考时，新消息会被直接塞进这一轮（而不是等它回完再另起一轮）。默认开启——关掉会让每条消息都要多等一整轮，而且容易卡在 DSH 的 next-turn 队列里出不来。下面一组是「回合保持」：一次唤醒后把这个回合留住多久、最多来回多少次，留住期间你可以连着补话而不用每条都重新唤醒（保持太久会一直占着会话，建议只对私聊开）。" /> */}
-      <GroupCard title="好友申请与信任" path="social" only={['autoFriendApproval', 'autoFriendGuard', 'trustedCrossSessionUids']}
+      {/* 2026-10-30 主人：跨会话白名单（数组）从界面移除，键仍在 config.json 生效。 */}
+      <GroupCard title="好友申请与信任" path="social" only={['autoFriendApproval', 'autoFriendGuard']}
         cfg={cfg} ch={ch} onHelp={onHelp}
-        desc="自动通过好友申请、敏感操作只信谁、允许跨会话读取的账号。" />
+        desc="自动通过好友申请、敏感操作只信谁。" />
       <GroupCard title="Word 文档额度" path="social" only={['docx']} cfg={cfg} ch={ch} onHelp={onHelp}
         desc="AI 每天最多能生成多少 Word 文档（字数上限），防超支。" />
     </div>
