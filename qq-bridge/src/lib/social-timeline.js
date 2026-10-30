@@ -10,7 +10,7 @@ export function planSocialTimeline(text, socialCfg) {
   const src = String(text ?? '').replace(/\r\n/g, '\n').trim();
   const rawMaxChars = Number(socialCfg?.maxReplyChars ?? 500);
   const maxChars = Number.isFinite(rawMaxChars) && rawMaxChars >= 1 ? Math.floor(rawMaxChars) : 500;
-  const enabled = socialCfg?.burstEnabled !== false;
+  const enabled = true; // 连发恒开
   if (!src) return { main: [], followUp: null };
 
   // 关闭分条：整条作为一条消息发送，只做安全硬拆

@@ -2137,7 +2137,7 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
           注意：下面那张「音乐卡片（网易云 / QQ 音乐）」卡已按要求隐藏（见该处注释），
           但这里的 filter 必须保留 —— 去掉它这三项就会漏进本卡、以 `musicCardStyle` 这种原始键名裸奔。 */}
       <GroupCard title="发送节奏与间隔" path="social.send" cfg={cfg} ch={ch} onHelp={onHelp}
-        filter={(k: string) => !MUSIC_SEND_KEYS.includes(k) && k !== 'burstEnabled'}
+        filter={(k: string) => !MUSIC_SEND_KEYS.includes(k) && k !== 'burstEnabled' && k !== 'recommendedHint'}
         desc="连发间隔、停顿与字数上限，用于控制发消息的节奏是否接近真人打字（连发恒定开启）。" />
       {/* 2026-09-29 按要求隐藏整张卡（原话：「这块卡片隐藏」）：卡片从渲染列表里移除，
           但**键与逻辑一处不改** —— `social.send.musicCardStyle` / `musicCardOnly` / `neteaseUct2`

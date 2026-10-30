@@ -2324,11 +2324,6 @@ export function startConsoleServer() {
           sendJson({ ok: false, error: `key、messages、images 至少一个不能为空${hint}` }, 400);
           return;
         }
-        const sendCfgBurst = cfgRef.social?.send ?? {};
-        if (sendCfgBurst.burstEnabled === false && messages.length > 1) {
-          sendJson({ ok: false, error: '已禁用多条发送，请合并为一条消息' }, 403);
-          return;
-        }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         /* 2026-09-20 防「发错群」：令牌属于哪个会话 = 调用方会话；目标 key 却是另一个会话时，
          * 这要么是有意跨会话转达，要么是模型抄错了 key——桥分不出来，所以要求显式声明。 */
