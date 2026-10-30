@@ -666,9 +666,12 @@ const pruneFailures = () => {
  */
 let sessionFallback = null;                    // { key, token, at }
 const SESSION_FALLBACK_TTL_MS = 5000;
-async function resolveMissingSession(wantKey) {
+async function resolveMissingSession(wantKey, noCache) {
   const now = Date.now();
-  if (!wantKey && sessionFallback && now - sessionFallback.at < SESSION_FALLBACK_TTL_MS) return sessionFallback;
+  /* noCache=true：不走那 5 秒的 sessionFallback 缓存。
+   * 2026-10-31 补：拿 token 时可以吃缓存（猜错最多是鉴权失败），
+   * 但**补 key 等于决定发到哪个会话**，必须每次现问桥 —— 5 秒内换了在途会话就会发错群。 */
+  if (!wantKey && !noCache && sessionFallback && now - sessionFallback.at < SESSION_FALLBACK_TTL_MS) return sessionFallback;
   try {
     const tok = readConsoleToken();
     const res = await fetch(`${agentApiBase()}/api/social/current-turn`, {
@@ -680,7 +683,7 @@ async function resolveMissingSession(wantKey) {
     const body = await res.json().catch(() => null);
     if (res.ok && body?.ok) {
       const hit = { key: String(body.key ?? ''), token: String(body.token ?? ''), at: now, source: String(body.source ?? '') };
-      if (!wantKey) sessionFallback = hit;
+      if (!wantKey && !noCache) sessionFallback = hit;
       return hit;
     }
     return { error: String(body?.reason || body?.error || `HTTP ${res.status}`) };
@@ -717,6 +720,14 @@ const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <val
             relaxed[field] = t.optional();
           }
         }
+        /* 2026-10-31：模型偶尔把 key 写成别的名字（实测真的出现过 {"convKey":"private:...","limit":10}）。
+         * zod 默认会把未声明的字段剥掉，处理器就完全看不到它 —— 只能报"缺 key"，然后模型再发一次。
+         * 这里把几个常见别名一起声明进 shape（值就用 key 的类型），让它们活到处理器里。 */
+        if (relaxed.key) {
+          for (const alias of ['convKey', 'sessionKey', 'session']) {
+            if (!relaxed[alias]) relaxed[alias] = relaxed.key;
+          }
+        }
         rest[shapeIdx] = relaxed;
       }
     } catch { /* 放宽失败就维持原样（最坏情况退回 -32602，与改动前一致） */ }
@@ -736,7 +747,37 @@ const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <val
          * 在途回合 → 回一句"缺 key/token"，调用整个失败。
          * 现在两个字段各判各的：没声明 key 的工具根本不检查 key，只检查 token。 */
         const keyless = KEYLESS_TOOLS.has(name);
-        const missingKey = !keyless && hasKeyField && (callArgs.key === undefined || callArgs.key === null || callArgs.key === '');
+        /* 2026-10-31：模型偶尔把 key 写成别名（实测出现过 convKey）。zod 会把未声明字段剥掉，
+         * 处理器看不到就只能报缺 key，模型再补一次 → 白烧一步。这里先归一。 */
+        if (callArgs.key === undefined || callArgs.key === null || callArgs.key === '') {
+          for (const alias of ['convKey', 'sessionKey', 'session']) {
+            const av = callArgs[alias];
+            if (typeof av === 'string' && av.trim()) {
+              callArgs.key = av.trim();
+              console.error('[napcat-safe] ' + name + ' 用了别名 ' + alias + '，已当作 key: ' + av.trim());
+              break;
+            }
+          }
+        }
+        let missingKey = !keyless && hasKeyField && (callArgs.key === undefined || callArgs.key === null || callArgs.key === '');
+        if (missingKey) {
+          /* 2026-10-31 修「一直有一次缺 key 导致两次调用」：实测 5 次模型只传了 {limit:10} / {messages:[...]}，
+           * 整条漏掉 key 与 token，于是这里报错、它再补一次完整调用，白烧一步。
+           * 桥的 /api/social/current-turn 早就只做「恰好一个会话在途才回 key、多个在途回 ambiguous」
+           * （2026-09-20「发错群」之后的口径），但这一层原来根本没问它。现在先问一次：
+           * 只接受 source=active-turn 的结果，多个在途 / 没有在途一律照旧拒绝 —— 安全边界没放宽，
+           * 只是把「本来就不需要猜」的那部分补上。 */
+          let resolved = null;
+          try { resolved = await resolveMissingSession('', true); } catch { resolved = null; }
+          if (resolved && !resolved.error && resolved.key) {
+            callArgs.key = resolved.key;
+            if (!callArgs.token && resolved.token) callArgs.token = resolved.token;
+            missingKey = false;
+            console.error('[napcat-safe] ' + name + ' 缺 key，按唯一在途会话补齐（' + resolved.source + '）: ' + resolved.key);
+          } else {
+            console.error('[napcat-safe] ' + name + ' 缺 key，拒绝（' + (resolved && resolved.error) + '）');
+          }
+        }
         const missingToken = !keyless && hasTokenField && (callArgs.token === undefined || callArgs.token === null || callArgs.token === '');
         /* 2026-09-20 根因修复：桥不再替模型猜 key（修「pixiv 发图发错群」）
          * 旧写法在缺 key 时问桥 `/api/social/current-turn`，把"当前在途会话"的 key 填进去 ——

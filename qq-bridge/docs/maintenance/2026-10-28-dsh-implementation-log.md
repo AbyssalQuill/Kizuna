@@ -1743,3 +1743,35 @@ else { UNC_MAX = 16; }
 3. **球体重构**（`NetCanvas.tsx`，参考 vasturiano/globe.gl 的大气层与 react-force-graph 的柔光）：
    外圈大气光晕渐隐去硬边、球体左上受光 + 上半圈贴面高光、0.34/0.58/0.82R 三道虚线轨道环、
    辐条直线改同向二次曲线（弓高 10% 弦长）、球心叠 2.3r 柔光。主图画布实测渲染正常。
+
+## 41. 条目 57（2026-10-31 03:10）：一直有一次"缺 key 导致两次调用"
+
+### 41.1 现场（扫会话日志，不是猜）
+在近 4 个桥会话日志里找出 `Missing key` 的工具结果，共 5 次：
+| 工具 | 模型实际传的参数 |
+| --- | --- |
+| qq_get_recent_messages | `{"limit": 10}` |
+| qq_send_message | `{"messages": [...]}` |
+| qq_get_recent_messages | `{"limit": 15}` |
+| qq_get_recent_messages | `{"convKey": "private:1736784911", "limit": 10}` |
+| qq_get_recent_messages | `{"limit": 10}` |
+
+两种成因：① 整条漏掉 key 与 token；② 把 key 写成了别名字段 `convKey`（zod 会把未声明字段剥掉，
+处理器根本看不到它）。
+
+### 41.2 修法（安全边界不放宽）
+1. **别名归一**：wrapper 在 shape 里把 `convKey / sessionKey / session` 一起声明成 key 的同类型
+   （不声明的话 zod 会先剥掉，处理器永远看不见），并在入口把它们归一到 `callArgs.key`。
+2. **不再"上来就拒绝"**：`/api/social/current-turn` 从 2026-09-20「发错群」之后就只做
+   **恰好一个会话在途** 才回 key、多个在途回 `ambiguous` —— 也就是说"不猜"这件事桥那边早就做对了，
+   是 MCP 这一层根本没问它就直接报错。现在缺 key 时先现问一次，只接受 `source=active-turn`。
+3. **不吃缓存**：`resolveMissingSession(wantKey, noCache)` 新增 `noCache`。
+   补 token 可以吃 5 秒缓存（猜错最多鉴权失败），但**补 key 等于决定发到哪个会话**，必须每次现问。
+4. 拒绝时照旧回原来那句提示，安全口径未变。
+
+### 41.3 验证
+- `node --check` 通过；部署后服务 active。
+- 直接打端点：无在途回合 → `{"ok":false,"reason":"no-active-turn","active":[]}`（仍是拒绝）；
+  带 key → `source:"key"`。说明只有"唯一在途"这一条路会被自动补齐。
+- 待现场确认：下次模型再漏 key 时，日志应出现
+  `[napcat-safe] <工具> 缺 key，按唯一在途会话补齐（active-turn）: <key>` 且**只有一次调用**。
