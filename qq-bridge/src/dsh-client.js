@@ -373,6 +373,8 @@ export class NodeApiClient {
     let socket = null;
     const followBySid = new Map(); // sessionId -> streamId
     const sidByStream = new Map(); // streamId -> sessionId
+    const followFailCount = new Map(); // sessionId -> consecutive error count
+    const followBackoffUntil = new Map(); // sessionId -> timestamp ms
     let eventsClientId = null;
     let eventsStreamId = null;
     const pendingByEventId = new Map(); // eventId -> { clientId }
@@ -393,6 +395,8 @@ export class NodeApiClient {
 
     const openFollow = (sessionId) => {
       if (followBySid.has(sessionId) || !socket) return;
+      const backoffUntil = followBackoffUntil.get(sessionId) ?? 0;
+      if (backoffUntil > Date.now()) return;
       const id = 'f' + crypto.randomUUID().slice(0, 14);
       followBySid.set(sessionId, id);
       sidByStream.set(id, sessionId);
@@ -424,7 +428,19 @@ export class NodeApiClient {
           if (deadSid) {
             followBySid.delete(deadSid);
             sidByStream.delete(msg.streamId);
-            console.log(`[dsh-client] follow 流终结 ${deadSid} (${msg.type}), 下轮对账会重开`);
+            if (msg.type === 'error') {
+              const fails = (followFailCount.get(deadSid) ?? 0) + 1;
+              followFailCount.set(deadSid, fails);
+              const delayMs = Math.min(300_000, 2000 * (2 ** Math.min(fails - 1, 8)));
+              followBackoffUntil.set(deadSid, Date.now() + delayMs);
+              if (fails <= 2) {
+                console.log(`[dsh-client] follow 流终结 ${deadSid} (error #${fails}), ${Math.round(delayMs / 1000)}s 后重试`);
+              } else if (fails === 3) {
+                console.log(`[dsh-client] follow 流连续失败 ${fails} 次 ${deadSid} (会话可能已在 DSH 侧失效)，进入长退避(${Math.round(delayMs / 1000)}s)`);
+              }
+            } else {
+              console.log(`[dsh-client] follow 流终结 ${deadSid} (${msg.type}), 下轮对账会重开`);
+            }
           } else if (msg.streamId === eventsStreamId) {
             eventsStreamId = null;
             eventsClientId = null;
@@ -485,6 +501,8 @@ export class NodeApiClient {
       // follow item
       const sessionId = sidByStream.get(msg.streamId);
       if (!sessionId) return;
+      followFailCount.delete(sessionId);
+      followBackoffUntil.delete(sessionId);
       if (value?.type === 'snapshot' && Array.isArray(value.records)) {
         // 断连间隙整回合事件补漏: follow 重开时服务器会回放快照(含断连窗口内未投递的事件)。
         // 此前一律丢弃 → accepted 后的整段回合若落在断连窗口内会静默消失(吞消息/漏回复)。
