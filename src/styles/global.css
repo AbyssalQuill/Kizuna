@@ -124,11 +124,14 @@
   font-weight: 400; font-style: italic; font-display: swap;
 }
 html, body, #root { height: 100%; width: 100%; }
+body, input, button, select, textarea, optgroup, option {
+  font-family: 'AaCute', 'AaCute-full', sans-serif !important;
+}
 body {
   /* 全界面统一可爱圆体：只用自带字体（AaCute 为主，AaCute-full 同族兜底吃缺字），
      不再回退到任何具体系统字体名；JSON/代码/log 区在下方显式保持等宽。
      emoji 不在 AaCute 里，会自然落到内核的 emoji 字体（未写死任何 emoji 字体名）。 */
-  font-family: 'AaCute', 'AaCute-full', sans-serif;
+  font-family: 'AaCute', 'AaCute-full', sans-serif !important;
   background: var(--nc-bg);
   color: var(--nc-foreground);
   font-size: 15px; line-height: 1.6;

@@ -247,6 +247,14 @@ input[type="number"]:not(.is-mid):not(.full) { max-width: 148px; }
 }
 .switch-row:hover { background: hsl(339.13 92% 95.1% / .9); }
 .switch-row input { width: 18px; height: 18px; accent-color: var(--nc-primary-500); margin-top: 2px; flex-shrink: 0; }
+.field-row em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--nc-foreground-400);
+  margin-top: 2px;
+  line-height: 1.45;
+}
 .switch-row em { display: block; font-style: normal; font-size: 11px; color: var(--nc-foreground-400); margin-top: 1px; }
 .switch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 7px; }
 
@@ -304,15 +312,38 @@ input[type="number"]:not(.is-mid):not(.full) { max-width: 148px; }
 .cute-ui button,
 .cute-ui input,
 .cute-ui select,
-.cute-ui textarea {
-  font-family: 'AaCute', 'AaCute-full', sans-serif;
+.cute-ui textarea,
+.cute-ui .f-label,
+.cute-ui .f-val,
+.cute-ui label,
+.cute-ui span,
+.cute-ui p,
+.cute-ui em,
+.cute-ui div,
+.cute-ui .card-title,
+.cute-ui .cfg-card-title,
+.cute-ui .cfg-card-desc,
+.cute-ui .lrn-inline-note,
+.cute-ui .switch-row span,
+.cute-ui .switch-row em,
+.cute-ui .field-row em,
+.card,
+.cfg-card {
+  font-family: 'AaCute', 'AaCute-full', sans-serif !important;
   letter-spacing: 0.015em;
 }
 .cute-ui .page-title {
   font-family: 'AaCute', 'AaCute-full', sans-serif;
   font-size: 24px; color: var(--nc-primary-500);
 }
-.cute-ui .btn { font-weight: 400; }
+.cute-ui b,
+.cute-ui strong {
+  font-weight: 700;
+  color: var(--nc-primary-600);
+}
+.cute-ui code {
+  color: var(--nc-primary-600);
+}
 .cute-ui .cfg-card { border-radius: var(--nc-radius-l); }
 .cute-ui .card { border-radius: var(--nc-radius-l); }
 .cute-ui .input, .cute-ui .select, .cute-ui textarea { border-radius: var(--nc-radius-m); }
@@ -487,7 +518,19 @@ input[type="number"]:not(.is-mid):not(.full) { max-width: 148px; }
 
 
 /* ===== v3.6：配置卡片 3 列等宽 · 纵向紧凑 · 列对齐 ===== */
+.dual-card-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
 .bridge-body { max-width: 1560px; }
+@media (max-width: 960px) {
+  .dual-card-row {
+    grid-template-columns: 1fr;
+  }
+}
 .cfg-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px 12px; align-items: stretch;   /* 同上：小窗（3 列/2 列）时也补齐，不留空隙 */
@@ -770,8 +813,8 @@ body textarea.json-text, body .log-viewer, body .log-viewer *, body .log-line {
 .lrn-divider { height: 1px; margin: 16px 0; background: linear-gradient(90deg, transparent, hsl(339.33 90% 80.39% / .55), transparent); }
 .lrn-inline-note {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
-  font-size: 12px; color: var(--nc-foreground-400);
-  background: hsl(339.13 92% 97% / .6); padding: 5px 10px; border-radius: 8px;
+  font-size: 12px; color: var(--nc-foreground-500);
+  background: hsl(339.13 92% 97% / .75); padding: 5px 10px; border-radius: 8px;
 }
 .lrn-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 /* 「高级」折叠开关（2026-09-28）：本地引擎卡里的路径与进程参数默认收起。

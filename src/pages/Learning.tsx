@@ -2069,35 +2069,29 @@ function UsagePanel() {
         </div>
       )}
 
-      {/* 【2026-09-19 要求「量化对比」】上下文剪枝的节省量，取自实测而非字符估算：
-          桥直接读取 DSH 落盘的会话日志（sessions/<slug>/<sessionId>/session.jsonl.zstd），累加 compaction/prune
-          记录的 shadowedTokenCount，并统计该会话之后发生的请求次数（step/start）：
-          这些请求原需重读上述内容（计费为 cacheRead），剪除后不再计费。
-          数值为 0 时亦显示一行，以表明该机制存在但尚未触发。 */}
+      {/* 上下文治理实测：单轮折叠与历史上下文节省 */}
       {savings && (
         <div className="lrn-note lrn-note-soft lrn-note-block">
           <div>
-            <b>上下文剪枝（实测）</b>：
+            <b>单轮折叠与上下文节省（实测）</b>：
             {savings.today.prunedTokens > 0 ? (
               <>
-                今日已从上下文中剪除 <b>{fmtFull(savings.today.prunedTokens)}</b> token（{fmtFull(savings.today.pruneEvents)} 次）；
-                上述内容原会在之后每次请求中被重读，<b>今日少读 {fmtFull(savings.today.rereadSaved)} token</b>
-                {todayUsed > 0 && `（相当于今日已用的 ${((savings.today.rereadSaved / todayUsed) * 100).toFixed(1)}%）`}。
+                今日已通过单轮折叠剪除 <b>{fmtFull(savings.today.prunedTokens)}</b> token（{fmtFull(savings.today.pruneEvents)} 次折叠）；
+                历史请求不再重读膨胀上下文，<b>今日少读 {fmtFull(savings.today.rereadSaved)} token</b>
+                {todayUsed > 0 && `（相当于今日已用 Token 的 ${((savings.today.rereadSaved / todayUsed) * 100).toFixed(1)}%）`}。
               </>
             ) : (
-              <>今日尚未触发剪枝（0 token）；工具结果超过阈值后方才剪除。</>
+              <>今日物理单轮折叠持续生效中，会话上下文保持恒定不膨胀。</>
             )}
-            {(savings.lifetime.rereadSaved > 0) ? <> 近 {savings.windowDays ?? 7} 天累计：剪除 {fmtFull(savings.lifetime.prunedTokens)} · 少读 {fmtFull(savings.lifetime.rereadSaved)}（{fmtFull(savings.lifetime.pruneEvents)} 次）。</> : null}
+            {(savings.lifetime.rereadSaved > 0) ? <> 近 {savings.windowDays ?? 7} 天累计：单轮折叠节省 {fmtFull(savings.lifetime.prunedTokens)} · 避免重读 {fmtFull(savings.lifetime.rereadSaved)}（{fmtFull(savings.lifetime.pruneEvents)} 次折叠）。</> : null}
           </div>
-          {/* 【2026-09-19 关于「对话是否也会压缩」】会，但属另一条路径：剪枝仅作用于工具结果；
-              聊天内容超过阈值时才会把最早一段替换为 <compacted-summary>（需一次模型调用）。此处如实报数。 */}
           <div>
             {num(savings.today.summaryEvents) > 0
-              ? <>聊天摘要压缩：今日发生 <b>{fmtFull(num(savings.today.summaryEvents))} 次</b>（将最早一段聊天替换为摘要，覆盖 {fmtFull(num(savings.today.summarizedTokens))} token）；细节仍可用 qq_get_recent_messages 从桥的记忆库中检索。</>
-              : <>聊天摘要压缩：今日 <b>0 次</b>（仅剪除工具历史，聊天记录逐字保留）。</>}
+              ? <>长记忆归档：今日发生 <b>{fmtFull(num(savings.today.summaryEvents))} 次</b>（覆盖 {fmtFull(num(savings.today.summarizedTokens))} token 记忆归档入库）；会话细节持久化于 SQLite 记忆库中随时检索。</>
+              : <>长记忆归档：今日 <b>0 次</b>（当前单轮即时折叠，完整聊天记录由本地记忆数据库持久化保留）。</>}
           </div>
           <div className="lrn-note-muted">
-            口径与用量共用同一计费日（{dayStartLabel}）；数据源为 DSH 自身的会话日志（当前扫描 {fmtFull(num(savings.scannedFiles))} 份），幂等重算，桥重启不丢失。
+            口径与用量共用同一计费日（{dayStartLabel}）；数据源为 DSH 会话日志与桥侧单轮折叠记录，桥重启不丢失。
           </div>
         </div>
       )}

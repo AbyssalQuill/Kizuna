@@ -2111,10 +2111,10 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
         desc="机器人与 NapCat 通信所用的地址，本地一键启动时一般无需修改。WebUI、HTTP、WS 三个令牌在下方「NapCat 鉴权令牌」卡配置。" />
       {/* 令牌要真正写进 NapCat 才生效：见 NapcatTokensCard 的注释 */}
       <NapcatTokensCard />
-      {/* 2026-09-28 新增：Pixiv 卡。此前这三个键只登记了中文名与说明、没有任何卡片渲染它们，
-          界面上根本填不了登录 cookie（详见 PixivCard 的注释）。 */}
-      <PixivCard cfg={cfg} ch={ch} onHelp={onHelp} />
-      <LuoguCard cfg={cfg} ch={ch} onHelp={onHelp} />
+      <div className="dual-card-row">
+        <PixivCard cfg={cfg} ch={ch} onHelp={onHelp} />
+        <LuoguCard cfg={cfg} ch={ch} onHelp={onHelp} />
+      </div>
       {/* 2026-09-30 变更要求：整张「基础与会话」卡已去除（人设预设、owner QQ、工作区与发送节奏
 /**  等基础项不再在管理端出现）。这些键仍会被读进桥：需要时可在「JSON 进阶」里改，
        *  或按下面 renderAgentPreset 那段注释把键删掉。 */}
@@ -2137,8 +2137,8 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
           注意：下面那张「音乐卡片（网易云 / QQ 音乐）」卡已按要求隐藏（见该处注释），
           但这里的 filter 必须保留 —— 去掉它这三项就会漏进本卡、以 `musicCardStyle` 这种原始键名裸奔。 */}
       <GroupCard title="发送节奏与间隔" path="social.send" cfg={cfg} ch={ch} onHelp={onHelp}
-        filter={(k: string) => !MUSIC_SEND_KEYS.includes(k)}
-        desc="连发间隔、停顿与字数上限，用于控制发消息的节奏是否接近真人打字。" />
+        filter={(k: string) => !MUSIC_SEND_KEYS.includes(k) && k !== 'burstEnabled'}
+        desc="连发间隔、停顿与字数上限，用于控制发消息的节奏是否接近真人打字（连发恒定开启）。" />
       {/* 2026-09-29 按要求隐藏整张卡（原话：「这块卡片隐藏」）：卡片从渲染列表里移除，
           但**键与逻辑一处不改** —— `social.send.musicCardStyle` / `musicCardOnly` / `neteaseUct2`
           的取值仍在 config.json 里原样生效（桥照旧读它们，见 console-server.js:3165/3239 与
@@ -2160,20 +2160,13 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
             ② 桥内存里留多少条（recentLimit / unreadLimit，与贴出去的历史无关）
             ③ 聊多少轮把上下文换成新会话（autoReset）
           注意：两个 block 用同一个 path（social.context），所以下面 GroupCard 的 key 不能再只用 s.path。 */}
-      <GroupCard title="上下文与轮换"
+      <GroupCard title="上下文与记忆窗口"
         blocks={[
-          { title: '① 每次开新会话，贴给模型多少条历史', path: 'social.context', only: ['contextWindow', 'resetWindow'] },
-          { title: '② 桥内存里保留多少条（跟贴出去的历史无关，只影响桥手头留多少）', path: 'social.context', only: ['recentLimit', 'unreadLimit'] },
-          { title: '③ 聊多少轮自动换新会话（上下文轮换）', path: 'social.autoReset' },
+          { title: '① 每次唤醒带入的历史条数', path: 'social.context', only: ['contextWindow', 'resetWindow'] },
+          { title: '② 桥内存保留条数（与带入历史条数分离，仅控制内存缓存）', path: 'social.context', only: ['recentLimit', 'unreadLimit'] },
         ]}
         cfg={cfg} ch={ch} onHelp={onHelp}
-        desc="三组分别管理三件不同的事，彼此不重复：① 新会话首轮向提示中贴入的聊天记录条数（「轮换后首轮带入条数」仅对轮换后的第一轮生效，故须大于「首轮带入历史条数」才有意义）；② 桥在内存中保留的条数，用于控制内存占用；③ 多少轮后把上下文换成新会话——它决定换会话的时机，与历史条数无关。勾选「永久会话（不轮换）」后不再换会话，上下文改由下方「上下文治理」卡负责。" />
-      {/* 2026-09-19 修改要求："一个会话永久使用，但别让上下文堆积" —— 策略写进隔离 DSH 的 home 级
-          cordis.patch.yml（lib/dsh-compaction.js），由 DSH 自己的 compaction-basic + tool-result-pruner 执行。
-          为什么不在桥侧删历史：DSH 的会话是内存事件溯源日志，外部改文件只会撞 seq gap / zstd 校验和。 */}
-      <GroupCard title="上下文治理（工具历史剪枝）" path="dshCompaction" cfg={cfg} ch={ch} onHelp={onHelp}
-        only={['enabled', 'thresholdRatio', 'retainRatio', 'toolResultMaxChars']}
-        desc="让一个会话长期使用而不堆积上下文。用法：上下文用量达到「触发比例」时，隔离 DSH 先剪掉过大的工具结果（不发起模型请求，聊天记录不变）；剪后仍超阈值，才把最旧的一段摘要为 <compacted-summary>。阈值按模型窗口的比例给出，换模型后自动缩放。注意：本卡修改即时生效（DSH 热加载该 patch），无需重启 DSH 或桥；摘要由主模型（全局语言模型服务商）生成，不提供单独的服务商与模型。" />
+        desc="管理单轮折叠与记忆召回的历史深度：① 每次唤醒贴给模型的历史上下文条数；② 桥内存中驻留的消息条数。当前会话原生运行单轮折叠，记忆持久化由 memory.db 保障。" />
       <GroupCard title="主动闲聊" path="social.proactive" cfg={cfg} ch={ch} onHelp={onHelp}
         desc="冷场或长时间无人发言时，机器人是否主动找话题、主动私聊。" />
       <ActivityHoursCard cfg={cfg} remote={remote} writeConfig={writeConfig} onCfgChange={onCfgChange} />
@@ -2183,19 +2176,12 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
           概率骰子决定要不要插话；等待期间的消息合并成一次注入。见 qq-bridge/src/core/typing-hold.js */}
       <GroupCard title="私聊打字等待（不抢话 / 智能接话）" path="social.typing" cfg={cfg} ch={ch} onHelp={onHelp}
         desc="私聊中先判断对方是否正在输入：正在输入即等其打完再回，不抢话；对方连续发送消息时输入状态会持续延续；每次唤醒再掷一次骰子，命中即插话接上。等待期间到达的消息全部排队，最后合并为一次交给模型，可省注入轮数。" />
-      <StickerCard cfg={cfg} ch={ch} onHelp={onHelp} uploadStickers={uploadStickers} />
+      <StickerCard cfg={cfg} ch={ch} onHelp={onHelp} />
       {/* 表情包库（meme pack）：包列表 / 导入（zip 或文件夹）/ 角色绑定 / 删除。
           紧接上方「表情包」卡：同一件事的两半——上方管是否使用表情与同步周期，本卡管库中有哪些包。 */}
       <MemePacksCard remote={remote} />
       <GroupCard title="静默群聊" path="social" only={['deepsleep', 'deepsleepGroups']} cfg={cfg} ch={ch} onHelp={onHelp}
         desc="想省钱/想安静：全群静默（总开关），或只让名单里的个别群静默。" />
-
-      {/* 2026-09-19 修改要求：这张卡只留"模型总开关"：另外两项（回复检查间隔 / 推荐参数）
-          一个在「调参」里也有、一个一直没人动过，留在页面上只会让人以为"这些设置还管用"。
-          键本身仍在桥里生效（config.json 不动），只是不再从这里编辑。 */}
-      <GroupCard title="提示词与语感（[Style] 行）" path="prompt" cfg={cfg} ch={ch} onHelp={onHelp}
-        only={['styleLine']}
-        desc="唤醒正文每轮都会带的那一句语感提醒。它是离模型最近的一句话，对小模型的语气影响比几十 k 字符的系统提示词更直接 —— 觉得回话「像人机」就改这里。默认是一句英文提醒（更短、更像人自己写的旁白）；中英皆可，留空 = 不注入这一行。改完保存下一条消息就生效，不用重启桥、也不用等会话轮换。" />
       {/* 2026-10-30 主人：高峰时段是数组型高级项，界面上不再暴露（键仍在 config.json 生效）。 */}
       <GroupCard title="计价口径（/token 指令）" path="tokenCost" cfg={cfg} ch={ch} onHelp={onHelp}
         only={['pHit', 'pMiss', 'pOut', 'peakMult']}
@@ -2248,39 +2234,28 @@ function PixivCard({ cfg, ch, onHelp }: {
   const hasCookie = s('cookie').trim().length > 0;
   const hasToken = s('refreshToken').trim().length > 0;
   return (
-    <div className="cfg-card">
-      <div className="cfg-card-title">Pixiv（镜像站与登录 cookie）</div>
+    <div className="cfg-card" style={{ height: '100%' }}>
+      <div className="cfg-card-title">Pixiv（搜图与画师）</div>
       <div className="cfg-card-desc">
-        按画师<b>名字</b>搜人必须有登录态（官网用户搜索接口对匿名请求一律返回 400）；按画师号或作品链接发原图不需要。
-        凭证只发给 pixiv 自己的域名，绝不发给镜像站。
+        按画师搜人需要登录态（凭证只发往 Pixiv 官方域名）；按画师号或作品链接发原图无需凭证。
       </div>
       <div className="cfg-fields">
-        <Field path="pixiv.base" val={s('base')} label={pretty('base')} ch={ch} onHelp={onHelp} cfg={cfg} />
         <Field path="pixiv.cookie" val={s('cookie')} label={pretty('cookie')} ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
       </div>
-      {/* 【2026-09-28 二次返工：说明精简重排】上一版把说明塞进 .lrn-inline-note（inline-flex，
-          会被压成竖条，已改 display:block 救回来），但两段连续长文仍是"一堵墙"。
-          现在拆成"三条要点 + 一行状态 + 一行操作"，事实一条不少、每行只讲一件事。
-          下面不再用 .lrn-inline-note（那个类的默认布局就是 inline-flex），一律用块级容器。 */}
-      <ul className="cfg-card-desc" style={{ display: 'block', margin: '8px 0 4px', paddingLeft: 18, lineHeight: 1.75 }}>
-        <li><b>填了 cookie 之后</b>：点「保存」只把这一项写进 config.json；换长期令牌的时机看目标 —— 服务端＝保存时顺手换一次（结果写在保存回执的步骤列表里），本机＝桥下次启动自己换。</li>
-        <li><b>换成功之后</b>：令牌落盘 <code>state/pixiv-token.json</code>，此后每 50 分钟自动轮换，<b>本卡后两项都可以清空</b>。</li>
-        <li><b>画师号缓存</b>：每解出一个就落盘 <code>state/pixiv-artists.json</code>；cookie 过期后，查过的名字照样能搜到。</li>
-      </ul>
-      <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.75 }}>
+      <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.6, marginTop: 6 }}>
         <div>
           {(!hasCookie && !hasToken)
-            ? '当前没有登录态：按画师名字搜人不可用（画师号 / 作品链接不受影响）。'
+            ? '当前未登录：画师名字搜人受限；作品 ID 与链接直发正常。'
             : hasCookie
-              ? '已填 cookie：保存后由桥换长期令牌（服务端＝保存时立刻换；本机＝桥下次启动时换）。'
-              : '已填长期令牌：桥直接用它，不必再填 cookie。'}
+              ? '已配置 Cookie：后台自动轮换长期令牌并落盘。'
+              : '已生效长期令牌，无需重复配置。'}
         </div>
         <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" className="btn btn-tb-soft" onClick={() => setReveal((v) => !v)}>
             {reveal ? '隐藏凭证' : '显示凭证'}
           </button>
-          <span style={{ fontSize: 12, opacity: 0.85 }}>
-            cookie 三种写法都认：整条 cookie 串、<code>PHPSESSID=xxxx</code>、或只贴会话值本身。
+          <span style={{ fontSize: 11.5, opacity: 0.85 }}>
+            支持整串 Cookie 或 PHPSESSID 值。
           </span>
         </div>
       </div>
@@ -2300,35 +2275,30 @@ function LuoguCard({ cfg, ch, onHelp }: {
   const hasClient = s('clientId').trim().length > 0;
 
   return (
-    <div className="cfg-card">
-      <div className="cfg-card-title">洛谷（Luogu 算法题库与视奸）</div>
+    <div className="cfg-card" style={{ height: '100%' }}>
+      <div className="cfg-card-title">洛谷（Luogu 算法题库）</div>
       <div className="cfg-card-desc">
-        支持发题面、发题解/思路分析、每日一题推荐，以及视奸查询洛谷公开用户档案（UID、咕值、排名、勋章、打卡记录）。查题解与防反爬建议配置完整 Cookie 或 <code>__client_id</code>。
+        调取题面样例、时空限制、每日一题推荐与公开用户视奸。查官方题解与防爬建议填登录 Cookie。
       </div>
       <div className="cfg-fields">
         <Field path="luogu.uid" val={s('uid')} label="洛谷用户 UID" ch={ch} onHelp={onHelp} cfg={cfg} />
         <Field path="luogu.clientId" val={s('clientId')} label="洛谷 Client ID（__client_id）" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
         <Field path="luogu.cookie" val={s('cookie')} label="洛谷完整登录 Cookie" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
       </div>
-      <ul className="cfg-card-desc" style={{ display: 'block', margin: '8px 0 4px', paddingLeft: 18, lineHeight: 1.75 }}>
-        <li><b>发题面与每日一题</b>：输入题号（如 <code>P1001</code>、<code>B2002</code>、<code>CF4A</code>）即可调取时空限制、输入输出样例与说明；亦可搭配 Markdown 白底卡片精美排版发送。</li>
-        <li><b>视奸用户主页</b>：输入任意用户的 UID（如 <code>1</code>），即可视奸其公开咕值、主页签名、CCF 认证等级、全站排名与打卡概况。</li>
-        <li><b>解题思路与题解</b>：若配置了洛谷登录 Cookie 可获取官方精选题解；若未登录，机器人将自动根据题面为你编写高水准思路分析并附带标准 C++ 模板代码。</li>
-      </ul>
-      <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.75 }}>
+      <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.6, marginTop: 6 }}>
         <div>
           {!hasUid && !hasCookie && !hasClient
-            ? '当前未绑定洛谷 UID：公开查题面与每日一题照常可用；绑定后可实现专属自查与完整视奸。'
+            ? '当前未绑定 UID：公开查题面与每日一题可用；配置凭据可解锁完整视奸与题解。'
             : hasUid
-              ? `已绑定洛谷 UID: ${s('uid')} ${hasCookie || hasClient ? '· 已配置防爬凭据' : '· 未填凭据（仅公开访问）'}`
+              ? `已绑定 UID: ${s('uid')} ${hasCookie || hasClient ? '· 已配置防爬凭据' : '· 公开查询模式'}`
               : '已配置凭据。'}
         </div>
         <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" className="btn btn-tb-soft" onClick={() => setReveal((v) => !v)}>
             {reveal ? '隐藏凭证' : '显示凭证'}
           </button>
-          <span style={{ fontSize: 12, opacity: 0.85 }}>
-            Cookie 可从浏览器开发者工具中洛谷请求的请求头直接复制。
+          <span style={{ fontSize: 11.5, opacity: 0.85 }}>
+            未登录时机器人自动编写 C++ 思路与模板。
           </span>
         </div>
       </div>
@@ -2680,43 +2650,21 @@ function ActivityHoursCard({ cfg, remote, writeConfig, onCfgChange }: {
   );
 }
 
-/** 表情包卡：收藏表情设置 + 「发表情概率」+ 上传表情包图库 */
-function StickerCard({ cfg, ch, onHelp, uploadStickers }: {
+/** 表情包卡：收藏表情设置 + 「发表情概率」 */
+function StickerCard({ cfg, ch, onHelp }: {
   cfg: any; ch: (p: string) => (v: any) => void;
   onHelp: (h: any) => void;
-  uploadStickers: (files: File[]) => Promise<void>;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
   const fields = keysOf(cfg, 'social.sticker');
   if (!fields.length) return null;
   return (
     <div className="cfg-card">
       <div className="cfg-card-title">表情包</div>
-      <div className="cfg-card-desc">表情库由两部分构成：你 QQ 的收藏表情与本地导入的图库（须自行导入，产品不随附表情包）。本卡控制是否启用表情、同步间隔、发送频率，以及导入自定义表情。</div>
+      <div className="cfg-card-desc">控制是否启用 QQ 收藏表情回复、同步间隔与发表情概率骰子；本地图库请在下方「表情包库」统一维护。</div>
       <div className="cfg-fields">
         {fields.map((k) => (
           <Field key={'social.sticker.' + k} path={'social.sticker.' + k} val={at(cfg, 'social.sticker')[k]} label={pretty(k)} ch={ch} onHelp={onHelp} />
         ))}
-      </div>
-      <div className="sticker-upload">
-        <input
-          ref={fileRef} type="file" hidden multiple accept="image/*,.gif"
-          onChange={async (e) => {
-            const fs = e.target.files;
-            if (fs?.length) {
-              setBusy(true);
-              try { await uploadStickers(Array.from(fs)); }
-              catch { /* toast 由父级显示 */ }
-              finally { setBusy(false); }
-            }
-            e.target.value = '';
-          }}
-        />
-        <button type="button" className="btn btn-soft-primary btn-sm" disabled={busy} onClick={() => fileRef.current?.click()}>
-          {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />} 上传表情包图库
-        </button>
-        <span className="upload-hint">选本地图片/动图入库，AI 也能用（存到 stickers-upload/ 并自动重启桥接）</span>
       </div>
     </div>
   );
