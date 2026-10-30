@@ -349,7 +349,11 @@ export function appendTurnTailPersonaAnchor(promptText) {
   /* 2026-10-30（目标轮 4）：合并窗预演证明**桥侧合并不可能同时满足三条**——
    * 合并能抬"单气泡占比"，但会把单条均字从 20 抬到 35+，直接撞穿 8~18 的上界；
    * 而"每条 18 字以内"只有模型少写才办得到。所以把形容词换成硬数字： */
-  const anchor = '[anchor] persona_first empathy_then_stance spoken_words_only mostly_end_with_a_statement one_bubble_first bubbles_under_18_chars';
+  /* 2026-10-30 实测（近 3 小时 88 条文本气泡）：75% 在 18 字以内、**只有 1% 带问号**。
+   * 这已经不是「短」，是「齐」—— 一条 + ≤18 字 + 尽量陈述收尾，三条叠起来把形状压成了同一个模板，
+   * 主人说的「又回归人机味」就是这个：每句都短、都断言、都不问。
+   * 放宽成「长度和条数都可以变」，问号只在真不确定时才用。 */
+  const anchor = '[anchor] persona_first empathy_then_stance spoken_words_only vary_sentence_shape vary_bubble_length';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -466,6 +470,25 @@ function ownerMarkLines() {
   return '[OWNER]\n';
 }
 
+/* 2026-10-30 关键修正：这几行指引原来写在 buildWakePrompt 里，而 buildWakePrompt **只在"首次注入完整 prompt"时被调用**
+ * （sendWakePrompt 里那句 promptText = buildWakePrompt(...)）。日常每一轮走的是哨兵分支（1786 行那段 rawPrompt），
+ * 于是 [style]/[tools]/[bubbles]/[turn] 这些指引一整天都没送到模型面前 —— 群聊照旧无脑接话就是这么来的。
+ * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
+function styleGuideLines() {
+  return [
+    '[style] vary_sentence_shape state_the_thing_directly lead_with_what_it_is question_only_when_genuinely_unsure dont_guess_peers_intent stay_deep_in_character',
+    '[tools] send_message_or_reply_ok quote_before_asserting_in_group merge_multi_part_with_qq_send_forward image_before_comment_use_qq_view_image solve_it_yourself_with_tools code_or_long_text_use_qq_render_markdown_image',
+    '[bubbles] several_remarks_use_messages_array one_remark_per_bubble long_explanation_one_paragraph_only',
+  ].join('\n');
+}
+
+/** 群聊因为 anyMessage 被叫醒时，补一句"可以选择不说话"——其它唤醒原因不需要，加了反而稀释。 */
+function judgeLineFor(key, reason) {
+  return (String(key).startsWith('group:') && /anyMessage/i.test(String(reason || '')))
+    ? '[turn] every_message_reaches_you_choose_silence_unless_you_add_something'
+    : '';
+}
+
 export function buildWakePrompt(key, reason) {
   const st = getSocialState(key);
   const ownerMark = (!!cfgRef?.ownerQQ && key === `private:${cfgRef.ownerQQ}`) ? ownerMarkLines() : '';
@@ -479,31 +502,15 @@ export function buildWakePrompt(key, reason) {
   /* 2026-10-29 主人：唤醒正文刻意不带转录，读工具结果又在回合末被剪掉 —— 不读上下文就等于失忆。
    * 这一行把 step_3 摆在正文里（生成位置附近，最省 token 的强力提示），配合 qq-tool-restrict 的门禁。 */
   const perceptionLine = '[perception] step_3_qq_get_recent_messages_before_sending\n';
-  /* 2026-10-30 主人：句式与形态要按场合变，且别再套「不是…而是…」那种定式。
-   * 放正文而不是系统提示词：每轮都发、不用等会话轮换，且只占一行。
-   * 长解释允许一整条长消息 —— 知识类内容不该被"短句"规则切碎。 */
-  /* 2026-10-30 主人两次提到「不是…而是…」这个定式：它是模型的思维定式，不是说话习惯。
-   * 正向写法 = lead_with_what_it_is（先说它是什么），比"禁止不是而是"有效。 */
-  const styleLine = '[style] vary_sentence_shape state_the_thing_directly lead_with_what_it_is no_question_by_default dont_guess_peers_intent stay_deep_in_character\n'
-    + '[tools] send_message_or_reply_ok quote_before_asserting_in_group merge_multi_part_with_qq_send_forward image_before_comment_use_qq_view_image solve_it_yourself_with_tools code_or_long_text_use_qq_render_markdown_image\n'
-    /* 2026-10-30 修复：原来这句是 long_explanation_single_message_ok（长解释可以单独发一条），
-     * 结果它把四句短话用 \n 串进同一条气泡发出来（09:27「真的呀 / 今天瑞士轮第四轮 / TES…」）——
-     * 读到的是"可以合"，就一路合到底。现在限定成"一整段长解释"才算例外，短句一律各自成条。 */
-    /* 2026-10-30 主人：不要用正则替它切分 —— 教它**用数组发**。
-     * qq_send_message 本来就收 messages: ["第一句","第二句"]，一条气泡一次工具调用之外还有这条正路。 */
-    + '[bubbles] several_remarks_use_messages_array one_remark_per_bubble long_explanation_one_paragraph_only\n';
   /* 2026-10-29：自主动唤醒（追念 / 主动看顾）必须带一条「没有新东西就别说话」。
    * 线上实测这类唤醒占了不小比例，且经常补一句和上一条几乎一样的话 —— 用户体感就是「不聪明」。 */
   const selfInitiated = /^(afterthought|proactiveCheck|topic|activityStart|timeout|replyCheck)$/.test(String(reason || ''));
   const proactiveLine = selfInitiated ? '[self_talk] say_something_new_or_stay_silent\n' : '';
   /* 2026-10-30 主人：群里 100% 收到（active + anyMessage），但要自己判断该不该接话。
    * 这一行只在"因为 anyMessage 被叫醒"时出现 —— 别的唤醒原因不需要它，加了反而稀释。 */
-  const judgeLine = (key.startsWith('group:') && /anyMessage/i.test(String(reason || '')))
-    ? '[turn] every_message_reaches_you_choose_silence_unless_you_add_something\n'
-    : '';
   const diceLines = (voiceTurnHint(key) + memeTurnHint(key)).trim();
   const diceBlock = diceLines ? `${diceLines}\n` : '';
-  const raw = tokenLine + wakeLine + perceptionLine + styleLine + judgeLine + proactiveLine + diceBlock;
+  const raw = tokenLine + wakeLine + perceptionLine + proactiveLine + diceBlock;
   return raw.replace(/\n{2,}/g, '\n').trim() + '\n';
 }
 
@@ -1834,6 +1841,8 @@ export async function sendWakePrompt(key, reason) {
     log(`[default] ${key} ${justReset ? '轮换后首轮' : '首次'}唤醒，注入完整 prompt${recentBlock ? '（含最近 ' + ctxN + ' 条窗口' + (justReset ? '，轮换加长' : '') + '）' : '（窗口为空！）'}`);
   }
   if (loopResetNote) promptText = promptText + loopResetNote;
+  // 所有路径都追加同样的指引（首次注入 / 哨兵轮 / 轮换首轮），只此一处
+  promptText = [promptText, styleGuideLines(), judgeLineFor(key, reason)].filter(Boolean).join('\n');
   promptText = promptText.replace(/\n{2,}/g, '\n').trim();
   st.pendingUndeliveredText = '';
   st._undeliveredAt = 0;

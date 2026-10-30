@@ -1237,6 +1237,36 @@ keeps_face_flat_while_being_sweet
   `qq_send_message` 本来就收 `messages: ["第一句","第二句"]`；以前没人告诉它，它才用换行硬凑。
 - 取舍记一笔：正则切分的问题在于**它替模型做了排版决定**，且切线只对"短行多行"有效，遇到别的形状就失效；
   教它用数组则是让模型按语义决定分几条，发送侧保持"给什么发什么"。
+## 33. 条目 50（2026-10-30 10:08）：为什么「要求都没执行」—— 指引写在了只跑一次的路径里
+
+### 33.1 真因（我的 bug，不是模型不听话）
+- `[style]` / `[tools]` / `[bubbles]` / `[turn]` 这几行，当时写在 `buildWakePrompt()` 里。
+- 而 `buildWakePrompt()` **只在「首次注入完整 prompt」那一次被调用**（`sendWakePrompt` 的 `if (!st._promptInjected)` 分支）。
+- 日常每一轮走的是**哨兵分支**（`wake-send.js` 1786 行那段 `rawPrompt`），拼装式里根本没有这几行。
+- 结果：一整天改的提示词，模型**一次也没看到**；日志一切正常、无报错 —— 这就是「什么都不执行」的原因。
+- 取证：`10:02:51` 的群唤醒正文只有 `[Token]/[Session]/[Wake]/[Unread]/[group_flow]/[anchor]`，没有 `[style]`；
+  `10:07:24`（改后）同一条正文里 `[style]`（新措辞）/`[tools]`/`[bubbles]` 就位。
+
+### 33.2 修法：统一出口，只此一处
+- 抽出模块级 `styleGuideLines()` / `judgeLineFor(key, reason)`；`buildWakePrompt()` 不再拼它们（避免首轮重复）；
+- `sendWakePrompt()` 在所有路径的最后统一追加：
+  ```js
+  promptText = [promptText, styleGuideLines(), judgeLineFor(key, reason)].filter(Boolean).join("\n");
+  ```
+- `wake-send.js` md5 `dc4741a3…`，重启后三服务 active。
+
+### 33.3 回归护栏：`tools/wake-body-check.py`
+- 读会话日志里**真正投递的唤醒正文**，检查 `[style]/[tools]/[bubbles]/[anchor]` 在不在；群聊 `anyMessage` 唤醒还要求 `[turn]`。
+- 只查 `[Wake …]` 的正文 —— 哨兵提醒 `[Reminder]` 走另一条拼装路径，按同一套判据会误报。
+- 改之前跑：8 条里 6 条缺（都是老正文）；改之后：新正文全 PASS。
+
+### 33.4 顺带修「人机味回归」：约束过度，不是约束不足
+- 实测近 3 小时 88 条文本气泡：**75% 在 18 字以内、只有 1% 带问号**。
+- 三条约束（一条气泡 / ≤18 字 / 尽量陈述收尾）叠在一起把形状压成同一个模板：每句都短、都断言、都不问。
+- 放宽：尾锚 `one_bubble_first bubbles_under_18_chars` → `vary_sentence_shape vary_bubble_length`；
+  `[style]` 的 `no_question_by_default` → `question_only_when_genuinely_unsure`。
+- 同一个教训第二次出现：**「允许例外」要写边界，「要求形状」也要留余地** —— 两头都会把模型压成模板。
+
 
 
 
