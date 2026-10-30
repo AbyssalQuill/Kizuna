@@ -218,7 +218,7 @@ check('wakeRefLine 不再要求模型"把 triggers.probability 填成这个值"'
 
 console.log('\n=== ⑤ 「不死板发 3 段」：代码里没有固定条数逻辑 ===');
 check('分条工具不把条数截断到固定值：6 段的输入就是 6 条', () => {
-  const out = planSocialTimeline('你好 世界 再见 走吧 好 嗯', { burstEnabled: true, maxReplyChars: 500 });
+  const out = planSocialTimeline('你好 世界 再见 走吧 好 嗯', { maxReplyChars: 500 });
   assert.equal(out.main.length, 6);
   assert.equal(out.followUp, null);
 });

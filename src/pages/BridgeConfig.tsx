@@ -104,7 +104,7 @@ const LABEL: Record<string, string> = {
   recommendedSleepMaxMs: '推荐潜水上限', recommendedDefaultInfinite: '默认无限潜水', noActionLimit: '无行动上限',
   maxWakeConfigReminders: '唤醒提醒上限', recommendedHint: '唤醒行为提示', mustReplyKeywords: '必回关键词',
   // 发送节奏（2026-09-15：只保留「按字数」一套，gap*/burstInterval* 已废弃，标签一并删掉）
-  burstEnabled: '允许连发', burstMaxMessages: '单次最多条数',
+  burstMaxMessages: '单次最多条数',
   longGapProbability: '长停顿概率', longGapMinMs: '长停顿最短',
   longGapMaxMs: '长停顿最长', maxSendPerMinute: '每分钟发送上限', maxSendPerHour: '每小时发送上限',
   maxMessageChars: '单条最长字数', maxGapMs: '最大间隔',
@@ -875,7 +875,6 @@ function mcpLabel(fullName: string) {
   'social.wake.maxWakePerHourPrivate': '私聊每小时最多唤醒几次（默认 0 = 不限）：私聊默认不设小时上限，以免主人夜间发言被挡。',
 
   // ── 发送节奏 ──
-  'social.send.burstEnabled': '允许一次发送多条气泡：关闭后只能发一条，模型强行发多条会被拒绝。',
   'social.send.burstMaxMessages': '一次最多几条气泡：超出直接拒绝。',
   'social.send.longGapProbability': '出现长间隔的概率：模拟「打了一半停一下再发」的真人节奏。',
   'social.send.longGapMinMs': '长间隔的最小毫秒数。',

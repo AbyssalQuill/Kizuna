@@ -18,6 +18,18 @@
 | 9 | 群友画像输入框宽度不一 | 群聊下拉与昵称/QQ 输入框统一 220px | `GroupPortrait.tsx` |
 | 10 | 学习页剪枝旧文案 | 改写为「单轮折叠与上下文节省（实测）」与记忆库归档说明 | `Learning.tsx` |
 
+## 1b. 追加：连发与唤醒行为提示死代码清除（提交 `89aa9d4` + 本次清理）
+
+| # | 问题 | 改动 | 文件 |
+| :-- | :-- | :-- | :-- |
+| 11 | 「唤醒行为提示」（`social.send.recommendedHint`）已被内置规则取代 | 界面隐藏该字段；默认值、配置合并、示例配置全部删除。`social.wake.recommendedHint` 仍由 `qq_get_prompt` 下发，予以保留 | `BridgeConfig.tsx` `config.js` `console-server.js` `config.example.json` |
+| 12 | `burstEnabled` 拦截与开关 | 删除 `/api/social/send-message` 里 `burstEnabled === false` 的 403 分支；`planSocialTimeline` 去掉「关闭分条」分支；删除默认值、配置合并、示例配置、界面标签与帮助、测试夹具参数 | `console-server.js` `social-timeline.js` `config.js` `config.example.json` `BridgeConfig.tsx` `group-interject-model-decides.test.js` |
+
+- **部署**：生产服务器 `202.61.72.79` 只同步 `console-server.js`、`social-timeline.js`、`config.js`，按先 `qq-bridge` 后 `dsh-web` 的顺序重启。
+- **旧配置兼容**：已有 `config.json` 里残留的 `burstEnabled`、`send.recommendedHint` 不再被读取，也不会渲染到界面（`BridgeConfig.tsx` 发送节奏卡的 `filter` 仍排除这两个键，避免旧配置里的它们显示成裸键名输入框）。
+- **验证**：`group-interject-model-decides` 38/38、`persona-ephemeral` 28/28、`npm run build` 通过。
+- **部署后观察**：重启后旧会话 `session-888962dc…` 的 follow 流进入长退避重连，属重启后的会话重连现象，需再看一次是否收敛。
+
 ## 2. 已核实事项
 
 - **「清除已保存的密钥」**：调用 `clearApiKey()`，向后端发 `dsh.clearApiKey`，删除隔离 DSH `.credentials.yaml` 中该服务商密钥一行，其余内容保留；功能有效。
@@ -30,6 +42,4 @@
 
 ## 4. 遗留
 
-- 桥端 `console-server.js` 的 `burstEnabled === false` 拦截仍在代码里，配置默认 `true`；若要彻底去除需另提交，并同步 `social-timeline.js`。
-- 本次提交把 `src/` 下文件行尾统一为 LF，diff 行数偏大属正常。
-- 前端构建产物尚未同步到生产服务器 `202.61.72.79`，需构建后部署。
+- 前端构建产物在管理端本机，重启管理端并强刷页面后生效；服务器侧无需前端部署。

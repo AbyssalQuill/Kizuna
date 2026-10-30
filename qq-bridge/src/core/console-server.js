@@ -1496,9 +1496,7 @@ export function startConsoleServer() {
           // 变成 linearEnabled:false，打字节拍整个失效，而界面上看起来只是"保存了一下配置"。
           // 现在按真值字符串宽松解析（true/on/1/开 = 开）。
           const asBool = (v) => (v === true || v === 1 || /^(true|on|1|yes|开|打开)$/i.test(String(v ?? '').trim()));
-          if (merged.send.burstEnabled !== undefined) merged.send.burstEnabled = asBool(merged.send.burstEnabled);
           if (merged.send.linearEnabled !== undefined) merged.send.linearEnabled = asBool(merged.send.linearEnabled);
-          if (merged.send.recommendedHint !== undefined) merged.send.recommendedHint = String(merged.send.recommendedHint ?? '');
         }
         // wait：数值归一化
         if (body.wait && typeof body.wait === 'object') {

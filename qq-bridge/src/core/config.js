@@ -202,7 +202,6 @@ export function loadConfig() {
         maxWakeConfigReminders: 2
       },
       send: {
-        burstEnabled: true,
         burstMaxMessages: 8,
         // —— 打字节拍：只保留"按字数"一种（2026-09-15 定稿）——
         // 批内首条秒回；第 2 条起 = 本条字数 × linearPerCharMs，±linearJitterRatio 抖动，
@@ -220,7 +219,6 @@ export function loadConfig() {
         maxSendPerHour: 60,
         maxMessageChars: 500,
         maxGapMs: 15000,
-        recommendedHint: 'Normal chat: 1-4 bubbles per reply, 1.2-4 s between bubbles like typing; occasionally (25%) pause 8-20 s like thinking; never spam.',
       },
       wait: {
         defaultMs: 30000,
