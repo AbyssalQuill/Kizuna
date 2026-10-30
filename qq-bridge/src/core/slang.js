@@ -12,7 +12,7 @@ import {
   buildExtractionPrompt, buildResearchPrompt, parseExtractionJson, parseResearchJson, SLANG_STATUS,
   buildSlangTaskBrief, buildSlangRunCue, SLANG_BRIEF_VERSION,
 } from '../slang-learner.js';
-import { dshReady } from './dsh-session.js';
+import { dshReady, ensureVisionModel } from './dsh-session.js';
 
 export let slangEntries = loadSlang(SLANG_FILE);
 export const slangWindows = new Map();       // key -> [{sender,text,time}]：待学习消息窗口
@@ -112,9 +112,23 @@ export function queueSlangTask(fn) {
   return slangTaskChain;
 }
 
+async function applySlangLearnerModel(sessionId) {
+  if (!sessionId) return;
+  try {
+    await ensureVisionModel(sessionId, {
+      provider: cfgRef?.slang?.provider,
+      model: cfgRef?.slang?.model,
+      reasoningEffort: cfgRef?.slang?.reasoningEffort,
+    });
+  } catch (e) {
+    log('设置黑话学习会话模型/推理档位失败（继续使用当前会话）:', e?.message ?? e);
+  }
+}
+
 export async function ensureSlangLearnerSession() {
   if (slangLearnerSessionId) {
     learnerSessions.add(slangLearnerSessionId);
+    await applySlangLearnerModel(slangLearnerSessionId);
     return slangLearnerSessionId;
   }
   const saved = readJsonSafe(SLANG_SESSION_FILE, null);
@@ -123,6 +137,7 @@ export async function ensureSlangLearnerSession() {
     if (await learnSessionExistsForRestore(saved.sessionId)) {
       slangLearnerSessionId = String(saved.sessionId);
       learnerSessions.add(slangLearnerSessionId);
+      await applySlangLearnerModel(slangLearnerSessionId);
       return slangLearnerSessionId;
     }
     log(`黑话学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
@@ -144,6 +159,7 @@ export async function ensureSlangLearnerSession() {
   learnerSessions.add(slangLearnerSessionId);
   fs.mkdirSync(STATE_DIR, { recursive: true });
   atomicWriteJson(SLANG_SESSION_FILE, { sessionId: slangLearnerSessionId });
+  await applySlangLearnerModel(slangLearnerSessionId);
   log(`黑话学习会话已创建：${slangLearnerSessionId}`);
   return slangLearnerSessionId;
 }

@@ -3,7 +3,13 @@
 // `昵称「群魅魔/AbyssalQuill」。`（两个词）—— 旧文被整条覆盖，报障"我以前是有的是不是被清除了"。
 // 跑法：node tests/persona-merge.test.js
 import assert from 'node:assert/strict';
-import { mergePersonaProfileText } from '../src/core/persona-learn.js';
+import {
+  mergePersonaProfileText,
+  mergeUniqueStrings,
+  mergeUniqueCatchphrases,
+  buildPersonaTaskBrief,
+  PERSONA_BRIEF_VERSION,
+} from '../src/core/persona-learn.js';
 
 let passed = 0;
 const cases = [];
@@ -42,6 +48,28 @@ t('⑥ 新 stub 已经包含在旧文里时不重复追加', () => {
   const prev = `昵称「群魅魔」。${RICH}`;
   const out = mergePersonaProfileText(prev, '昵称「群魅魔」。');
   assert.equal(out, prev, '重复内容不该被追加第二遍');
+});
+
+t('⑦ 结构化数组字段（topics/tags/taboos）新旧智能去重合并，新发现排前、旧特征保留', () => {
+  const merged = mergeUniqueStrings(['C++', 'Remotion'], ['布偶猫', 'c++', '三角洲行动'], 10);
+  assert.deepEqual(merged, ['C++', 'Remotion', '布偶猫', '三角洲行动']);
+});
+
+t('⑧ 口头禅（catchphrases）按 phrase 不区分大小写去重合并，新上下文优先', () => {
+  const next = [{ phrase: '草', context: '好笑时' }, { phrase: '确实', context: '赞同时' }];
+  const prev = [{ phrase: '草', context: '旧语境' }, { phrase: '包的', context: '打包票时' }];
+  const merged = mergeUniqueCatchphrases(next, prev, 10);
+  assert.equal(merged.length, 3);
+  assert.equal(merged[0].phrase, '草');
+  assert.equal(merged[0].context, '好笑时');
+  assert.equal(merged[2].phrase, '包的');
+});
+
+t('⑨ 人格学习说明版本 v8 包含增量调和（INCREMENTAL PROFILE RECONCILIATION）与群聊防污染规则', () => {
+  assert.equal(PERSONA_BRIEF_VERSION, 8);
+  const brief = buildPersonaTaskBrief();
+  assert.ok(brief.includes('INCREMENTAL PROFILE RECONCILIATION'), '应包含增量画像调和指引');
+  assert.ok(brief.includes('ANTI-POLLUTION & HIGH-SIGNAL EXTRACTION'), '应包含群聊噪声防污染指引');
 });
 
 for (const [name, fn] of cases) {

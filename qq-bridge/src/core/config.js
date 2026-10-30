@@ -34,7 +34,7 @@ export function loadConfig() {
      * 阈值用比例（相对已路由模型的 contextWindow），换模型自动等比缩放 —— 也是 DSH 的硬要求：
      * retainRatio 必须小于 thresholdRatio，否则插件直接拒绝加载。字段含义与取值见 lib/dsh-compaction.js。 */
     dshCompaction: {
-      enabled: true,             // 关掉 = 不写这段（回到 DSH 默认：窗口 80% 才压缩 ≈ 等于不压缩）
+      enabled: false,            // 单轮折叠架构下每回合末已折叠清空历史，不再需要跨轮次工具结果剪枝与压缩
       /* ── 阈值的三次修正：0.06 → 0.12 → 0.08 → 0.16（2026-09-22 用实测数据重算） ──────────
        * ① 0.06 → 0.12（2026-09-20）：0.06 会"每一步都压缩"（阈值被固定开销顶穿，114 步触发 46 次摘要，
        *    每步之间多花 15~20 秒）。
@@ -129,6 +129,11 @@ export function loadConfig() {
       workspaceTitle: 'SlangAgent',   // 黑话学习会话名（2026-09-24 由「QQ 黑话学习」改为 SlangAgent）
       autoResearch: true,
       ...(file.slang ?? {})
+    },
+    persona: {
+      learnerPreset: 'qq-chat',
+      workspaceTitle: 'PersonaAgent', // 人格与群友画像学习会话名，统一使用 qq-chat preset 裁剪无关工具并单轮折叠语料
+      ...(file.persona ?? {})
     },
     social: {
       enabled: true,

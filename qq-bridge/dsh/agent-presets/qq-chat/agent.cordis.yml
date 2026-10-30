@@ -68,8 +68,7 @@
 - id: qq-tool-restrict
   name: ./qq-tool-restrict.mjs
   config: {}
-# 回合末把 qq_load_persona 这次的工具结果挤出 surface（DSH 受支持的 surfaceOp replace），
-# 避免整张角色卡每轮都进历史重发。见插件头注释。
+# 回合末执行单轮折叠（collapseToSingleTurn）：仅保留系统提示词与工具表，已无需 tool-result-pruner 结果剪枝。
 - id: qq-persona-ephemeral
   name: ./qq-persona-ephemeral.mjs
   config: {}
@@ -78,15 +77,8 @@
   group: true
   isolate:
     compaction: true
-    toolResultPruner: true
   config:
   - id: compaction-basic
     name: '@deepseek-ai/dsh-compaction-basic'
   - id: command-compact
     name: '@deepseek-ai/dsh-command-compact'
-  - id: tool-result-pruner
-    name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
-    config:
-      thresholdChars: 12288
-      headChars: 6144
-      tailChars: 2048

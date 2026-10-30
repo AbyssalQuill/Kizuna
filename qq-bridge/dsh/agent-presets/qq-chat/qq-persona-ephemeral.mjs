@@ -151,11 +151,15 @@ export const pruneEphemeralResults = prunePersonaResults;
 const isEmptyDeveloper = (ev) => ev?.type === 'developer/message'
   && Array.isArray(ev.data?.message?.content) && ev.data.message.content.length === 0;
 
-/** 该节点是否要被折叠：系统消息、带内容的 developer/message（工具注册）保留 */
+const isLearnerBrief = (ev) => ev?.type === 'user/message'
+  && textOf(ev.data?.message).includes('HOW IT WORKS (important):');
+
+/** 该节点是否要被折叠：系统消息、带内容的 developer/message（工具注册）、学习会话首轮任务说明保留 */
 function isCollapsible(ev) {
   if (!ev) return false;
   if (ev.type === 'system/message') return false;
   if (ev.type === 'developer/message') return isEmptyDeveloper(ev);
+  if (isLearnerBrief(ev)) return false;
   return ev.type === 'user/message' || ev.type === 'assistant/message' || ev.type === 'tool/result';
 }
 
@@ -224,10 +228,6 @@ export function apply(ctx) {
       const session = payload?.agent?.session;
       const n = collapseToSingleTurn(session);
       if (n > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 单轮折叠：本轮收尾折叠 ${n} 个历史节点（仅留系统提示词）`);
-      if (n === 0) {
-        const m = prunePersonaResults(session);   // 兜底：折叠不可用时仍按旧策略剪瞬态结果
-        if (m > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 本轮剪掉 ${m} 段瞬态上下文`);
-      }
     } catch (e) {
       try { console.error(`[qq-persona-ephemeral] skip: ${String(e?.message ?? e).slice(0, 160)}`); } catch { /* 日志都写不出去就算了 */ }
     }

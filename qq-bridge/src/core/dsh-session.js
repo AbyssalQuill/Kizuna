@@ -35,12 +35,16 @@ export function setDshSessionApi(api) { apiRef = api; }
  */
 export { resetVisionModelApplications } from './session-state.js';
 
-export async function ensureVisionModel(sessionId) {
-  if (visionModelAppliedSessions.has(sessionId)) return;
-  if (!cfgRef.dsh?.provider && !cfgRef.dsh?.model) return; // 未显式配置则用 DSH 默认（官方 deepseek）
-  const provider = String(cfgRef.dsh?.provider || 'deepseek-official');
-  const model = String(cfgRef.dsh?.visionModel || cfgRef.dsh?.model || 'deepseek-v4-flash-vision-exp');
-  const configured = String(cfgRef.dsh?.reasoningEffort ?? '').trim();
+export async function ensureVisionModel(sessionId, customOpts = {}) {
+  if (!sessionId || visionModelAppliedSessions.has(sessionId)) return;
+  if (!cfgRef || !apiRef?.sessions?.selectModel) return;
+  const rawProvider = String(customOpts?.provider ?? cfgRef.dsh?.provider ?? '').trim();
+  const rawModel = String(customOpts?.model ?? cfgRef.dsh?.visionModel ?? cfgRef.dsh?.model ?? '').trim();
+  if (!rawProvider && !rawModel) return; // 未显式配置则用 DSH 默认（官方 deepseek）
+  const provider = rawProvider || 'deepseek-official';
+  const model = rawModel || 'deepseek-v4-flash-vision-exp';
+  const rawEffort = String(customOpts?.reasoningEffort ?? cfgRef.dsh?.reasoningEffort ?? '').trim();
+  const configured = rawEffort.toLowerCase() === 'auto' ? '' : rawEffort;
 
   const selectWith = async (effort) => {
     const payload = { sessionId, provider, model };

@@ -160,6 +160,7 @@ export function resolveIsolatedDshHome() {
   } catch (e) { log('[tunable] 读管理器 config.json 失败:', e?.message ?? e); }
   cands.push(path.join(base, '.qq-bridge-manager', 'dsh-isolated-home-official'));
   cands.push(path.join(base, '.qq-bridge-manager', 'dsh-isolated-home'));
+  cands.push(path.join(base, '.dsh'));
   for (const c of cands) { try { if (c && fs.existsSync(path.join(c, 'settings.yaml'))) return c; } catch {} }
   return cands[0] || '';
 }
@@ -173,7 +174,8 @@ export function syncDshAgentDefaultModel() {
   let s = fs.readFileSync(sp, 'utf8');
   const prov = String(cfgObj.dsh.provider || '').trim() || 'deepseek-official';
   const model = String(cfgObj.dsh.model || '').trim() || 'deepseek-v4-flash-vision-exp';
-  const eff = String(cfgObj.dsh.reasoningEffort || '').trim();
+  const rawEff = String(cfgObj.dsh.reasoningEffort || '').trim();
+  const eff = rawEff.toLowerCase() === 'auto' ? '' : rawEff;
   if (/agent-default-model:/.test(s)) {
     s = s.replace(/agent-default-model:[\s\S]*?(?=\n\S|\n$|$)/, 'agent-default-model:\n  provider: ' + prov + '\n  model: ' + model + (eff ? '\n  reasoningEffort: ' + eff : ''));
   } else {

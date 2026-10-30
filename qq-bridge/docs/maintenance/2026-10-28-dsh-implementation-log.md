@@ -1685,24 +1685,15 @@ else { UNC_MAX = 16; }
    - 在 `feedSlangWindow` 中实现零 LLM 成本的多群友共现统计：当候选黑话已有释义、无违规风险，且在群内被 ≥2 名不同群友自然使用累计 ≥3 次时，自动提权为 `CONFIRMED`，几分钟内即可被 `detectSlangMatches` 识别注入。
 7. **失效 DSH 会话 `follow` 流指数退避与风暴抑制（`src/dsh-client.js`）**：
    - 修复 `eventsMux` 对已在 DSH 侧失效的历史 `sessionId` 每 `500ms` 无限重连刷屏 `follow 流终结 ... (error)` 的隐性缺陷，增加 `followFailCount` 与 `followBackoffUntil` 指数退避（2s -> 4s -> 8s ... 最高 300s）。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+8. **移除单轮会话下冗余的工具结果剪枝（`tool-result-pruner` & `prunePersonaResults` 兜底）**：
+   - 鉴于当前每回合末已通过 `collapseToSingleTurn` 将除系统提示词与工具表外的所有历史节点整段折叠清空，不再需要跨轮次工具结果剪枝：从 `dsh/agent-presets/qq-chat/agent.cordis.yml` 中移除 `tool-result-pruner` 插件挂载，从 `qq-persona-ephemeral.mjs` 的 `apply(ctx)` 中移除 `prunePersonaResults` 兜底剪枝，并将 `src/core/config.js` 与 `config.json` 的 `dshCompaction.enabled` 设为 `false`（保留 `qq-tool-restrict` 工具裁剪表不变）。
+9. **统一主聊天、人格学习（`PersonaAgent`）与黑话学习（`SlangAgent`）的模型与推理档位（`reasoningEffort`）**：
+   - 诊断发现：此前仅主聊天 `ensureSession` 与预热会话调用了 `ensureVisionModel(sessionId)`，`ensurePersonaLearnerSession` 与 `ensureSlangLearnerSession` 从未调用 `selectModel`，导致学习会话未跟随统一模型与推理档位（且热加载修改模型/推理档位后学习会话不生效），同时 `PersonaAgent` 因 `config.js` 漏透传 `persona` 配置段而未挂载 `qq-chat` preset；
+   - 修复：在 `src/core/dsh-session.js` 的 `ensureVisionModel` 与 `src/core/tunables.js` 的 `syncDshAgentDefaultModel` 中统一支持 `auto` 档位归一化与安全回退（不支持指定档位时自动退回服务商默认档位），并在 `ensurePersonaLearnerSession` 与 `ensureSlangLearnerSession` 的缓存命中、会话恢复、新建会话三处统一调用 `ensureVisionModel`；在 `src/core/config.js` 补齐 `persona: { learnerPreset: 'qq-chat', workspaceTitle: 'PersonaAgent' }`，并在 `qq-persona-ephemeral.mjs` 的 `isCollapsible` 中保留学习会话首轮任务说明（`HOW IT WORKS (important):`），使学习会话每完成一轮自动折叠语料历史且不丢失任务说明。
+10. **人格与群友画像学习引擎深度优化（Mem0 / MaiBot 增量画像调和 + 群聊防污染 + BGE 向量入库）**：
+   - **增量画像调和（Incremental Profile Reconciliation）**：在 `src/core/persona-learn.js` 新增 `formatExistingPersonaForMerge(uid)`，将用户既有画像基线（昵称、性格、活跃习惯、偏好话题、标签、口头禅、雷区、亲密度）注入 `buildPersonaRunCue` 与 `buildPersonaPrompt` 的 `[EXISTING PROFILE TO RECONCILE]`，升级 `PERSONA_BRIEF_VERSION = 8`，引导模型将新窗口语料与历史画像增量融合，彻底解决短时间窗口覆盖丢失历史长期特征的痛点；
+   - **群聊噪声防污染（Anti-Pollution）**：在 `buildPersonaTaskBrief` 与 `buildPersonaPrompt` 中内置防污染准则，过滤群聊复读机（+1）、引用反串、临时状态（“好困”）与高频无意义口癖（“哈哈”、“嗯嗯”、“确实”）；
+   - **结构化字段智能去重合并与 BGE 语义向量化入库**：在 `persistPersonaResult` 中新增 `mergeUniqueStrings` 与 `mergeUniqueCatchphrases`（新特征优先排前、未冲突旧特征保留至上限），并将 `category='persona'` 记忆改为通过 `rememberEntry` 写入 `durable` 层级（`importance=85`），自动生成 512 维 `bge-small-zh-v1.5` 语义向量。
 
 
 
