@@ -39,6 +39,12 @@ import {
 } from '../sticker-lib.js';
 import { resolveFaceRef, formatFaceList } from '../qq-faces.js';
 import { makeDocx } from '../make-docx.js';
+import {
+  listPersonaFiles,
+  savePersonaFile,
+  activatePersonaFile,
+  deletePersonaFile,
+} from '../lib/persona-files.js';
 import { segmentsToText, parseJsonCardText, extractMediaFromSegments, extractFilesFromSegments,
   execFileBuffer, decodeTextBuffer, extractDocxText, parseFileBuffer, fetchFileBytes, readFileContent } from '../lib/message-parse.js';
 import {
@@ -570,6 +576,73 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       const switched = switchPersona({ cfg: cfgRef, character: isClear ? '' : want, clear: isClear });
       log(`[command] ${key} /role ${want} → ${JSON.stringify(switched)}`);
       await sendToQQ(key, CMD_ACK);
+      return;
+    }
+    if (plainContent === '/persona' || plainContent.startsWith('/persona ')) {
+      /* 2026-10-31：单文件 .md 多人设切换与管理指令（与自带角色扮演技能库 /role 独立互不干扰）：
+       *   /persona 或 /persona list      → 查看所有单文件 .md 人设及当前激活项
+       *   /persona use <名称或ID>        → 切换并立即激活指定单文件人设（或直接 /persona <名称或ID>）
+       *   /persona save <名称>           → 将当前生效的 persona.md 另存为一个新的单文件人设
+       *   /persona del <名称或ID>        → 删除指定单文件人设 */
+      const rawArg = plainContent.slice(8).trim();
+      const subMatch = rawArg.match(/^(list|ls|use|switch|save|del|delete|rm)\b\s*(.*)$/i);
+      const action = subMatch ? subMatch[1].toLowerCase() : (rawArg && rawArg !== '?' ? 'use' : 'list');
+      const targetArg = subMatch ? subMatch[2].trim() : rawArg;
+
+      if (action === 'list' || action === 'ls' || !rawArg || rawArg === '?') {
+        const { items, activeId } = listPersonaFiles(ROOT);
+        if (!items.length) {
+          await sendToQQ(key, '当前暂无单文件人设。可用 /persona save <名称> 保存当前人设，或在管理端「人设」页新建。');
+          return;
+        }
+        const lines = items.map((it, idx) => `${it.id === activeId || it.active ? '●' : '○'} ${idx + 1}. ${it.name} [${it.id}] (${it.chars}字)`);
+        await sendToQQ(
+          key,
+          `单文件人设库（共 ${items.length} 个）：\n${lines.join('\n')}\n\n指令：\n/persona use <名称或ID> 切换\n/persona save <名称> 保存当前人设\n/persona del <名称或ID> 删除`,
+        );
+        return;
+      }
+
+      if (action === 'save') {
+        if (!targetArg) {
+          await sendToQQ(key, '用法：/persona save <人设名称>');
+          return;
+        }
+        const curText = fs.existsSync(path.join(ROOT, 'persona.md'))
+          ? fs.readFileSync(path.join(ROOT, 'persona.md'), 'utf8')
+          : '';
+        if (!curText.trim()) {
+          await sendToQQ(key, '当前 persona.md 为空，无法保存。');
+          return;
+        }
+        const saved = savePersonaFile(ROOT, { name: targetArg, content: curText, activate: true });
+        log(`[command] ${key} /persona save ${targetArg} → ${saved.id}`);
+        await sendToQQ(key, `已保存并激活单文件人设「${saved.name}」[${saved.id}]。`);
+        return;
+      }
+
+      if (action === 'del' || action === 'delete' || action === 'rm') {
+        if (!targetArg) {
+          await sendToQQ(key, '用法：/persona del <名称或ID>');
+          return;
+        }
+        const deleted = deletePersonaFile(ROOT, targetArg);
+        if (!deleted.ok) {
+          await sendToQQ(key, deleted.error || '删除失败');
+          return;
+        }
+        log(`[command] ${key} /persona del ${targetArg} → ${deleted.deletedId}`);
+        await sendToQQ(key, `已删除单文件人设「${deleted.deletedName}」[${deleted.deletedId}]。`);
+        return;
+      }
+
+      const res = activatePersonaFile(ROOT, targetArg);
+      if (!res.ok) {
+        await sendToQQ(key, `${res.error}。发送 /persona 查看可用列表。`);
+        return;
+      }
+      log(`[command] ${key} /persona use ${targetArg} → ${res.id} (${res.name})`);
+      await sendToQQ(key, `已切换单文件人设为「${res.name}」[${res.id}]，下一条消息立即生效。`);
       return;
     }
     if (plainContent === '/silent' || plainContent === '/quiet') {

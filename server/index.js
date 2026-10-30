@@ -22,6 +22,12 @@ import { createUpdater } from './updater.js';
  * 唯一的职责就是"用 NapCat 的登录接口去验证令牌"，正是抢 WebUI 页面登录额度的元凶。整个模块已删除。 */
 // 连接服务端的状态机（纯逻辑可单测）：让界面能看到"SSH → 隧道 → 服务端组件逐个就绪 → 预鉴权 → 就绪"
 import { createConnectMachine, describeRemoteStatus } from './connect-machine.js';
+import {
+  listPersonaFiles,
+  savePersonaFile,
+  activatePersonaFile,
+  deletePersonaFile,
+} from '../qq-bridge/src/lib/persona-files.js';
 const deploy = deployApi();
 
 /* ------------------------------------------------------------------ */
@@ -4047,6 +4053,19 @@ app.post('/api/ssh/sync', async (req, res) => {
           }
           const syn = await sshExecCapture(conn, "cd /root/qq-bridge && bad=$(for f in src/bridge.js src/core/*.js; do [ -f \"$f\" ] || continue; node --check \"$f\" >/dev/null 2>&1 || echo \"$f\"; done); if [ -n \"$bad\" ]; then echo \"$bad\"; exit 1; else echo SYNTAX-OK; fi", 120000);
           steps.push({ step: '远端语法体检', ok: syn.ok, msg: syn.ok ? (syn.out.includes('SYNTAX-OK') ? 'src 语法全部通过' : syn.out) : (syn.out || syn.error) });
+          const presetSync = await sshExecCapture(
+            conn,
+            'if [ -d /root/qq-bridge/dsh/agent-presets/qq-chat ]; then mkdir -p /root/.dsh/.agent-presets/qq-chat && cp -rf /root/qq-bridge/dsh/agent-presets/qq-chat/* /root/.dsh/.agent-presets/qq-chat/ && echo PRESET-SYNCED; else echo NO-PRESET; fi',
+            30000,
+          );
+          steps.push({
+            step: '同步 DSH Agent 预设',
+            ok: presetSync.ok,
+            msg: presetSync.ok
+              ? (String(presetSync.out || '').includes('PRESET-SYNCED') ? '已同步至 /root/.dsh/.agent-presets/qq-chat' : '无预设目录，跳过')
+              : (presetSync.error || '预设同步失败'),
+          });
+          if (server.id) remoteBridgeCfgCache.delete(server.id);
           try { unlinkSync(pkg.path); } catch {}
         }
         if (wantConfig) {
@@ -5097,6 +5116,164 @@ app.get('/api/bridge/config', (_req, res) => {
     });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
+
+/* ── 单文件 .md 多人设管理（本机 + SSH 远端双栖智能支持，与角色库 characters/ 互不干扰） ── */
+async function callRemotePersonasFallback(serverId, action, payload = {}) {
+  const cfg = loadConfig();
+  const sid = String(serverId || cfg.activeServerId || '');
+  const server = cfg.servers.find((s) => s.id === sid);
+  if (!server) throw new Error('没有可用的服务器配置');
+  const conn = sshConnections.get(server.id);
+  if (!conn) throw new Error('服务端未连接（先在 SSH 配置页点「连接」）');
+  const b64 = Buffer.from(JSON.stringify({ action, payload }), 'utf8').toString('base64');
+  const script = `node --input-type=module -e '
+import { listPersonaFiles, savePersonaFile, activatePersonaFile, deletePersonaFile } from "/root/qq-bridge/src/lib/persona-files.js";
+const { action, payload } = JSON.parse(Buffer.from("${b64}", "base64").toString("utf8"));
+const root = "/root/qq-bridge";
+let out;
+if (action === "list") out = { ok: true, ...listPersonaFiles(root) };
+else if (action === "save") out = savePersonaFile(root, payload);
+else if (action === "activate") out = activatePersonaFile(root, payload.id || payload.name);
+else if (action === "delete") out = deletePersonaFile(root, payload.id || payload.name);
+console.log(JSON.stringify(out));
+'`;
+  const r = await sshExecCapture(conn, script, 20000);
+  if (!r.ok) throw new Error(r.error || '远端多人设操作失败');
+  const lines = String(r.out || '').trim().split('\n').filter(Boolean);
+  return JSON.parse(lines[lines.length - 1] || '{}');
+}
+
+function invalidateRemotePersonaCache(serverId) {
+  try {
+    const cfg = loadConfig();
+    const sid = String(serverId || cfg.activeServerId || '');
+    if (sid) {
+      remoteBridgeCfgCache.delete(sid);
+      remoteBridgeCfgEpoch.set(sid, (remoteBridgeCfgEpoch.get(sid) || 0) + 1);
+    }
+  } catch { /* ignore */ }
+}
+
+app.get('/api/bridge/personas', async (req, res) => {
+  const scope = chatScopeOf(req.query);
+  if (scope === 'remote') {
+    try {
+      const j = await chatConsoleCall('remote', req.query.serverId, '/api/personas', { timeout: 6000 });
+      if (j?.ok) { res.json({ ...j, scope: 'remote' }); return; }
+    } catch { /* 隧道或远端桥未响应时走 SSH 直调兜底 */ }
+    try {
+      const fb = await callRemotePersonasFallback(req.query.serverId, 'list');
+      res.json({ ...fb, scope: 'remote' });
+      return;
+    } catch (e) {
+      res.json({ ok: false, scope: 'remote', error: e?.message ?? String(e), items: [], activeId: '' });
+      return;
+    }
+  }
+  try {
+    res.json({ ok: true, scope: 'local', ...listPersonaFiles(findBridgeDir()) });
+  } catch (e) {
+    res.status(500).json({ ok: false, scope: 'local', error: e?.message ?? String(e), items: [], activeId: '' });
+  }
+});
+
+app.post('/api/bridge/personas/save', async (req, res) => {
+  const body = req.body ?? {};
+  const scope = chatScopeOf(body);
+  const name = String(body.name ?? body.id ?? '').trim();
+  const content = String(body.content ?? '');
+  if (!name) { res.status(400).json({ ok: false, error: '人设名称不能为空' }); return; }
+  if (!content.trim()) { res.status(400).json({ ok: false, error: '人设内容不能为空' }); return; }
+  const payload = { id: body.id, name, content, activate: Boolean(body.activate) };
+  if (scope === 'remote') {
+    try {
+      const j = await chatConsoleCall('remote', body.serverId, '/api/personas/save', { method: 'POST', body: payload, timeout: 8000 });
+      if (j?.ok) {
+        if (payload.activate) invalidateRemotePersonaCache(body.serverId);
+        res.json({ ...j, scope: 'remote' });
+        return;
+      }
+    } catch { /* fallback */ }
+    try {
+      const fb = await callRemotePersonasFallback(body.serverId, 'save', payload);
+      if (payload.activate) invalidateRemotePersonaCache(body.serverId);
+      res.json({ ...fb, scope: 'remote' });
+      return;
+    } catch (e) {
+      res.status(500).json({ ok: false, scope: 'remote', error: e?.message ?? String(e) });
+      return;
+    }
+  }
+  try {
+    const out = savePersonaFile(findBridgeDir(), payload);
+    res.json({ ...out, scope: 'local' });
+  } catch (e) {
+    res.status(500).json({ ok: false, scope: 'local', error: e?.message ?? String(e) });
+  }
+});
+
+app.post('/api/bridge/personas/activate', async (req, res) => {
+  const body = req.body ?? {};
+  const scope = chatScopeOf(body);
+  const idOrName = String(body.id ?? body.name ?? '').trim();
+  if (!idOrName) { res.status(400).json({ ok: false, error: '请指定要激活的人设 ID 或名称' }); return; }
+  if (scope === 'remote') {
+    try {
+      const j = await chatConsoleCall('remote', body.serverId, '/api/personas/activate', { method: 'POST', body: { id: idOrName }, timeout: 8000 });
+      if (j?.ok) {
+        invalidateRemotePersonaCache(body.serverId);
+        res.json({ ...j, scope: 'remote' });
+        return;
+      }
+    } catch { /* fallback */ }
+    try {
+      const fb = await callRemotePersonasFallback(body.serverId, 'activate', { id: idOrName });
+      invalidateRemotePersonaCache(body.serverId);
+      res.json({ ...fb, scope: 'remote' });
+      return;
+    } catch (e) {
+      res.status(500).json({ ok: false, scope: 'remote', error: e?.message ?? String(e) });
+      return;
+    }
+  }
+  try {
+    const out = activatePersonaFile(findBridgeDir(), idOrName);
+    res.json({ ...out, scope: 'local' });
+  } catch (e) {
+    res.status(500).json({ ok: false, scope: 'local', error: e?.message ?? String(e) });
+  }
+});
+
+app.post('/api/bridge/personas/delete', async (req, res) => {
+  const body = req.body ?? {};
+  const scope = chatScopeOf(body);
+  const idOrName = String(body.id ?? body.name ?? '').trim();
+  if (!idOrName) { res.status(400).json({ ok: false, error: '请指定要删除的人设 ID 或名称' }); return; }
+  if (scope === 'remote') {
+    try {
+      const j = await chatConsoleCall('remote', body.serverId, '/api/personas/delete', { method: 'POST', body: { id: idOrName }, timeout: 8000 });
+      if (j?.ok) {
+        res.json({ ...j, scope: 'remote' });
+        return;
+      }
+    } catch { /* fallback */ }
+    try {
+      const fb = await callRemotePersonasFallback(body.serverId, 'delete', { id: idOrName });
+      res.json({ ...fb, scope: 'remote' });
+      return;
+    } catch (e) {
+      res.status(500).json({ ok: false, scope: 'remote', error: e?.message ?? String(e) });
+      return;
+    }
+  }
+  try {
+    const out = deletePersonaFile(findBridgeDir(), idOrName);
+    res.json({ ...out, scope: 'local' });
+  } catch (e) {
+    res.status(500).json({ ok: false, scope: 'local', error: e?.message ?? String(e) });
+  }
+});
+
 
 /* ── 群聊活跃时段（2026-09-15：需求"管理端加上一个活跃时段配置选项"）────────────────
  * 数据不在 config.json 里，而是桥的 state/activity-windows.json（按会话存分钟区间，支持跨午夜）。

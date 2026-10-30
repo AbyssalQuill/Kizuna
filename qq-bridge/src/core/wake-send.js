@@ -11,7 +11,7 @@ import { getComposedPersonaStamp } from '../lib/preset-compose.js';
 import { currentMode, selfNickname, isSessionAllowedInCurrentMode } from './mode.js';
 import { state, saveState } from './config.js';
 import { createStandbySession, ensureSession } from './dsh-session.js';
-import { formatMemory, formatProfileText, formatContactsLine, recentChatMessages, fetchUnreadChatMessages, markMessagesRead, memoryDigest, warmQueryEmbedding } from './memory.js';
+import { formatMemory, formatProfileText, formatContactsLine, recentChatMessages, fetchUnreadChatMessages, markMessagesRead, memoryDigest, warmQueryEmbedding, getTopSocialBonds } from './memory.js';
 import { formatGroupInfoLine, formatGroupListLine } from './group-cache.js';
 // 语音/表情包：唤醒正文里注入一行「本轮轮到哪一种」的抽签数据（概率与冷却在管理端配：
 // 语音在「语音」页，表情包在桥配置页的「表情包」卡）。两边都关着/概率 0 时不会注入多余内容。
@@ -507,8 +507,9 @@ function buildDynamicTurnContext(key, st, reason) {
     const activeUid = String(lastUnread?.userId || (String(key).startsWith('private:') ? String(key).slice('private:'.length) : '') || '');
     const textSample = unreadList.map((m) => String(m?.plain || m?.text || '')).join('\n');
     const mem = memoryDigest({ uid: activeUid, convKey: key, query: textSample, limit: 4, maxChars: 260 });
-    if (mem) {
-      parts.push(`[Memory]\n${mem}`);
+    const bonds = String(key).startsWith('group:') && activeUid ? getTopSocialBonds(activeUid, key, 2) : '';
+    if (mem || bonds) {
+      parts.push(`[Memory]\n${[mem, bonds ? `- [bond] ${bonds}` : ''].filter(Boolean).join('\n')}`);
     }
     if (textSample && Array.isArray(slangEntries) && slangEntries.length) {
       const slangBlock = detectSlangMatches(textSample, slangEntries, key, 4);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import NoticeBar from '../components/NoticeBar';
 import type { ReactNode } from 'react';
-import { sshServiceAction } from '../api';
+import { sshServiceAction, listPersonas, savePersonaItem, activatePersonaItem, deletePersonaItem, type PersonaFileItem } from '../api';
 import { api, getBridgeConfig, saveBridgeConfig, saveActivityHours, getActivityTargets, resetSpeechRules, listCharacters, importCharacter, instanceAction, listProfiles, saveProfile, deleteProfile, getRemoteBridgeConfig, saveRemoteBridgeConfig, memePacks, memePackUpload, memePackDelete, memePackBind, getToolSchemaStats, type CharacterEntry, type ConfigProfile, type ActivityTarget, type MemePackEntry, type MemePackUploadReport, type ToolSchemaStats } from '../api';
 import { TOOL_SCHEMA_CHARS, SLIM_PREFIX } from '../tool-schema-chars';
 import { ArrowLeft, Save, Upload, FileText, X, HelpCircle, Loader2, Coffee, DownloadCloud, Activity, Users, MessageSquare, MessagesSquare, RotateCcw, Library, BookOpen, Terminal, Layers, Trash2, Check, Server, AlertTriangle, Mic, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
@@ -1620,6 +1620,16 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
 
         {tab === 'persona' && (
           <div className="dp-grid single-col" style={{ width: "100%", maxWidth: "100%" }}>
+            <PersonaManagerDeck
+              scope={target}
+              serverId={remote?.id}
+              currentEditorText={persona}
+              onApplyContent={(text, msgText) => {
+                setPersona(text);
+                setPersonaHasFile(true);
+                if (msgText) setMsg(msgText);
+              }}
+            />
             {/* 人设卡：persona.md */}
             <div className="card dp-card">
               <div className="card-title">
@@ -1827,7 +1837,10 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
               <DocSection title="角色与权限">
                 <ul>
                   <li><code>/role 角色名</code>：切换到 <code>qq-bridge/roles/角色名.md</code> 中定义的角色。</li>
-                  <li><code>/role off</code> 或 <code>/role clear</code>：清除角色，恢复正常人格。</li>
+                  <li><code>/role off</code> 或 <code>/role clear</code>：清除角色库扮演，恢复默认人设。</li>
+                  <li><code>/persona</code> 或 <code>/persona list</code>：查看所有单文件 <code>.md</code> 人设及当前激活项（与角色库互不干扰）。</li>
+                  <li><code>/persona use &lt;名称或ID&gt;</code>：一键切换激活指定单文件人设，下一条消息立即生效。</li>
+                  <li><code>/persona save &lt;名称&gt;</code> / <code>/persona del &lt;名称&gt;</code>：将当前生效人设另存为新单文件人设，或删除指定单文件人设。</li>
                   <li><code>/op QQ号或昵称</code>：将某人设为管理员（仅主人可用；昵称会到通讯录中查找）。</li>
                   <li><code>/op del QQ号或昵称</code>：取消某人的管理员身份。</li>
                 </ul>
@@ -2068,7 +2081,7 @@ function CommonTab({ cfg, ch, onHelp, uploadStickers, remote, writeConfig, onCfg
       <GroupCard title="模型与推理" path="dsh" cfg={cfg} ch={ch} onHelp={onHelp}
         /* 2026-10-24：识图模型请求地址 / 密钥加回来。之前这两个键被 filter 挡住（当时的设想是另开一张识图卡，
          * 但那张卡从没做出来），结果是本机自建识图服务连地址和密钥都填不了 —— 主人说的「加回来并修复」。 */
-        desc="指定连接的隔离 DSH 与回话所用的模型。用法：「模型服务商」留空即自动探测（使用隔离 DSH 中已配置的官方 DeepSeek），也可显式指定；模型留空即用 DSH 默认。注意：修改本卡会在保存后重启隔离 DSH 才生效；「推理档位」是单次调用耗时与思考 token 的最大变量（实测同一次调用出现过 37 秒），嫌慢或嫌贵应先调整本项与「工具与规则」页的精简名单。">
+        desc="配置隔离 DSH 服务商、主模型、识图模型与统一推理档位（聊天、黑话学习、人格学习共用同一推理档位）。保存后自动同步至隔离 DSH。">
         {/* 语言模型密钥不再是"保存了但不生效"的空字段：
             保存时写进隔离 DSH 的凭据文件（600），这里显示其配置状态。 */}
         <div className="cfg-card-desc" style={{ marginTop: 6 }}>
@@ -4145,4 +4158,227 @@ export async function warmBridgePage(remote?: { id: string; name?: string; host?
     /* NapCat 令牌现状那一卡（挂在本页里，读的还是本机 NapCat） */
     warmNapcatTokens(),
   ]);
+}
+
+
+function PersonaManagerDeck({
+  scope,
+  serverId,
+  currentEditorText,
+  onApplyContent,
+}: {
+  scope: "local" | "remote";
+  serverId?: string;
+  currentEditorText: string;
+  onApplyContent: (content: string, notice?: string) => void;
+}) {
+  const [items, setItems] = useState<PersonaFileItem[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [tip, setTip] = useState<string | null>(null);
+
+  const loadList = async () => {
+    setBusy(true);
+    try {
+      const r = await listPersonas(scope, serverId);
+      if (r.ok && Array.isArray(r.items)) {
+        setItems(r.items);
+        setActiveId(r.activeId || "");
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadList();
+  }, [scope, serverId]);
+
+  const handleSaveCurrent = async (activateNow: boolean) => {
+    const label = nameInput.trim();
+    if (!label) {
+      setTip("请先输入要保存的人设名称（例如：小鲸鱼大肥鱼、温婉学姐）");
+      return;
+    }
+    if (!currentEditorText.trim()) {
+      setTip("下方 persona.md 编辑器内容为空，无法保存");
+      return;
+    }
+    setBusy(true);
+    setTip(null);
+    try {
+      const r = await savePersonaItem({
+        id: editingId || undefined,
+        name: label,
+        content: currentEditorText,
+        activate: activateNow,
+        scope,
+        serverId,
+      });
+      if (r.ok) {
+        setItems(r.items || []);
+        setActiveId(r.activeId || "");
+        setNameInput("");
+        setEditingId("");
+        setTip(activateNow ? `已保存并激活单文件人设「${r.name || label}」` : `已保存单文件人设「${r.name || label}」`);
+        if (activateNow) onApplyContent(currentEditorText, `已激活单文件人设「${r.name || label}」`);
+      } else {
+        setTip(r.error || "保存失败");
+      }
+    } catch (e: any) {
+      setTip(e?.message || "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleActivate = async (it: PersonaFileItem) => {
+    setBusy(true);
+    setTip(null);
+    try {
+      const r = await activatePersonaItem({ id: it.id, scope, serverId });
+      if (r.ok) {
+        setItems(r.items || []);
+        setActiveId(r.activeId || it.id);
+        onApplyContent(r.content ?? it.content, `已切换为单文件人设「${it.name}」，下一条消息立即生效`);
+        setTip(`已切换生效：「${it.name}」`);
+      } else {
+        setTip(r.error || "切换失败");
+      }
+    } catch (e: any) {
+      setTip(e?.message || "切换失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (it: PersonaFileItem) => {
+    if (!window.confirm(`确认删除单文件人设「${it.name}」？`)) return;
+    setBusy(true);
+    setTip(null);
+    try {
+      const r = await deletePersonaItem({ id: it.id, scope, serverId });
+      if (r.ok) {
+        setItems(r.items || []);
+        setActiveId(r.activeId || "");
+        setTip(`已删除人设「${it.name}」`);
+      } else {
+        setTip(r.error || "删除失败");
+      }
+    } catch (e: any) {
+      setTip(e?.message || "删除失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleNewTemplate = () => {
+    const tpl = [
+      "# --- 1. [identity_and_soul] 核心身份与性格设定 ---",
+      "",
+      "identity: 请在此填写角色核心身份、性格反差与日常状态",
+      "",
+      "# --- 2. [voice_and_typing_habits] 说话风格与打字习惯 ---",
+      "",
+      "tone: 自然鲜活的年轻网感口语，不用句号收尾，不写括号动作描写",
+      "",
+      "# --- 3. [owner_exclusive_flirting_and_sweet_talk] 独属于主人的调情配合与多样情话 ---",
+      "",
+      "owner_bond: 对主人（[OWNER]）展现出独一份的偏爱、暧昧拉扯与自然情话配合",
+      "",
+    ].join("\n");
+    setEditingId("");
+    setNameInput("新自定义人设");
+    onApplyContent(tpl);
+    setTip("已载入小写下划线风格人设模板到下方编辑器，修改后点击「保存并激活」即可");
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 4 }}>
+      <div className="card-title" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <Layers size={17} /> 单文件 .md 多人设管理与切换（{scope === "remote" ? "服务端" : "本机"}）
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 400, color: "var(--nc-foreground-400)" }}>
+          独立于角色库 <code>characters/</code> · 支持聊天指令 <code>/persona use &lt;名称&gt;</code> 秒级切换
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+        <input
+          className="input"
+          style={{ flex: "1 1 220px", maxWidth: 320 }}
+          placeholder="人设名称（如：小鲸鱼大肥鱼 / 毒舌猫娘）"
+          value={nameInput}
+          onChange={(e) => setNameInput(e.target.value)}
+        />
+        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => handleSaveCurrent(true)}>
+          <Save size={14} /> {editingId ? "更新并激活该人设" : "将下方编辑器另存为新人设并激活"}
+        </button>
+        <button className="btn btn-soft btn-sm" disabled={busy} onClick={handleNewTemplate}>
+          + 新建人设模板
+        </button>
+        <button className="btn btn-soft btn-sm" disabled={busy} onClick={loadList}>
+          <RotateCcw size={13} /> 刷新列表
+        </button>
+      </div>
+
+      {tip && (
+        <div className="cfg-card-desc" style={{ marginTop: 8, color: "var(--nc-primary-500)", fontWeight: 600 }}>
+          {tip}
+        </div>
+      )}
+
+      <div className="persona-deck">
+        {items.map((it) => {
+          const isAct = it.active || it.id === activeId;
+          return (
+            <div key={it.id} className={`persona-tile ${isAct ? "active" : ""}`}>
+              <div>
+                <div className="persona-tile-head">
+                  <span className="persona-tile-title" title={it.name}>{it.name}</span>
+                  <span className={`badge ${isAct ? "badge-success" : "badge-soft"}`}>
+                    {isAct ? "当前生效" : `${it.chars}字`}
+                  </span>
+                </div>
+                <div className="persona-tile-preview">{it.preview || "（暂无摘要预览）"}</div>
+              </div>
+              <div className="persona-tile-actions">
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={busy}
+                  onClick={() => handleActivate(it)}
+                >
+                  <Check size={13} /> {isAct ? "重新激活" : "切换生效"}
+                </button>
+                <button
+                  className="btn btn-soft btn-sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setEditingId(it.id);
+                    setNameInput(it.name);
+                    onApplyContent(it.content);
+                    setTip(`已将「${it.name}」载入下方编辑器，修改后可点「更新并激活」`);
+                  }}
+                >
+                  编辑
+                </button>
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={busy}
+                  onClick={() => handleDelete(it)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

@@ -280,7 +280,7 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
             ? (
               <>
                 <div className="card-title">隔离 DSH 配置</div>
-                <div className="field-hint">本页配置本机隔离 DSH 实例（独立端口与独立 <code>DSH_HOME</code>）。修改后点「保存配置」写入；端口与主目录改动需重启该实例方可生效。</div>
+                <div className="field-hint">配置本机隔离 DSH 实例（独立端口与独立 DSH_HOME），改动后重启该实例生效。</div>
                 <div className="form-row">
                   <div className="form-group">
                     <label className="label">端口</label>
@@ -316,7 +316,7 @@ export default function InstanceConfig({ state, instanceId, onBack, onRefresh }:
                 </div>
                 <div className="field-hint">
                   {instanceId === 'napcat-local'
-                    ? '本页配置本机 NapCat 的启动方式，供管理器拉起本机 QQ 网关。留空的项由启动器自动探测；修改后点「保存配置」写入。下方开关的取舍见其自身说明。'
+                    ? '配置本机 NapCat 启动参数，留空项自动探测。'
                     : '本页配置本机桥实例的启动命令、工作目录与 WebUI 端口。修改后点「保存配置」写入；端口改动需重启该实例方可生效。'}
                 </div>
                 <div className="form-group">

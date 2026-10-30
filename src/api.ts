@@ -1155,3 +1155,64 @@ export const updateApply = (opts: { sha?: string; overwriteAll?: boolean; build?
 
 export const updateRollback = () =>
   api<UpdateRollbackResult>('/update/rollback', { method: 'POST', body: '{}' });
+
+
+/* ========================================================================== */
+/* 单文件 .md 多人设管理 API（本机 + SSH 远端双栖，与角色库 characters/ 独立） */
+/* ========================================================================== */
+export interface PersonaFileItem {
+  id: string;
+  name: string;
+  active: boolean;
+  chars: number;
+  preview: string;
+  content: string;
+  updatedAt: number;
+}
+
+export interface PersonaFilesResult {
+  ok: boolean;
+  scope?: 'local' | 'remote';
+  activeId: string;
+  items: PersonaFileItem[];
+  error?: string;
+}
+
+export const listPersonas = (scope: 'local' | 'remote' = 'local', serverId?: string) => {
+  const qs = new URLSearchParams({ scope });
+  if (serverId) qs.set('serverId', serverId);
+  return api<PersonaFilesResult>(`/bridge/personas?${qs.toString()}`);
+};
+
+export const savePersonaItem = (payload: {
+  id?: string;
+  name: string;
+  content: string;
+  activate?: boolean;
+  scope?: 'local' | 'remote';
+  serverId?: string;
+}) =>
+  api<PersonaFilesResult & { id?: string; name?: string }>('/bridge/personas/save', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+export const activatePersonaItem = (payload: {
+  id: string;
+  scope?: 'local' | 'remote';
+  serverId?: string;
+}) =>
+  api<PersonaFilesResult & { id?: string; name?: string; content?: string }>('/bridge/personas/activate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+export const deletePersonaItem = (payload: {
+  id: string;
+  scope?: 'local' | 'remote';
+  serverId?: string;
+}) =>
+  api<PersonaFilesResult & { deletedId?: string; deletedName?: string }>('/bridge/personas/delete', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });

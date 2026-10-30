@@ -614,10 +614,23 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                     style={active ? { borderColor: 'var(--nc-primary-400)', boxShadow: 'var(--nc-shadow-s)' } : undefined}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span className={`status-dot ${connected ? 'online' : active ? 'loading' : 'offline'}`} />
                         <b>{s.name}</b>
                         {connected && <span className="badge badge-success">已连接</span>}
+                        {connected && state?.remoteStatus && (
+                          <span className="ssh-health-pills">
+                            <span className={`ssh-pill ${state.remoteStatus.dsh?.running ? 'up' : 'down'}`}>
+                              DSH {state.remoteStatus.dsh?.running ? '运行中' : '未起'}
+                            </span>
+                            <span className={`ssh-pill ${state.remoteStatus.napcat?.running ? 'up' : 'down'}`}>
+                              NapCat {state.remoteStatus.napcat?.running ? '在线' : '未起'}
+                            </span>
+                            <span className={`ssh-pill ${state.remoteStatus.bridge?.running ? 'up' : 'down'}`}>
+                              Core {state.remoteStatus.bridge?.running ? '运行中' : '未起'}
+                            </span>
+                          </span>
+                        )}
                       </div>
                       <div style={{ color: 'var(--nc-foreground-500)', fontSize: 12, marginTop: 2 }}>
                         {s.username}@{s.host}:{s.port}
@@ -713,7 +726,7 @@ export default function SSHConfig({ state, onBack, onRefresh }: Props) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: syncDir === 'merge' ? 0.45 : 1 }}>
                       <input type="checkbox" checked={syncCode} onChange={(e) => setSyncCode(e.target.checked)} disabled={syncDir === 'merge'} />
-                      桥代码（src/ 目录，不含数据）
+                      桥代码与 DSH 预设（src/ + 单文件人设库 + dsh/agent-presets/qq-chat，自动保护远端 config.json）
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: syncDir === 'merge' ? 0.45 : 1 }}>
                       <input type="checkbox" checked={syncState} onChange={(e) => setSyncState(e.target.checked)} disabled={syncDir === 'merge'} />

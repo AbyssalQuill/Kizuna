@@ -114,8 +114,16 @@ export function apply(ctx) {
       return `"${innerName}" is a session auth token, not a tool name. Pass it in the token field of a tool call, never as the tool itself.`;
     }
 
-    // ② 后台学习任务工具豁免（离线分析与画像抽取无须遵循群聊会话流程）
-    if (/qq_learning_/.test(effectiveName) || /qq_learning_/.test(name)) {
+    // ② 后台学习任务工具豁免与专属工具集收敛（PersonaAgent / SlangAgent 严禁误调聊天发送或空间工具）
+    if (/qq_learning_/.test(effectiveName) || /qq_learning_/.test(name) || /qq_slang_/.test(effectiveName)) {
+      return;
+    }
+    const wsTitle = String(exec.agent?.session?.workspaceTitle || exec.agent?.workspace?.title || '');
+    if (/^(PersonaAgent|SlangAgent)$/i.test(wsTitle)) {
+      const allowedLearner = /^(mcp__napcat-host__qq_learning_|qq_learning_|mcp__web-search-safe__|run_code)/i.test(effectiveName || name);
+      if (!allowedLearner) {
+        return `Learner session (${wsTitle}) is restricted to corpus/submit/search tools only; "${effectiveName || name}" is blocked.`;
+      }
       return;
     }
 

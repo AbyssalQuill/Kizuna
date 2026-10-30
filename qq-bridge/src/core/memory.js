@@ -904,3 +904,79 @@ export function memoryStats() {
   };
 }
 
+/**
+ * 单轮折叠前异步微事实自动提炼（零 LLM 开销）：
+ * 识别用户在对话中明确表达的称呼偏好、喜好、雷区、重要约定或近期状态，自动落入分层记忆库并生成 BGE 512d 向量。
+ */
+const MICRO_FACT_PATTERNS = [
+  { re: /^(?:以后|你可以)?(?:叫我|称呼我为?)["'“「]?([^\s"'”」，。！？,!?]{1,12})["'”」]?/, cat: 'preference', imp: 82, tpl: (m) => `偏好称呼：希望被叫做「${m[1]}」` },
+  { re: /我(?:最喜欢|超喜欢|特别喜欢|最爱吃|最爱喝|平时喜欢)([^，。！？\n]{2,28})/, cat: 'preference', imp: 72, tpl: (m) => `个人喜好：喜欢${m[1].trim()}` },
+  { re: /我(?:最讨厌|超讨厌|特别反感|不吃|对.+过敏)([^，。！？\n]{1,28})/, cat: 'taboo', imp: 78, tpl: (m) => `个人禁忌/雷区：${m[0].trim()}` },
+  { re: /记住(?:了|哦|呀|哈)?[，：:\s]+([^。！？\n]{4,60})/, cat: 'fact', imp: 85, tpl: (m) => `叮嘱记住的事项：${m[1].trim()}` },
+  { re: /别忘了[，：:\s]*([^。！？\n]{4,60})/, cat: 'promise', imp: 84, tpl: (m) => `提醒别忘的约定：${m[1].trim()}` },
+  { re: /我(?:生日是|的生日在)([^，。！？\n]{2,20})/, cat: 'fact', imp: 88, tpl: (m) => `生日信息：${m[1].trim()}` },
+];
+
+export function extractAndRememberMicroFact(uid, convKey, rawText, isOwner = false) {
+  try {
+    const cleanUid = String(uid ?? '').trim();
+    const text = String(rawText ?? '').replace(/\[CQ:[^\]]*\]/g, '').trim();
+    if (!cleanUid || text.length < 4 || text.length > 180 || text.startsWith('/')) return null;
+    for (const item of MICRO_FACT_PATTERNS) {
+      const m = item.re.exec(text);
+      if (m) {
+        const content = item.tpl(m);
+        const tier = isOwner && item.imp >= 82 ? 'permanent' : 'durable';
+        return rememberEntry({
+          uid: cleanUid,
+          convKey: String(convKey ?? ''),
+          category: isOwner && item.cat === 'preference' ? 'owner' : item.cat,
+          content,
+          importance: isOwner ? Math.min(98, item.imp + 10) : item.imp,
+          tier,
+          pinned: isOwner && item.imp >= 85,
+          source: 'auto-micro-fact',
+        });
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * 群友双向社交羁绊查询：基于 chat.db 中引用互动与同频对话提取某用户的群内熟人关系网。
+ */
+export function getTopSocialBonds(uid, convKey = '', limit = 3) {
+  try {
+    const cleanUid = String(uid ?? '').trim();
+    if (!cleanUid) return '';
+    const cdb = initChatDb();
+    if (!cdb) return '';
+    const whereConv = convKey && String(convKey).startsWith('group:') ? 'AND conv_key = ?' : "AND conv_key LIKE 'group:%'";
+    const args = convKey && String(convKey).startsWith('group:') ? [cleanUid, String(convKey)] : [cleanUid];
+    const rows = cdb.prepare(`
+      SELECT content FROM chat_messages
+      WHERE sender_uid = ? ${whereConv} AND content LIKE '[引用 %'
+      ORDER BY ts_ms DESC LIMIT 120
+    `).all(...args);
+    if (!rows.length) return '';
+    const counts = new Map();
+    for (const r of rows) {
+      const m = /^\[引用\s+([^：:\]]+)[：:]/.exec(String(r.content || ''));
+      if (m && m[1]) {
+        const target = m[1].trim();
+        if (target && target !== 'DeepSeek Harness' && target !== '我') {
+          counts.set(target, (counts.get(target) || 0) + 1);
+        }
+      }
+    }
+    const top = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, Math.max(1, limit))
+      .map(([name, cnt]) => `${name}(互动${cnt}次)`);
+    return top.length ? `常互动群友: ${top.join('、')}` : '';
+  } catch {
+    return '';
+  }
+}
+

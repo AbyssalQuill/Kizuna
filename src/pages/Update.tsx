@@ -332,17 +332,40 @@ export default function Update({ onBack, modal }: Props) {
             <>
               {/* 版本条（2026-10-24 精简）：一行放当前/上游 + 有更新标记 + 检查按钮，下一行提交说明。
                   原来这里是两张卡片 + 一条「发现新版本」横幅，同一件事说了三遍，还占掉半屏。 */}
-              <div className="card kz-upd-ver">
-                <div className="kz-upd-ver-line">
+              <div className="ag-update-hero">
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span className={`badge ${jobRunning ? "badge-info" : behind ? "badge-warn" : "badge-success"}`}>
+                    {jobRunning ? "AGENT UPDATING" : behind ? "发现新版本" : "已是最新"}
+                  </span>
                   <span className="kz-upd-ver-key">当前</span>
-                  <code style={SHA_CODE}>{current ? shortOf(current) : '未记录'}</code>
+                  <code style={SHA_CODE}>{current ? shortOf(current) : "未记录"}</code>
                   <ArrowRight size={13} style={{ opacity: 0.45 }} />
-                  <span className="kz-upd-ver-key">上游</span>
-                  <code style={SHA_CODE}>{latest ? shortOf(latest) : '未检查'}</code>
-                  {behind ? <span className="badge badge-warn">有更新</span> : null}
-                  <button className="btn btn-sm btn-soft" style={{ marginLeft: 'auto' }} disabled={locked} onClick={() => void doCheck()}>
-                    {busy === 'check' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} 检查更新
+                  <span className="kz-upd-ver-key">GitHub 上游</span>
+                  <code style={SHA_CODE}>{latest ? shortOf(latest) : "未检查"}</code>
+                  <button className="btn btn-sm btn-soft" style={{ marginLeft: "auto" }} disabled={locked} onClick={() => void doCheck()}>
+                    {busy === "check" ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} 检查更新
                   </button>
+                </div>
+                <div className="ag-step-track">
+                  {[
+                    { k: "check", idx: 1, title: "1. 检查上游", desc: "比对远端 Commit" },
+                    { k: "plan", idx: 2, title: "2. 差异分析", desc: "生成文件指纹清单" },
+                    { k: "apply", idx: 3, title: "3. 智能合并", desc: "保护本地配置与数据" },
+                    { k: "build", idx: 4, title: "4. 构建生效", desc: "编译前端并热重载" },
+                  ].map((stItem) => {
+                    const stepNum = job.phase === "done" ? 5 : job.phase === "building" ? 4 : job.phase === "applying" ? 3 : (job.phase === "planning" || job.phase === "preparing" || busy === "plan") ? 2 : (job.phase === "checking" || busy === "check") ? 1 : 0;
+                    const isDone = stepNum > stItem.idx;
+                    const isAct = stepNum === stItem.idx;
+                    return (
+                      <div key={stItem.k} className={`ag-step-node ${isAct ? "active" : ""} ${isDone ? "done" : ""}`}>
+                        <span className="ag-step-dot">{isDone ? "✓" : stItem.idx}</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 12.5 }}>{stItem.title}</div>
+                          <div style={{ fontSize: 11, color: "var(--nc-foreground-400)" }}>{stItem.desc}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="kz-upd-ver-sub" title={verSubTitle}>{verSubTitle}</div>
               </div>

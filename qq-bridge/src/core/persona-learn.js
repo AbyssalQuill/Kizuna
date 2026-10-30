@@ -21,7 +21,7 @@ import { STATE_DIR, ROOT } from '../lib/paths.js';
 import { readJsonSafe, atomicWriteJson, atomicWriteText } from '../lib/json-fs.js';
 import { dshReady, ensureVisionModel } from './dsh-session.js';
 import { learnerSessions, learnerWaiters, learnerCollectors, markPersistentLearner, unmarkPersistentLearner, isLearnerSessionGone, learnSessionExistsForRestore } from './slang.js';
-import { initMemoryDb, setProfileField, getProfile, profileDisplayName, rememberEntry } from './memory.js';
+import { initMemoryDb, setProfileField, getProfile, profileDisplayName, rememberEntry, getTopSocialBonds } from './memory.js';
 import { initChatDb } from './chat-db.js';
 import { ensureLearningToken } from './learning-token.js';
 import { composePersonaProfile } from './persona-text.js';
@@ -309,6 +309,8 @@ export function formatExistingPersonaForMerge(uid) {
   if (Array.isArray(lib.catchphrases) && lib.catchphrases.length) snap.catchphrases = lib.catchphrases.slice(0, 8);
   if (Array.isArray(lib.taboos) && lib.taboos.length) snap.taboos = lib.taboos.slice(0, 6);
   if (lib.affinity !== undefined && lib.affinity !== null) snap.affinity = lib.affinity;
+  const bonds = getTopSocialBonds(cleanUid, '', 3);
+  if (bonds) snap.socialBonds = bonds;
   if (!Object.keys(snap).length) return '';
   return JSON.stringify(snap);
 }

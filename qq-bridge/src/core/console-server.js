@@ -40,6 +40,12 @@ import {
 } from '../sticker-lib.js';
 import { resolveFaceRef, formatFaceList } from '../qq-faces.js';
 import { makeDocx } from '../make-docx.js';
+import {
+  listPersonaFiles,
+  savePersonaFile,
+  activatePersonaFile,
+  deletePersonaFile,
+} from '../lib/persona-files.js';
 import { segmentsToText, parseJsonCardText, extractMediaFromSegments, extractFilesFromSegments,
   execFileBuffer, decodeTextBuffer, extractDocxText, parseFileBuffer, fetchFileBytes, readFileContent } from '../lib/message-parse.js';
 import {
@@ -922,6 +928,47 @@ export function startConsoleServer() {
         atomicWriteText(roleFile, content + (content.endsWith('\n') ? '' : '\n'));
         log(`控制台：创建人格「${name}」`);
         sendJson({ ok: true, role: name });
+        return;
+      }
+      // ── 单文件 .md 多人设管理（与角色库 characters/ 互不干扰） ──────────────────
+      if (req.method === 'GET' && url.pathname === '/api/personas') {
+        sendJson({ ok: true, ...listPersonaFiles(ROOT) });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/personas/save') {
+        const body = await readBody();
+        const name = String(body.name ?? body.id ?? '').trim();
+        const content = String(body.content ?? '');
+        if (!name) { sendJson({ ok: false, error: '人设名称不能为空' }, 400); return; }
+        if (!content.trim()) { sendJson({ ok: false, error: '人设内容不能为空' }, 400); return; }
+        const res = savePersonaFile(ROOT, {
+          id: body.id,
+          name,
+          content,
+          activate: Boolean(body.activate),
+        });
+        log(`控制台：保存单文件人设「${res.name}」(${res.id}) activate=${Boolean(body.activate)}`);
+        sendJson(res);
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/personas/activate') {
+        const body = await readBody();
+        const idOrName = String(body.id ?? body.name ?? '').trim();
+        if (!idOrName) { sendJson({ ok: false, error: '请指定要激活的人设 ID 或名称' }, 400); return; }
+        const res = activatePersonaFile(ROOT, idOrName);
+        if (!res.ok) { sendJson(res, 404); return; }
+        log(`控制台：切换单文件人设 → 「${res.name}」(${res.id})`);
+        sendJson(res);
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/personas/delete') {
+        const body = await readBody();
+        const idOrName = String(body.id ?? body.name ?? '').trim();
+        if (!idOrName) { sendJson({ ok: false, error: '请指定要删除的人设 ID 或名称' }, 400); return; }
+        const res = deletePersonaFile(ROOT, idOrName);
+        if (!res.ok) { sendJson(res, 404); return; }
+        log(`控制台：删除单文件人设「${res.deletedName}」(${res.deletedId})`);
+        sendJson(res);
         return;
       }
       // ── 黑话库管理 ──────────────────────────────────────────────────────

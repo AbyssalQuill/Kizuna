@@ -2,7 +2,7 @@
 import { redactKnownTokensOnly } from '../lib/outbound-text.js';
 import { log } from '../lib/log.js';
 import { sanitizeForwardId } from '../forward.js';
-import { persistChatMessage, recentChatMessages, rememberContactName, findChatMessageMedia } from './memory.js';
+import { persistChatMessage, recentChatMessages, rememberContactName, findChatMessageMedia, extractAndRememberMicroFact } from './memory.js';
 import { getSocialState, saveSocialState, social, seenForwardIds } from './social-state.js';
 import { messageMediaStore } from './session-state.js';
 import { currentMode } from './mode.js';
@@ -98,6 +98,11 @@ export function appendSocialMessage(key, sender, textContent, plainContent, quot
     if (topicHit || participantHit) t.lastMentionAt = Date.now();
   }
   persistChatMessage(key, msg);
+  try {
+    if (userId != null && lowerPlain) {
+      extractAndRememberMicroFact(userId, key, lowerPlain, isOwner);
+    }
+  } catch { /* 微事实提炼失败不影响主流程 */ }
   saveSocialState();
 }
 
