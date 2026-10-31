@@ -528,7 +528,7 @@ export function buildWakePrompt(key, reason) {
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
   /* 2026-10-29 主人：唤醒正文刻意不带转录，读工具结果又在回合末被剪掉 —— 不读上下文就等于失忆。
    * 这一行把 step_3 摆在正文里（生成位置附近，最省 token 的强力提示），配合 qq-tool-restrict 的门禁。 */
-  const perceptionLine = '[perception] step_3_qq_get_recent_messages_before_sending\n';
+  const perceptionLine = '[perception] before_speaking_call_in_one_batch: qq_load_persona + qq_get_recent_messages (or qq_get_unread_messages), then send\n';
   /* 2026-10-29：自主动唤醒（追念 / 主动看顾）必须带一条「没有新东西就别说话」。
    * 线上实测这类唤醒占了不小比例，且经常补一句和上一条几乎一样的话 —— 用户体感就是「不聪明」。 */
   const selfInitiated = /^(afterthought|proactiveCheck|timeout|activityStart|timeout|replyCheck)$/.test(String(reason || ''));
