@@ -2241,3 +2241,26 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 - 代码提交 Commit `1a29669`；
 - 同步至服务器 `/root/qq-bridge` 和 `.dsh/.agent-presets/qq-chat/`；
 - 平滑重启 `qq-bridge.service`，调用 `/api/social/reset` 清空老 Session，100% 挂载新版纯净二次元沉浸系统提示词。
+
+## 45. 2026-10-31 通用角色扮演框架升级：人设特性彻底剥离，坚决禁用动作描写括号，全面支持多模态图文混排内嵌发送
+
+### 45.1 架构核心演进与用户指示
+- **坚决禁用动作描写括号**：
+  - 系统提示词明确声明 `pure_dialogue_without_action_brackets`；
+  - `config.json` 开启 `social.speech.stripActionBrackets: true`，出站层正则自动过滤动作括号，保留纯符号颜文字（如 `( ˘ω˘ )`），彻底杜绝舞台剧动作括号破坏 QQ 聊天真实感。
+- **特定人设解耦，打造“通用角色扮演引擎”**：
+  - 彻底将 `master_private_only_sweet_and_devoted`（甜美）、傲娇等特定性格词从系统提示词（`agent.cordis.yml`）剥离；
+  - 系统提示词只提供通用的情境与关系规则（`private_chat_intimate_and_devoted_to_peer` / `group_chat_friendly_and_engaging_with_peers`）；
+  - 角色的一切性格、身世、口癖、偏好 100% 独立交给人设卡（`persona.md`），保证换任何角色卡都完全通用，系统提示词零污染。
+- **解除条数与表情包枷锁，释放千变万化多模态发送**：
+  - 彻底删除 `prefer_single_bubble_most_turns` 与死板字数/条数限制，改为 `flexible_cadence_concise_yet_varying_freely_in_length`；
+  - 彻底删除死板的表情包频率限制，改为 `dispatch_memes_freely_as_wanted`；
+  - 多模态发送全面支持：`diverse_modalities_text_images_voice_or_inline_mixed_on_demand`，支持图文同一气泡同框内嵌（text+image）、先图后文、先文后图、纯图、纯语音、纯文字。
+- **底层图文混排解析增强（`src/core/console-server.js`）**：
+  - 扩展 `messages` 数组参数解析，自动提取元素中的 `image`/`file` 字段并与 `images` 智能融合，确保模型无论以何种结构传图文，都能 100% 准确组合为同一条 OneBot 图文同框内嵌气泡发出。
+
+### 45.2 验证与上线
+- 本地 127 个文件静态作用域与语法检查 100% 通过；
+- 测试套件全部通过（`session-silent` 20/20、全套回归测试 PASS）；
+- 提交 Commit `d29d2a7`；
+- 服务器端完成文件同步、`config.json` 启用 `stripActionBrackets: true`，平滑重启并执行 `/api/social/reset`。
