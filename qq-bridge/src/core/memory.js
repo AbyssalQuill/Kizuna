@@ -915,6 +915,23 @@ const MICRO_FACT_PATTERNS = [
   { re: /记住(?:了|哦|呀|哈)?[，：:\s]+([^。！？\n]{4,60})/, cat: 'fact', imp: 85, tpl: (m) => `叮嘱记住的事项：${m[1].trim()}` },
   { re: /别忘了[，：:\s]*([^。！？\n]{4,60})/, cat: 'promise', imp: 84, tpl: (m) => `提醒别忘的约定：${m[1].trim()}` },
   { re: /我(?:生日是|的生日在)([^，。！？\n]{2,20})/, cat: 'fact', imp: 88, tpl: (m) => `生日信息：${m[1].trim()}` },
+  /* 2026-10-31 追加（主人：「包括记忆，没落地吗」）。实测 47 天只落了 2 条 fact ——
+   * 上面那 6 条要求「以后叫我 XX」「我最喜欢 XX」这种教科书句式，真实对话里几乎不出现。
+   * 下面补的是实际出现过的说法：考试/面试/开学这类**近期安排**、学业身份、姓名、年龄。
+   * 仍然坚持零 LLM、纯模式匹配；宁可少记，也不把「好困」这类临时状态灌进长期库
+   * （README §4.4 的群聊防污染口径）。 */
+  { re: /我(?:今天|明天|后天|这周|下周|下下周|下周[一二三四五六日天]|周[一二三四五六日天])[^。！？\n]{0,20}(?:要|得|准备|打算|约了|去)?[^。！？\n]{0,14}(考试|面试|上课|开学|出差|加班|放假|体检|答辩|比赛|报名)/, cat: 'plan', imp: 76, tpl: (m) => `近期安排：${m[0].trim()}` },
+  { re: /我(?:是|在)(?:读)?(高中|初中|大学|大[一二三四]|研[一二三]|高三|高二|高一|初三|初二|初一)[^，。！？\n]{0,16}/, cat: 'identity', imp: 74, tpl: (m) => `学业身份：${m[0].trim()}` },
+  { re: /我(?:叫|名字叫|名字是|网名是)([^，。！？\n]{2,12})/, cat: 'identity', imp: 80, tpl: (m) => `姓名/网名：${m[1].trim()}` },
+  { re: /我(?:今年)?(\d{1,2})(?:岁|年级)/, cat: 'identity', imp: 70, tpl: (m) => `年龄/年级：${m[0].trim()}` },
+];
+
+/* 私聊专用：真实私聊里主语经常省略（「下周一和三要考试了」「有点慌」）。
+ * 一对一场景说话人唯一，省掉主语不会张冠李戴，所以这里允许没有「我」。
+ * 群里不放宽 —— 群聊省略主语会把别人的安排记到发言者头上，那比不记更糟。 */
+const PRIVATE_FACT_PATTERNS = [
+  { re: /^(?:今天|明天|后天|这周|下周|下下周|下周[一二三四五六日天]|周[一二三四五六日天])[^。！？\n]{0,20}(?:要|得|准备|打算|约了|去)?[^。！？\n]{0,14}(考试|面试|上课|开学|出差|加班|放假|体检|答辩|比赛|报名)/, cat: 'plan', imp: 74, tpl: (m) => `近期安排：${m[0].trim()}` },
+  { re: /(?:在|读)(高中|初中|大学|大[一二三四]|研[一二三]|高三|高二|高一|初三)[^，。！？\n]{0,16}/, cat: 'identity', imp: 70, tpl: (m) => `学业身份：${m[0].trim()}` },
 ];
 
 export function extractAndRememberMicroFact(uid, convKey, rawText, isOwner = false) {
@@ -922,7 +939,9 @@ export function extractAndRememberMicroFact(uid, convKey, rawText, isOwner = fal
     const cleanUid = String(uid ?? '').trim();
     const text = String(rawText ?? '').replace(/\[CQ:[^\]]*\]/g, '').trim();
     if (!cleanUid || text.length < 4 || text.length > 180 || text.startsWith('/')) return null;
-    for (const item of MICRO_FACT_PATTERNS) {
+    const isPrivate = String(convKey ?? '').startsWith('private:');
+    const patterns = isPrivate ? [...MICRO_FACT_PATTERNS, ...PRIVATE_FACT_PATTERNS] : MICRO_FACT_PATTERNS;
+    for (const item of patterns) {
       const m = item.re.exec(text);
       if (m) {
         const content = item.tpl(m);

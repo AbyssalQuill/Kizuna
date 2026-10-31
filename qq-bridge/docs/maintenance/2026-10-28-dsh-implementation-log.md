@@ -1775,3 +1775,45 @@ else { UNC_MAX = 16; }
   带 key → `source:"key"`。说明只有"唯一在途"这一条路会被自动补齐。
 - 待现场确认：下次模型再漏 key 时，日志应出现
   `[napcat-safe] <工具> 缺 key，按唯一在途会话补齐（active-turn）: <key>` 且**只有一次调用**。
+
+## 42. 条目 58（2026-10-31 14:15）：「记忆没落地」是真的；「三段论」是 anchor 里写死的两步模板
+
+### 42.1 记忆：47 天只落了 2 条 fact
+查 `state/memory.db`（memory_entries 99 行）：
+| category | 条数 | 来源 |
+| --- | --- | --- |
+| persona | 45 | 人格学习 |
+| qzone_post | 28 | 发说说 |
+| note | 12 | 手工/工具 |
+| rule | 11 | 主人规则 |
+| **fact** | **2** | 自动提炼 |
+| lesson | 1 | — |
+
+- 最新一条写入 `2026-10-30 00:40`，内容是 persona（人格学习产物），**不是对话提炼**。
+- 近 4 个会话里 `qq_memory_remember` 实际调用 **0 次**；`qq_memory_search` 3 次。
+- 近 24h 日志里微事实相关行数 **0**。
+- 根因：`extractAndRememberMicroFact` 只有 6 条正则，且都要求教科书句式
+  （`^以后叫我XX`、`我最喜欢XX`、`记住：…`）。真实对话里没人这么说话 ——
+  主人这 47 天说的是「下周一和三要考试了」「我在读高三」「我今年17岁」，一条都不匹配。
+
+### 42.2 修法：补真实说法，私聊允许省略主语
+- 新增 4 条：近期安排（考试/面试/开学/答辩…）、学业身份、姓名、年龄。
+- 新增 `PRIVATE_FACT_PATTERNS`：**只在私聊**放宽成可以没有「我」
+  （「下周一和三要考试了」这种）。群里不放宽 —— 群聊省略主语会把别人的安排记到发言者头上，
+  那比不记更糟。
+- 仍然零 LLM、纯模式匹配；临时状态（「好困」）不记，沿用 README §4.4 的防污染口径。
+- 实测（服务器实跑，用假 uid 写入后立刻删掉，库里恢复 99 行）：
+  `下周一和三要考试了` → `{"ok":true,"id":151,"tier":"durable"}` + 自动回填 512 维向量；
+  `有点慌`/`好困`/`小鲸鱼一次吃多少大米饭` → 不记。
+
+### 42.3 「三段论」：anchor 里写死了「先共情再表态」
+- `wake-send.js` 的尾锚原来是
+  `[anchor] persona_first empathy_then_stance spoken_words_only vary_sentence_shape vary_bubble_length`。
+  `empathy_then_stance` 就是「先接情绪、再给表态」的两步模板；接上一条建议或反问，
+  读起来正好是三段论。主人 03:25 自己也说过「以后可以随便发多样化的消息，你这太定式了」。
+- 改成 `[anchor] persona_first spoken_words_only vary_sentence_shape vary_bubble_length` ——
+  只留「人设优先 / 只写口语 / 句形和气泡长度都要变」，不再规定先说什么后说什么。
+- 按要求**没有**往提示词里加任何对话示例（README §391 记着「样例气泡会被照抄」这条教训）。
+
+### 42.4 部署
+`memory.js` / `wake-send.js` 已同步，重启后 active。

@@ -349,7 +349,11 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 这已经不是「短」，是「齐」—— 一条 + ≤18 字 + 尽量陈述收尾，三条叠起来把形状压成了同一个模板，
    * 主人说的「又回归人机味」就是这个：每句都短、都断言、都不问。
    * 放宽成「长度和条数都可以变」，问号只在真不确定时才用。 */
-  const anchor = '[anchor] persona_first empathy_then_stance spoken_words_only vary_sentence_shape vary_bubble_length';
+  /* 2026-10-31 主人：「三段论」「太定式了」。原来这一行钉着 empathy_then_stance ——
+   * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
+   * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
+   * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
+  const anchor = '[anchor] persona_first spoken_words_only vary_sentence_shape vary_bubble_length';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
