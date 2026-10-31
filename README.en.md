@@ -1,4 +1,4 @@
-# Kizuna Pro — Comprehensive Technical Whitepaper & Engineering Documentation
+# Kizuna — Comprehensive Technical Whitepaper & Engineering Documentation
 
 <p align="left">
   <a href="./README.md">简体中文 (README.md)</a> | <strong>English</strong>
@@ -79,7 +79,7 @@
 
 ## 1. System Architecture Overview
 
-Kizuna Pro is purpose-built to eliminate the chronic failures of LLM-based instant messaging bots: robotic customer-service tone, multi-turn context snowballing and self-poisoning, mechanical reply-to-everything spamming, thread disorientation in fast-moving group chats, long-term amnesia or destructive profile overwriting, and massive tool-schema token overhead. The architecture strictly decouples the **Management & Orchestration Plane** from the **Real-Time Messaging & Inference Data Plane**.
+Kizuna is purpose-built to eliminate the chronic failures of LLM-based instant messaging bots: robotic customer-service tone, multi-turn context snowballing and self-poisoning, mechanical reply-to-everything spamming, thread disorientation in fast-moving group chats, long-term amnesia or destructive profile overwriting, and massive tool-schema token overhead. The architecture strictly decouples the **Management & Orchestration Plane** from the **Real-Time Messaging & Inference Data Plane**.
 
 ### 1.1 Process Topology & Plane Separation
 
@@ -229,7 +229,7 @@ Conventional chat agents append turn after turn into an ever-growing conversatio
 2. **Persona Dilution & Token Explosion**: As puluhan turns of messages and tool results accumulate, per-request tokens balloon to 50k–150k, diluting system persona weight below 5%.
 3. **Cache-Busting Compaction Overhead**: Periodic history summarization rewrites the conversation prefix, invalidating LLM Prefix KV-Caches and triggering expensive full-context re-reads.
 
-**Kizuna Pro's Solution — Permanent Single Session (`permanent: true`) + Physical Single-Turn Collapse (`collapseToSingleTurn`)**:
+**Kizuna's Solution — Permanent Single Session (`permanent: true`) + Physical Single-Turn Collapse (`collapseToSingleTurn`)**:
 - **Permanent Session Reuse**: Keeps `social.autoReset.permanent: true` so session IDs remain stable without disk churn.
 - **Turn-End Physical Collapse (`qq-persona-ephemeral.mjs`)**:
   On `agent/turn-stopping`, `collapseToSingleTurn(session)` inspects the DSH session surface:
@@ -381,7 +381,7 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 ### 3.7 Architectural Evolution & Quantitative Comparison (Before vs. After)
 
-| Dimension | Legacy Architecture (Before) | Current Kizuna Pro Architecture (After) |
+| Dimension | Legacy Architecture (Before) | Current Kizuna Architecture (After) |
 | :--- | :--- | :--- |
 | **Session & Context Lifecycle** | **Multi-turn snowballing**: Infinite accumulation of history and tool results; self-poisoning from past errors | **Permanent Single Session + `collapseToSingleTurn`**: Physically collapses every finished turn back to 1 clean turn |
 | **System & Persona Prompts** | Mixed Chinese/English prose + `[sample_bubbles]`, causing mechanical parroting of sample lines | **100% pure lowercase `snake_case` phrases (zero Chinese, zero sample bubbles)** + owner-exclusive flirting spectrum |
@@ -620,7 +620,7 @@ Provided by `qq-bridge/src/mcp-web-search-safe.js` (`web-search-safe`):
 ---
 
 ### 5.19 Three-Layer Token Optimization: `slimTools`, `mcp-compressor` Proxy & Single-Turn Collapse
-Because the full JSON Schema of all 101+ MCP tools totals **117,734 – 124,104 characters (~36.8k – 38.7k tokens/step)**—accounting for ~87% of a single LLM request—Kizuna Pro implements three orthogonal token-saving layers:
+Because the full JSON Schema of all 101+ MCP tools totals **117,734 – 124,104 characters (~36.8k – 38.7k tokens/step)**—accounting for ~87% of a single LLM request—Kizuna implements three orthogonal token-saving layers:
 
 1. **Layer 1 — Registration-Time Allow/Deny Tiers (`social.slimTools`)**:
    - `off` (100%), `low` (~50%), `medium` (~39%), `high` (~29% with zero loss of commonly used capabilities), and `extreme` (~7%, core 9 tools only).
@@ -816,7 +816,7 @@ systemctl restart dsh-web     # 2. Reloads MCP child processes and agent profile
 
 ## 12. Acknowledgments
 
-The creation and evolution of Kizuna Pro build upon the foundation and inspiration of the following open-source projects (the core scheduling kernel `qq-bridge`, built-in DSH plugins, and visual management console are developed in-house):
+The creation and evolution of Kizuna build upon the foundation and inspiration of the following open-source projects (the core scheduling kernel `qq-bridge`, built-in DSH plugins, and visual management console are developed in-house):
 
 - **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — Special thanks to the DeepSeek team for open-sourcing the modern, modular agent runtime and event-sourced surface operations.
 - **[NapCatQQ](https://github.com/NapNeko/NapCatQQ)** — Special thanks to the NapNeko team for maintaining a high-performance OneBot v11 protocol implementation on modern QQ NT.

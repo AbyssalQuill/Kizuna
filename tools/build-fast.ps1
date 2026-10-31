@@ -1,5 +1,5 @@
 # ============================================================
-# Kizuna Pro - 前端极速重构与同步 (PowerShell Native)
+# Kizuna - 前端极速重构与同步 (PowerShell Native)
 # ============================================================
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent

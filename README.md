@@ -1,4 +1,4 @@
-# Kizuna Pro 全景技术白皮书与工程使用文档
+# Kizuna 全景技术白皮书与工程使用文档
 
 <p align="left">
   <strong>简体中文</strong> | <a href="./README.en.md">English (README.en.md)</a>
@@ -79,7 +79,7 @@
 
 ## 1. 体系架构总览
 
-Kizuna Pro 是专为解决大语言模型接入即时通讯（QQ）生态时常见的“回复带浓厚 AI 客服味”、“长多轮上下文滚雪球自毒化”、“句句必回机械刷屏”、“群聊多线程断片答非所问”、“长周期失忆或覆盖旧画像”、“工具 Schema 消耗巨额 Token”等核心痛点而构建的生产级全栈系统。整套架构在物理和逻辑上严格分离了**管理运维编排面**与**实时消息推理数据面**。
+Kizuna 是专为解决大语言模型接入即时通讯（QQ）生态时常见的“回复带浓厚 AI 客服味”、“长多轮上下文滚雪球自毒化”、“句句必回机械刷屏”、“群聊多线程断片答非所问”、“长周期失忆或覆盖旧画像”、“工具 Schema 消耗巨额 Token”等核心痛点而构建的生产级全栈系统。整套架构在物理和逻辑上严格分离了**管理运维编排面**与**实时消息推理数据面**。
 
 ### 1.1 系统拓扑与进程划分
 
@@ -238,7 +238,7 @@ Kizuna Pro 是专为解决大语言模型接入即时通讯（QQ）生态时常�
 2. **人设注意力稀释與 Token 账单失控**：随着多轮历史与工具调用结果堆积，单次请求上下文膨胀至 5 万~15 万 Token，系统提示词与角色卡的注意力权重被稀释至 5% 以下；
 3. **跨轮工具结果剪枝的冗余复杂性**：在长多轮架构下，需要额外维护复杂的跨轮工具结果剪枝（`tool-result-pruner`）与周期性摘要压缩（`compaction`），而每次触发摘要压缩都会改写会话前缀，导致 LLM Prefix KV-Cache 失效并产生昂贵的全量重读计费。
 
-**Kizuna Pro 的终极工程解法：永久单会话（`permanent: true`）+ 回合末单轮物理折叠（`collapseToSingleTurn`）**：
+**Kizuna 的终极工程解法：永久单会话（`permanent: true`）+ 回合末单轮物理折叠（`collapseToSingleTurn`）**：
 - **会话 ID 永久复用**：保持 `social.autoReset.permanent: true`，无需频繁新建销毁 DSH 会话目录；
 - **回合末物理折叠为纯净单轮（`qq-persona-ephemeral.mjs`）**：
   在每个思考回合结束（`agent/turn-stopping`）时，`collapseToSingleTurn(session)` 自动扫描当前会话的 Surface 事件节点：
@@ -399,7 +399,7 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 ### 3.7 架构演进与量化对比总表（Before vs After）
 
-| 维度 | 早期传统方案（Before） | 当前 Kizuna Pro 架构（After） |
+| 维度 | 早期传统方案（Before） | 当前 Kizuna 架构（After） |
 | :--- | :--- | :--- |
 | **会话与上下文架构** | **多轮滚雪球累积**：历史对话与工具结果无限叠加，错误口癖与攻击性言论自回归放大 | **永久单会话 + 单轮物理折叠（`collapseToSingleTurn`）**：每回合末除系统提示词与工具表外全部折叠清空，永久保持物理单轮 |
 | **系统与人设提示词** | 中英混杂散文 + 对话样例气泡（`sample_bubbles`），模型死板照搬示例台词，易出戏 | **100% 纯英文小写下划线短语（零中文、零样例气泡污染）**，高密度符号锚定 + 主人专属调情光谱 |
@@ -868,7 +868,7 @@ systemctl restart dsh-web     # 2. 再重启 DSH，热加载最新 MCP 子进程
 
 ## 12. 致谢（Acknowledgments）
 
-Kizuna Pro 的诞生与演进离不开以下开源项目的启发与基础设施支持（核心调度内核 `qq-bridge` 与所有内置 DSH 扩展插件均为本项目原创自研）：
+Kizuna 的诞生与演进离不开以下开源项目的启发与基础设施支持（核心调度内核 `qq-bridge` 与所有内置 DSH 扩展插件均为本项目原创自研）：
 
 - **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — 感谢 DeepSeek 团队开源的高性能 Agent 运行时宿主环境与事件溯源框架。
 - **[NapCatQQ](https://github.com/NapNeko/NapCatQQ)** — 感谢 NapNeko 团队维护的高性能新版 QQ NT OneBot v11 协议网关。
