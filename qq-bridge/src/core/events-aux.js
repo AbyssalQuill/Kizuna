@@ -169,8 +169,49 @@ export async function handlePokeNotice(event) {
     saveSocialState();
     scheduleWake(key, 'bootstrap');
   } else if (st.wakeConfig?.triggers?.poke) {
-    scheduleWake(key, 'poke');
+    /* 2026-10-31 主人：「不智能」。谬儿园（group:1073589775）09:18~11:14 实测：
+     * 星痕连续拍了 8 次，每次都被唤醒、每次回 4~6 条，还越说越急
+     * （「第四次了吧」「第六次了」「再拍我可要收门票了」）—— 读起来就是被戳一下叫一声。
+     * 拍一拍本身只是「嗨一下」，同一个人短时间内连拍属于同一件事，不该一次一次叫醒。
+     * 规则：同一会话同一个人 90 秒内再拍，只记进上下文、不唤醒；
+     * 10 分钟内累计拍到第 3 次，冷却拉到 10 分钟，直接掐断这种连环。 */
+    if (!pokeCooledDown(key, senderId)) {
+      scheduleWake(key, 'poke');
+    } else {
+      appendActivity(`${key} 拍一拍冷却中（${senderId}），只记入上下文不唤醒`);
+    }
   }
+}
+
+/* 拍一拍冷却表：key = 会话|拍人者，记最近一次放行时间与 10 分钟内的次数。
+ * 只影响「要不要为这一下唤醒模型」，拍一拍事件本身照旧入库（模型下次醒来能看到谁拍了它）。 */
+const POKE_REPEAT_MS = 90 * 1000;
+const POKE_STREAK_WINDOW_MS = 10 * 60 * 1000;
+const POKE_STREAK_LIMIT = 3;
+const POKE_STREAK_COOLDOWN_MS = 10 * 60 * 1000;
+const pokeState = new Map();
+function pokeCooledDown(convKey, senderId) {
+  const now = Date.now();
+  const k = String(convKey) + '|' + String(senderId || 'unknown');
+  const rec = pokeState.get(k) || { passAt: 0, streakAt: 0, streak: 0, blockUntil: 0 };
+  if (rec.blockUntil > now) return true;
+  if (rec.passAt && now - rec.passAt < POKE_REPEAT_MS) {
+    if (rec.streakAt && now - rec.streakAt <= POKE_STREAK_WINDOW_MS) rec.streak += 1;
+    else { rec.streakAt = now; rec.streak = 1; }
+    if (rec.streak >= POKE_STREAK_LIMIT) rec.blockUntil = now + POKE_STREAK_COOLDOWN_MS;
+    pokeState.set(k, rec);
+    return true;
+  }
+  rec.passAt = now;
+  if (!rec.streakAt || now - rec.streakAt > POKE_STREAK_WINDOW_MS) { rec.streakAt = now; rec.streak = 1; }
+  pokeState.set(k, rec);
+  if (pokeState.size > 500) {
+    for (const [kk, vv] of pokeState) {
+      if (now - (vv.passAt || 0) > POKE_STREAK_WINDOW_MS && now - (vv.blockUntil || 0) > 0) pokeState.delete(kk);
+      if (pokeState.size <= 300) break;
+    }
+  }
+  return false;
 }
 
 export async function handleInputStatusNotice(event) {
