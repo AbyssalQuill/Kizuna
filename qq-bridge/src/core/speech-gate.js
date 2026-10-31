@@ -109,9 +109,13 @@ export function checkSpeechGate({ key, st, reason, cfg, now = Date.now() }) {
   const score = estimateReplyLikelihood(st, now, pending);
   const detailParts = [];
 
-  // ① 最短间隔：从上一次放行或上一次真发言算起。用 _speechLastPassAt 而不是只看 lastAiReplyAt，
-  //    因为"叫醒了但模型没说话"也必须算一次占用，否则沉默一轮后下一秒又被叫醒。
-  const minGapMs = Math.max(0, Number(conf.minGapMs ?? 120000));
+  // ① 最短间隔：只当保险丝用，限的是「同一波消息别被连叫两次」。
+  /* 2026-10-31 主人：「现在变更不智能了」「你查谬儿园啊」。实测近 8 小时 group:868756515
+   * 224 条消息、我只说了 3 条；speech-gate 拦了 168 次，其中 160 次是 gap。
+   * 也就是「该不该说话」实际由 2 分钟的计时器决定，而不是由内容决定 —— 群里一分钟好几条时，
+   * 两分钟间隔把所有机会都掐掉了。现在 gap 收回到 20 秒（防连叫），总量上限交给 quota
+   * （默认 5 条/30 分钟），模型自己的判断仍是第一道。 */
+  const minGapMs = Math.max(0, Number(conf.minGapMs ?? 20000));
   const lastTouch = Math.max(Number(st?._speechLastPassAt) || 0, Number(st?.lastAiReplyAt) || 0);
   if (minGapMs > 0 && lastTouch > 0 && now - lastTouch < minGapMs) {
     const wait = Math.round((minGapMs - (now - lastTouch)) / 1000);

@@ -2295,7 +2295,12 @@ export function startConsoleServer() {
         const messages = Array.isArray(rawMessages)
           ? rawMessages.map((m) => {
               if (typeof m === 'string') return m.trim();
-              if (m && typeof m === 'object') return String(m.text ?? m.content ?? m.message ?? '').trim();
+              if (m && typeof m === 'object') {
+                // 同 mcp-napcat-safe：认 {"type":"text","data":{"text":"…"}} 这种内容块
+                const bt = (m.type === 'text' || m.data) ? (m.data?.text ?? (m.type === 'text' ? m.text : undefined)) : undefined;
+                if (typeof bt === 'string' && bt.trim()) return bt.trim();
+                return String(m.text ?? m.content ?? m.message ?? '').trim();
+              }
               return String(m ?? '').trim();
             }).filter(Boolean)
           : (isRawString ? [String(rawMessages).trim()].filter(Boolean) : []);

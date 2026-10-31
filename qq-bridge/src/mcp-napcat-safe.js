@@ -1635,6 +1635,15 @@ registerTool(
         finalMessages = finalMessages.map((item) => {
           if (typeof item === 'string') return item;
           if (item && typeof item === 'object') {
+            /* 2026-10-31 真机事故：群里出现一条 bubble 原文是
+             *   {"type":"text","data":{"text":"zkbl 是啥黑话 拆不出来"}}
+             * 模型把「内容块」对象塞进了 messages 数组。它没有 text/content/message 字段，
+             * 于是掉到最后那个 JSON.stringify 兜底，整串 JSON 原样发进了群。
+             * 这里先认 Anthropic 风格的内容块（type:text + data.text / text），取里面那句话。 */
+            const blockText = (item.type === 'text' || item.data)
+              ? (item.data?.text ?? (item.type === 'text' ? item.text : undefined))
+              : undefined;
+            if (typeof blockText === 'string' && blockText.trim()) return blockText.trim();
             return String(item.text ?? item.content ?? item.message ?? JSON.stringify(item));
           }
           return String(item ?? '');

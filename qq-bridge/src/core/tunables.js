@@ -29,7 +29,7 @@ export const TUNABLE_SPECS = [
   // 拦截点只有一个：scheduleWake（所有唤醒的唯一入口），所以 probability / replyCheck /
   // proactiveCheck 三条自唤醒链都受同一套额度约束。@/点名/提问/关键词/拍一拍/私聊 完全不受限。
   { key: 'speechGateEnabled', path: ['social', 'speech', 'enabled'], type: 'bool', label: '群聊发言闸门', desc: 'true=群聊里"没被点名"的自唤醒要过闸门（间隔+配额+别抢话+概率门）；false=全部放行。被 @/点名/提问/关键词 叫到的永远不受影响' },
-  { key: 'speechMinGap', path: ['social', 'speech', 'minGapMs'], type: 'dur', min: 0, max: 1800000, label: '群发言最短间隔', desc: '两次"主动接话"之间至少隔多久（默认 120000ms）。被叫醒但没说话也算占用，避免沉默一轮又立刻被叫醒' },
+  { key: 'speechMinGap', path: ['social', 'speech', 'minGapMs'], type: 'dur', min: 0, max: 1800000, label: '群发言最短间隔', desc: '两次"主动接话"之间的保险丝（默认 20000ms）：只防同一波消息被连叫两次。真正限制发言总量的是「窗口内最多主动说几条」，别用这一项压总量' },
   { key: 'speechMaxPerWindow', path: ['social', 'speech', 'maxPerWindow'], type: 'float', min: 0, max: 30, label: '窗口内最多主动说几条', desc: '滑动窗口配额，按**已发出**的消息数算（叫醒后选择沉默不消费额度）。取整，0=不限' },
   { key: 'speechWindow', path: ['social', 'speech', 'windowMs'], type: 'dur', min: 300000, max: 21600000, label: '配额窗口长度', desc: '上面的配额按多长时间统计（默认 1800000ms = 30 分钟）' },
   { key: 'speechMaxSelfRatio', path: ['social', 'speech', 'maxSelfRatio'], type: 'float', min: 0, max: 1, label: '自己占比上限', desc: '近 5 分钟消息里"自己说的占比"超过它就闭嘴（默认 0.35；至少 4 条才算）。群体吵不吵看这个最准，0=不限' },
