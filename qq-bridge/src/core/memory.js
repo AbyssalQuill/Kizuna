@@ -42,7 +42,7 @@ import {
 } from '../lib/embedding.js';
 // 聊天记录库（state/chat.db）：本模块只用到"总量计数 + 索引重建 + 状态"这几件事，
 // 其余聊天函数通过下面的 re-export 透出给调用方。
-import { chatCounters, chatDbStats, rebuildChatFts } from './chat-db.js';
+import { chatCounters, chatDbStats, rebuildChatFts, initChatDb } from './chat-db.js';
 
 export let memDb = null;
 
