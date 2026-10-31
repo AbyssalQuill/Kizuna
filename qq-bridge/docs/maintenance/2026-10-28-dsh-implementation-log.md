@@ -1884,3 +1884,34 @@ NapCat `get_group_list` 实取：
 ### 44.4 部署
 `events-aux.js` 已同步，重启后 active。日志里会看到
 `拍一拍冷却中（<uid>），只记入上下文不唤醒`。
+
+## 45. 条目 61（2026-10-31 14:37）：星痕那题不是「记不住」，是**没去查**；3619804038 是今天新来的私聊
+
+### 45.1 星痕那轮的真实调用链（session-b1d7e13 / 11:09）
+```text
+11:09:41 USER [Mid-turn] 星痕：谁叫你昨天骂我
+11:09:43 CALL qq_send_message ["骂你？我昨天说你啥了，我自己都不记得", ...]
+```
+该轮只调了：`qq_load_persona` / `get_time` / `qq_get_recent_messages(limit=20)` ×2。
+**一次 `qq_memory_search` 都没有。** 11:11 又说「我这边记录翻烂了也没找着骂人那段」，
+仍然没调历史检索。
+- `qq_get_recent_messages` 读的是内存里的最近窗口（分钟级），问「昨天」必然查不到；
+- 翻历史要用 `qq_memory_search`（直接查 SQLite chat.db）。
+- 所以这不是记忆没存，是**工具路由没指清楚**：模型手上只有「最近消息」这一把尺子，
+  就去量昨天的事了。
+- 修：`[tools]` 行加 `earlier_than_today_or_what_you_said_before_use_qq_memory_search_not_qq_get_recent_messages`。
+  不加示例台词，只指路由。
+
+### 45.2 3619804038 是谁
+- 今天 11:44 才出现的私聊，11:44–11:56 共 12 分钟：in=35 / out=73。
+- 开口第一句是「大傻鱼」，没有记忆库画像（memory_entries 里查不到这个 uid）。
+- 12 分钟里回了 73 条 —— 平均一分钟 6 条，那个会话没有收尾机制，属于待观察对象。
+
+### 45.3 两条口径修正（主人明确）
+- **问号只有 3–10% 是规定，不是缺陷**：主人定的是不主动提问，所以这条从「拟人指标」里删掉，
+  以后不再拿问号率当退化信号。
+- **长短句混着来**：采纳。`[bubbles]` 行加 `bubble_length_from_one_word_to_a_full_paragraph`，
+  明确允许一条气泡只有一个词，也允许一整段。
+
+### 45.4 部署
+`wake-send.js` 已同步，重启后 active。

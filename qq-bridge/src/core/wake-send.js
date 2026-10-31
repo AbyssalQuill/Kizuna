@@ -484,8 +484,15 @@ function ownerMarkLines() {
 function styleGuideLines() {
   return [
     '[style] friendly_internet_tone pure_spoken_words no_action_brackets use_wo_or_drop_subject tail_no_period',
-    '[tools] parallel_step_1_2_3_supported in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally group_treat_all_as_netizens closure_reply_literal_ok',
-    '[bubbles] natural_bubble_count_freely_by_context_and_mood several_remarks_use_messages_array_one_remark_per_bubble',
+    /* 2026-10-31 主人：「昨天说星痕的她没搜记忆来回答」。真机 11:09:43 —— 星痕问「谁叫你昨天骂我」，
+     * 它回「我昨天说你啥了，我自己都不记得」，那一轮只调了 qq_load_persona / get_time /
+     * qq_get_recent_messages(limit 20)，**一次 qq_memory_search 都没调**。
+     * qq_get_recent_messages 读的是内存里的最近窗口（分钟级），问「昨天」它必然查不到；
+     * 翻历史要用 qq_memory_search（直接查 SQLite）。这里把这条路由指清楚，不加任何示范台词。 */
+    '[tools] parallel_step_1_2_3_supported in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally group_treat_all_as_netizens closure_reply_literal_ok earlier_than_today_or_what_you_said_before_use_qq_memory_search_not_qq_get_recent_messages',
+    /* 2026-10-31 主人同意「长短句混着来这个思想」：允许一句话就是一个字/一个词，
+     * 也允许一整段，别把每条都修成中等长度的完整句。 */
+    '[bubbles] natural_bubble_count_freely_by_context_and_mood several_remarks_use_messages_array_one_remark_per_bubble bubble_length_from_one_word_to_a_full_paragraph',
   ].join('\n');
 }
 
