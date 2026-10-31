@@ -536,9 +536,9 @@ export function sendMessages(key, messages, delays, replyToMessageId, atUserId =
        * 不看清零、不看批内序号：模型是一次工具调用发一条气泡，任何"只给第 2 条起算"的写法
        * 在真实调用形态下都等于完全不延迟（342 次调用 / 0 次一次带多条）。
        * linearEnabled=false（或 perChar=0）→ typingDelayMs 返回 null → 不延迟，节奏交回调用方。 */
-      const paceLen = String(msg || '').length;
+      const paceLen = String(msg || '').length + (img ? 6 : 0);
       const pace = typingDelayMs(paceLen);
-      if (pace != null && pace > 0) log(`[pace] ${key} ${paceLen} 字 → 等 ${pace}ms 再发`);
+      if (pace != null && pace > 0) log(`[pace] ${key} ${paceLen} 字(含图等效) → 等 ${pace}ms 再发`);
       if (pace != null && pace > 0) await sleep(pace);
       try {
         /* ── 全语音发送模式（state/voice-config.json 的 send.allVoice）──────────────
@@ -577,7 +577,7 @@ export function sendMessages(key, messages, delays, replyToMessageId, atUserId =
             messageId: sendData && sendData.message_id != null ? String(sendData.message_id) : null,
             quoted: useReply ? String(useReply) : null,
           });
-          if (pace != null) markSendDelivered(key, msg ? String(msg).length : 0);
+          if (pace != null) markSendDelivered(key, msg ? String(msg).length : (img ? 6 : 0));
         }
       } catch (error) {
         log(`QQ 发送失败 (${key}):`, error?.message ?? error); if (error?.stack) log('[send-stack]', error.stack.split(String.fromCharCode(10)).slice(0, 8).join(' | '));
@@ -590,7 +590,7 @@ export function sendMessages(key, messages, delays, replyToMessageId, atUserId =
   }
   return currentSendChain(key).then(() => {
     if (failed.length > 0) {
-      const err = new Error(`QQ 发送失败 ${failed.length}/${messages.length} 条：${failed[0]?.message ?? '未知错误'}`);
+      const err = new Error(`QQ 发送失败 ${failed.length}/${total} 条：${failed[0]?.message ?? '未知错误'}`);
       err.sent = sent.slice();
       throw err;
     }

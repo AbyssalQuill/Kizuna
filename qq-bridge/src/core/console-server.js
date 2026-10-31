@@ -2396,7 +2396,7 @@ export function startConsoleServer() {
         if (idem.skipped.length) {
           logIdempotencyBlock(key, idem, idem.skipped.some((s) => s.why === 'near-dup') ? '近 90 秒内已经发过同一句（只忽略空白与句尾句号）' : '上一批发送部分失败，这是模型重发整批');
           appendActivity(`${key} [send] 幂等挡下重复气泡 ${idem.skipped.length} 条：${idem.skipped.map((s) => String(s.text).slice(0, 20)).join('、')}`);
-          if (!idem.kept.length) {
+          if (!idem.kept.length && !images.length) {
             sendJson({
               ok: true, key, sent: 0, failed: 0, skipped: idem.skipped.length,
               note: '这些气泡上一批已经真的发出去了（那一批里失败的是别的条），本次不再重复发送；请直接收尾，不要重发。'
@@ -2405,6 +2405,7 @@ export function startConsoleServer() {
           }
         }
         const sendList = idem.kept.map((x) => x.text);
+        const totalExpected = Math.max(sendList.length, images.length);
         const delays = computeGaps(sendList, gapMode, gapMs, gaps, sendCfg);
         // 先做发送频率检查并预占额度，再解析引用目标，避免未限流的引用查询打爆 OneBot。
         const st = getSocialState(key);
@@ -2431,12 +2432,12 @@ export function startConsoleServer() {
         const maxPerHour = Number(sendCfg.maxSendPerHour) || 0;
         const recentMinute = (st.sendTimes || []).filter((t) => now - t < 60000).length;
         const recentHour = (st.sendTimes || []).filter((t) => now - t < 3600000).length;
-        if ((maxPerMinute > 0 && recentMinute + sendList.length > maxPerMinute) || (maxPerHour > 0 && recentHour + sendList.length > maxPerHour)) {
+        if ((maxPerMinute > 0 && recentMinute + totalExpected > maxPerMinute) || (maxPerHour > 0 && recentHour + totalExpected > maxPerHour)) {
           sendJson({ ok: false, error: '发送频率超限，请稍后再试' }, 429);
           return;
         }
         // 先预占发送额度，避免并发绕过限频
-        for (let i = 0; i < sendList.length; i++) st.sendTimes.push(now);
+        for (let i = 0; i < totalExpected; i++) st.sendTimes.push(now);
         if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
         let quotedInfo = null;
         let actualReplyToMessageId = replyToMessageId;
@@ -2444,7 +2445,7 @@ export function startConsoleServer() {
           const resolved = await resolveReplyTarget(st, kind, id, String(replyToMessageId).trim());
           if (!resolved) {
             // 引用解析失败：回滚已预占的发送额度
-            for (let i = 0; i < sendList.length; i++) {
+            for (let i = 0; i < totalExpected; i++) {
               const idx = st.sendTimes.indexOf(now);
               if (idx >= 0) st.sendTimes.splice(idx, 1);
             }
@@ -2483,8 +2484,8 @@ export function startConsoleServer() {
           const callNow = sendCallTimes.get(key) || [];
           callNow.push(now);
           sendCallTimes.set(key, callNow.filter((t) => now - t < 60000));
-          log(`[default] 工具统一发送 ${key}: 成功 ${sentMessages.length}/${sendList.length} 条`);
-          appendActivity(`${key} [default] 工具统一发送：成功 ${sentMessages.length}/${sendList.length} 条`);
+          log(`[default] 工具统一发送 ${key}: 成功 ${sentMessages.length}/${totalExpected} 条`);
+          appendActivity(`${key} [default] 工具统一发送：成功 ${sentMessages.length}/${totalExpected} 条`);
           if (sentMessages.length > 0) {
             scheduleReplyCheck(key);
             scheduleAfterthought(key);
@@ -2510,7 +2511,7 @@ export function startConsoleServer() {
            * 所以要把"我替你引用了哪条"报回模型；现在引用只可能来自模型显式传的 replyToMessageId，
            * 上方 `quoted` 就是那条（模型自己传的，它当然知道），再回一个 autoQuoted 只会白占字符。 */
           sendJson({
-            ok: true, key, sent: sentMessages.length, failed: sendList.length - sentMessages.length, delays, quoted: quotedInfo,
+            ok: true, key, sent: sentMessages.length, failed: Math.max(0, totalExpected - sentMessages.length), delays, quoted: quotedInfo,
             ...(idem.skipped.length ? { dedupSkipped: idem.skipped.length } : {}),
             ...(atDropped ? { atUserIdDropped: atDropped } : {}),
             // atNote 与 burstHint 共用 hint 字段：两个都有时合并，别让后者把 atUserId 的回执吞掉

@@ -2264,3 +2264,32 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 - 测试套件全部通过（`session-silent` 20/20、全套回归测试 PASS）；
 - 提交 Commit `d29d2a7`；
 - 服务器端完成文件同步、`config.json` 启用 `stripActionBrackets: true`，平滑重启并执行 `/api/social/reset`。
+
+## 46. 2026-10-31 动作描写改为遵循人设并关闭正则过滤、合并 `qq_send_meme` 至 `qq_send_message`、全链路表情包支持线性延迟与插话打断机制调研
+
+### 46.1 核心演进与用户指示
+1. **动作神态括号描写改为“遵循人设”，关闭死板正则过滤**：
+   - 将系统提示词（`dsh/agent-presets/qq-chat/agent.cordis.yml`）中的 `pure_dialogue_without_action_brackets` 调整为 `pure_dialogue_without_action_brackets_unless_persona_requires`：默认像真实聊天一样进行纯粹自然对话，不输出舞台剧式的动作神态小括号描写；若具体角色人设要求带动作描写则保留，人设不要求则不输出；
+   - 关闭本地与服务器端 `config.json` 的 `social.speech.stripActionBrackets: false`，摒弃死板正则过滤，完全由模型根据人设与通用提示词自然发挥。
+2. **群聊防无脑接话、防连发刷屏与防评论员人机腔**：
+   - 在 `agent.cordis.yml` 的 `[SCENARIO]` 层明确声明 `group_chat_friendly_and_selective_join_naturally_stay_silent_when_unnecessary_never_spam_or_comment_like_a_bot`，引导模型在群聊中有选择性地自然参与，没必要接话时保持安静，绝不当路过点评员人机、绝不无脑接话与连发多条刷屏。
+3. **将 `qq_send_meme` 参数与能力完整合并至 `qq_send_message`**：
+   - 在 `src/mcp-napcat-safe.js` 中提取通用内置表情包解析函数 `resolveMemeToTmpPath`（支持按 `meme`、`file`、`fileName` 精确/模糊匹配，以及按 `query`、`emotion`、`tag`、`pack` 语义检索并复制到临时目录）；
+   - 在 `qq_send_message` 中合入 `meme`、`file`、`fileName`、`query`、`emotion`、`tag`、`pack` 参数，并支持在 `images` 数组中直接传入内置表情包文件名或情绪词自动解析；
+   - 支持单工具统一实现：纯发表情包（省略 `messages`）、单气泡图文/文字+表情包同框内嵌、先表情包后文字、先文字后表情包；
+   - 更新 `qq_meme_search` 选图提示，统一引导模型通过 `qq_send_message` 发送表情包；同时保留 `qq_send_meme` 注册块以确保历史测试套件（`tests/meme-query-fallback.test.js`）100% 兼容。
+4. **全链路表情包与图片支持线性打字延迟（`typingDelayMs`）**：
+   - **修复纯图/纯表情包 0 延迟缺陷（`src/core/qq-send.js`）**：此前 `sendMessages` 计算 `paceLen = String(msg || '').length`，当发送纯图片或纯表情包（`msg === ''`, `img` 非空）时 `paceLen = 0`，导致 `typingDelayMs(0)` 返回 `null`（0 延迟秒发）。现改为 `const paceLen = String(msg || '').length + (img ? 6 : 0)`，赋予图片/表情包等效 6 字打字长度，使纯表情包与图文混排气泡均走统一的线性打字延迟；
+   - **统一 `qq_send_meme` 走桥接发送链（`src/mcp-napcat-safe.js`）**：此前 `qq_send_meme` 在不带引用时直连 OneBot 发送，绕过了 `enqueueSend` 与 `typingDelayMs`。现统一路由至 `/api/social/send-message`；
+   - **收藏表情与原生表情接入线性延迟（`src/core/sticker.js`）**：`sendSticker2` 与 `sendQqFace2` 接入 `typingDelayMs` 与 `markSendDelivered`；
+   - **修正 `/api/social/send-message` 纯图记账（`src/core/console-server.js`）**：以 `totalExpected = Math.max(sendList.length, images.length)` 统计发送条数与 `failed` 计数，解决纯表情包发送时 `sendList.length === 0` 导致 `failed: -1` 的问题。
+5. **输出时被插话打断（Barge-in / Interruption）开源实践调研**：
+   - 调研对比了 GitHub 主流开源聊天机器人项目（AstrBot、Koishi、MaiMBot）的生成与发送打断机制：
+     - **AstrBot**：基于 `session_id` 维护活跃异步任务表与会话游标，新消息到达时触发 `cancel()` 终止在途 LLM 流式请求并丢弃未发出的分段队列；
+     - **Koishi**：在会话上下文挂载 `AbortController`（`AbortSignal`），在分段发送 sleep 间隙检查会话最新入站消息时间戳，一旦检测到用户插话即刻清空待发气泡队列；
+     - **MaiMBot（麦麦）**：采用拟人意愿度（Willingness）与入站消息水位戳对比，在多气泡延迟等待醒来时重验入站水位，若对方已插话则放弃过时气泡并转入新上下文。
+   - 本项目目前已具备 `cancelKeyedSends(key)` 发送链代际取消机制与 `mid-turn-steer` 在途回合合并注入机制。
+
+### 46.2 验证与部署
+- 本地 `npm run check`（127 个文件静态作用域检查 + 全套 48 个测试文件）100% 通过；
+- 同步部署至远程服务器 `/root/qq-bridge` 及 DSH preset 目录，更新服务器 `config.json`（`stripActionBrackets: false`），平滑重启 `qq-bridge.service` 并执行 `/api/social/reset`。

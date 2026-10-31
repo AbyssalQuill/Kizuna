@@ -18,7 +18,7 @@ import { validateFetchUrl } from '../safe-fetch.js';
 import { sleep } from '../lib/async.js';
 import { randInt } from '../lib/rand.js';
 import { log } from '../lib/log.js';
-import { enqueueSend } from './send-chain.js';
+import { enqueueSend, typingDelayMs, markSendDelivered } from './send-chain.js';
 import { getSocialState } from './social-state.js';
 import { fetchOneBotImage, fetchFaceMedia } from './media-pipe.js';
 import { napcatImageFileArg, resolveStickerTmpDir, rewriteToContainerPath } from '../lib/napcat-file.js';
@@ -294,8 +294,9 @@ export async function sendSticker2(key, stickerRef, options = {}) {
   });
   const sendRun = enqueueSend(async () => {
     try {
-      // 真人发表情前通常会有短暂停顿（已缩短，避免发图太慢）。
-      await sleep(randInt(300, 700));
+      // 表情包同样走线性打字延迟（等效 6 字打字节拍；关闭线性延迟时退回 300~700ms 随机停顿）。
+      const stickerPace = typingDelayMs(6);
+      await sleep(stickerPace != null && stickerPace > 0 ? stickerPace : randInt(300, 700));
       const post = async () => {
         const r = await fetch(`${httpUrl}/${action}`, {
           method: 'POST',
@@ -336,6 +337,7 @@ export async function sendSticker2(key, stickerRef, options = {}) {
         const hint = res.status === 426 ? '（HTTP 426：napcat.httpUrl 可能指向了 WebSocket 端口，请检查 config.json 的 napcat.httpUrl 是否为 OneBot HTTP API 地址）' : '';
         throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
       }
+      if (stickerPace != null) markSendDelivered(key, 6);
       sendResolve(body.data);
     } catch (error) {
       sendReject(error);
@@ -386,7 +388,8 @@ export async function sendQqFace2(key, faceId, faceName, options = {}) {
   });
   const sendRun = enqueueSend(async () => {
     try {
-      await sleep(randInt(500, 1500));
+      const facePace = typingDelayMs(4);
+      await sleep(facePace != null && facePace > 0 ? facePace : randInt(500, 1500));
       const res = await fetch(`${httpUrl}/${action}`, {
         method: 'POST',
         headers: {
@@ -408,6 +411,7 @@ export async function sendQqFace2(key, faceId, faceName, options = {}) {
         const hint = res.status === 426 ? '（HTTP 426：napcat.httpUrl 可能指向了 WebSocket 端口，请检查 config.json 的 napcat.httpUrl 是否为 OneBot HTTP API 地址）' : '';
         throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
       }
+      if (facePace != null) markSendDelivered(key, 4);
       sendResolve(body.data);
     } catch (error) {
       sendReject(error);

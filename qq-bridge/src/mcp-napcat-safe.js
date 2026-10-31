@@ -450,6 +450,104 @@ async function firstMemeByQuery(packs, query, tag, onlyPack) {
   return null;
 }
 
+/**
+ * 统一解析内置表情包参数（供 qq_send_message 与 qq_send_meme 共用），复制到临时目录并返回 tmpPath。
+ */
+async function resolveMemeToTmpPath({ file, fileName, meme, query, emotion, tag, pack, key }) {
+  if (emotion) {
+    if (!tag) tag = emotion;
+    if (!query) query = emotion;
+  }
+  const packs = orderedMemePacks(getConfig());
+  if (!packs.length) return { ok: false, error: memeMissingHint };
+  let wantPack = String(pack ?? '').trim();
+  let wantFile = String(file ?? fileName ?? meme ?? '').trim();
+  const slashAt = wantFile.indexOf('/');
+  if (!wantPack && slashAt > 0) {
+    const maybePack = wantFile.slice(0, slashAt);
+    if (packs.some((p) => p.id === maybePack)) { wantPack = maybePack; wantFile = wantFile.slice(slashAt + 1); }
+  }
+  let pickedByQuery = null;
+  if (!wantFile) {
+    pickedByQuery = await firstMemeByQuery(packs, query, tag, wantPack || '');
+    if (!pickedByQuery) {
+      const hint = (query || tag)
+        ? `按「${String(query ?? tag).trim()}」没搜到匹配的表情，换个说法（生气/哭/睡觉/开心/疑惑/害羞/干活/日常）或者先用 qq_meme_search 看看有哪些。`
+        : '要发哪一张？file/meme 传 qq_meme_search 结果里的文件名（如 蓝发女仆生气.webp），或者改成传 query/emotion（情绪/内容描述，如 生气）让我挑一张。';
+      return { ok: false, error: hint };
+    }
+    wantFile = pickedByQuery.file;
+    if (!wantPack) wantPack = pickedByQuery.packId;
+  }
+  const { DatabaseSync } = await import('node:sqlite');
+  const hits = [];
+  for (const p of packs) {
+    if (wantPack && p.id !== wantPack) continue;
+    let db;
+    try { db = new DatabaseSync(path.join(p.dir, 'index.db'), { readOnly: true }); } catch { continue; }
+    try {
+      const rel = queryMemePath(db, wantFile);
+      if (rel) hits.push({ pack: p, rel });
+    } catch {} finally { try { db.close(); } catch {} }
+  }
+  if (!hits.length) {
+    const cleanQuery = wantFile.replace(/\.(webp|gif|png|jpe?g)$/i, '').replace(/[_\-\s]+/g, ' ').trim();
+    const fallbackMeme = await firstMemeByQuery(packs, cleanQuery || query, tag, wantPack || '');
+    if (fallbackMeme) {
+      wantFile = fallbackMeme.file;
+      if (!wantPack) wantPack = fallbackMeme.packId;
+      pickedByQuery = fallbackMeme;
+      for (const p of packs) {
+        if (wantPack && p.id !== wantPack) continue;
+        let db;
+        try { db = new DatabaseSync(path.join(p.dir, 'index.db'), { readOnly: true }); } catch { continue; }
+        try {
+          const rel = queryMemePath(db, wantFile);
+          if (rel) hits.push({ pack: p, rel });
+        } catch {} finally { try { db.close(); } catch {} }
+      }
+    }
+  }
+  if (!hits.length) {
+    return { ok: false, error: `找不到表情 ${wantFile || file}${wantPack ? `（包 ${wantPack}）` : ''}，请先用 qq_meme_search 搜索` };
+  }
+  let hit = null;
+  let filePath = null;
+  for (const candidateHit of hits) {
+    const candPath = path.join(candidateHit.pack.dir, candidateHit.rel.replace(/\\/g, '/'));
+    if (fs.existsSync(candPath)) {
+      hit = candidateHit;
+      filePath = candPath;
+      break;
+    }
+  }
+  if (!hit) {
+    for (const candRoot of MEME_ROOT_CANDIDATES) {
+      const probePath = path.join(candRoot, hits[0].pack.id, hits[0].rel.replace(/\\/g, '/'));
+      if (fs.existsSync(probePath)) {
+        hit = { ...hits[0], pack: { ...hits[0].pack, dir: path.join(candRoot, hits[0].pack.id) } };
+        filePath = probePath;
+        break;
+      }
+    }
+  }
+  if (!hit || !filePath || !fs.existsSync(filePath)) {
+    const fallbackPath = path.join(hits[0].pack.dir, hits[0].rel.replace(/\\/g, '/'));
+    const tried = hits.map((h) => `${h.pack.id}@${h.pack.dir}`).join('、');
+    return { ok: false, error: `图片文件不存在：${fallbackPath}（包 ${hits[0].pack.id} 的表里有它，磁盘上没有；同名候选 ${hits.length} 份全都没有物理文件：${tried}）` };
+  }
+  const otherPacks = hits.filter((h) => h !== hit).map((h) => h.pack.id);
+  const tmpDir = path.join(ROOT, 'state', 'sticker-tmp');
+  const cfgMeme = getConfig();
+  const wantTmpDir = String(cfgMeme?.napcat?.tmpDir ?? '').trim() || tmpDir;
+  fs.mkdirSync(wantTmpDir, { recursive: true });
+  const tmpName = `${Date.now()}-meme-${path.basename(hit.rel || 'meme.webp')}`;
+  const tmpPath = path.join(wantTmpDir, tmpName);
+  fs.copyFileSync(filePath, tmpPath);
+  recordSentMeme(key, wantFile);
+  return { ok: true, tmpPath, wantFile, packId: hit.pack.id, pickedByQuery, otherPacks };
+}
+
 function loadConfig() {
   try {
     let text = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8');
@@ -1462,13 +1560,20 @@ registerTool(
 
 registerTool(
   'qq_send_message',
-  'Send messages flexibly: string = one message; array = several bubbles. Supports diverse modalities: text+image inline in a single bubble, image-first, text-first, image-only (messages = []), or text-only. In group chats, use replyToMessageId to quote/reply to the specific message you are answering (e.g. from unread (id:...) or qq_get_recent_messages) to keep conversations clear. images = local image paths for inline attachments or image-only bubbles. Needs token; target must be whitelisted. Advances read watermark automatically.',
+  'Send messages and/or bundled memes flexibly in one unified tool: string = one message; array = several bubbles; meme/file/query/emotion/tag = bundled meme from meme packs (can be sent alone without messages, or combined with messages for inline text+meme, meme-first, or text-first). Supports diverse modalities: text+image/meme inline in a single bubble, image/meme-first, text-first, image/meme-only (omit messages), or text-only. In group chats, use replyToMessageId to quote/reply to the specific message you are answering (from unread (id:...) or qq_get_recent_messages). Needs token; target must be whitelisted. Advances read watermark automatically and applies natural linear typing pace to both text and memes.',
   {
     key: z.string().describe('Session key: group:ID or private:QQ'),
     token: z.string().describe('Session token (from the wake prompt)'),
-    messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('string = one message; array = several bubbles (flexible and concise); empty array = images only'),
+    messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('string = one message; array = several bubbles (flexible and concise); omit or empty array = send image/meme only'),
     message: z.string().optional().describe('Alias of messages (string; kept only for typos). Prefer messages.'),
-    images: z.array(z.string()).optional().describe('Absolute local paths of static images (e.g. C:\\\\path\\\\xx.webp; meme/ sticker files work too), paired with messages for inline text+image or sent as image bubbles. Never send animated GIFs by path; use qq_send_sticker for GIFs. Static png/jpg/webp go by path.'),
+    images: z.array(z.string()).optional().describe('Local image paths or bundled meme file names (e.g. C:\\\\path\\\\xx.webp or 蓝发女仆生气.webp), paired with messages for inline text+image or sent as image bubbles.'),
+    meme: z.string().optional().describe('Optional bundled meme file_name (from qq_meme_search, e.g. 蓝发女仆生气.webp) or emotion keyword (e.g. happy/angry/shy/sleep/生气/开心) to send alone or inline with messages'),
+    file: z.string().optional().describe('Bundled meme file_name from qq_meme_search (e.g. 蓝发女仆生气.webp; "<packId>/<file_name>" also works); can be sent alone or combined with messages'),
+    fileName: z.string().optional().describe('Alias of file/meme for bundled meme file name'),
+    query: z.string().optional().describe('Optional meme query when sending a bundled meme by emotion/content description (e.g. 生气/开心/睡觉/happy/angry/shy)'),
+    emotion: z.string().optional().describe('Optional meme emotion tag: happy, sad, angry, shy, confused, surprised, sigh, sleep, daily, love, work'),
+    tag: z.string().optional().describe('Optional meme category filter: happy/angry/sad/shy/confused/surprised/sigh/sleep/daily/love/work'),
+    pack: z.string().optional().describe('Optional meme pack id from qq_meme_search'),
     replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, from unread (id:...) or qq_get_recent_messages; recommended in group chats to indicate target message/peer)'),
     atUserId: z.union([z.number(), z.string()]).optional().describe('QQ id to @ (group chats; needed for at-mentions). This must be a real person\'s QQ NUMBER - never a messageId: ids you would pass to replyToMessageId are NOT QQ numbers, and mixing them up makes the whole send fail. Never hand-write [CQ:at,qq=...] in the message text - it is sent verbatim as garbage. Not together with a quote; do not overuse.'),
     gapMode: z.enum(['auto', 'fixed', 'byLength']).optional().describe('auto = random (bridge default), fixed = interval, byLength = by text length'),
@@ -1477,7 +1582,7 @@ registerTool(
     markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
     crossSession: z.boolean().optional().describe('ONLY for deliberately sending into a DIFFERENT session than the one you are answering (e.g. the owner asks you in private to say something in a group): set true to confirm. key MUST be the [Session] value from the wake prompt you are answering - a wrong key is refused instead of silently sent elsewhere, so only set this when the target really is another chat. Never set it to "fix" a mismatch you did not intend.')
   },
-  async ({ key, token, messages, message, images, replyToMessageId, atUserId, gapMode, gapMs, gaps, crossSession, markRead }) => {
+  async ({ key, token, messages, message, images, meme, file, fileName, query, emotion, tag, pack, replyToMessageId, atUserId, gapMode, gapMs, gaps, crossSession, markRead }) => {
     try {
       // 兼容模型误用 message 单数字段（schema 也有同名兼容别名）；messages 为空时回退到 message。
       if (messages === undefined || messages === null || (Array.isArray(messages) && messages.length === 0)) {
@@ -1520,7 +1625,49 @@ registerTool(
           return String(item ?? '');
         });
       }
-      const imgList = Array.isArray(images) ? images.map(String).filter(Boolean) : [];
+      const rawImgList = Array.isArray(images) ? images.map(String).filter(Boolean) : [];
+      const imgList = [];
+      let memeMeta = null;
+      let memeWarning = null;
+      // 1) 如果 images 数组里传了表情包文件名或关键词（非本地存在的绝对路径且非 URL/base64），自动从内置表情包库解析
+      for (const rawImg of rawImgList) {
+        if (/^(https?|base64|file):\/\//i.test(rawImg) || (path.isAbsolute(rawImg) && fs.existsSync(rawImg))) {
+          imgList.push(rawImg);
+        } else {
+          const resolvedImg = await resolveMemeToTmpPath({ file: rawImg, pack, key });
+          if (resolvedImg.ok) {
+            imgList.push(resolvedImg.tmpPath);
+            memeMeta = { file: resolvedImg.wantFile, pack: resolvedImg.packId, ...(resolvedImg.pickedByQuery ? { pickedByQuery: true, matched: resolvedImg.pickedByQuery.caption || resolvedImg.pickedByQuery.tag } : {}) };
+          } else {
+            imgList.push(rawImg);
+          }
+        }
+      }
+      // 2) 如果传了合并进来的表情包参数（meme / file / fileName / query / emotion / tag），解析为临时图片路径并并入 imgList
+      const hasMemeParam = Boolean(
+        (meme && String(meme).trim()) ||
+        (file && String(file).trim()) ||
+        (fileName && String(fileName).trim()) ||
+        (query && String(query).trim()) ||
+        (emotion && String(emotion).trim()) ||
+        (tag && String(tag).trim())
+      );
+      if (hasMemeParam) {
+        const resolvedMeme = await resolveMemeToTmpPath({ file, fileName, meme, query, emotion, tag, pack, key });
+        if (resolvedMeme.ok) {
+          imgList.push(resolvedMeme.tmpPath);
+          memeMeta = { file: resolvedMeme.wantFile, pack: resolvedMeme.packId, ...(resolvedMeme.pickedByQuery ? { pickedByQuery: true, matched: resolvedMeme.pickedByQuery.caption || resolvedMeme.pickedByQuery.tag } : {}), ...(resolvedMeme.otherPacks?.length ? { sameNameAlsoIn: resolvedMeme.otherPacks } : {}) };
+        } else {
+          const hasText = (typeof finalMessages === 'string' && finalMessages.trim().length > 0) || (Array.isArray(finalMessages) && finalMessages.some((m) => String(m ?? '').trim().length > 0));
+          if (!hasText && !imgList.length) {
+            return { content: [{ type: 'text', text: resolvedMeme.error }], isError: true };
+          }
+          memeWarning = resolvedMeme.error;
+        }
+      }
+      if ((finalMessages === undefined || finalMessages === null) && imgList.length > 0) {
+        finalMessages = [];
+      }
       const data = await agentApi('/api/social/send-message', {
         method: 'POST',
         body: JSON.stringify({ key, messages: finalMessages, images: imgList, replyToMessageId, atUserId: atUserId ?? null, gapMode, gapMs, gaps, ...(crossSession === true ? { crossSession: true } : {}) }),
@@ -1529,7 +1676,7 @@ registerTool(
       });
       // 已读融进发送（2026-09-29）：发出去之后顺手推进已读水位，模型不必再单独调 qq_mark_read。
       const mrSend = await autoMarkReadAfterSend(key, token, markRead);
-      return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrSend }, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ ...data, ...(memeMeta ? { meme: memeMeta } : {}), ...(memeWarning ? { memeWarning } : {}), markRead: mrSend }, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `发送失败：${error?.message ?? error}` }], isError: true };
     }
@@ -2237,7 +2384,7 @@ if (cfg.social?.tools?.proactiveSend !== false) {
 if (cfg.social?.meme?.enabled !== false) {
   registerTool(
     'qq_meme_search',
-    'Search the bundled meme packs (local fan-art/GIF sticker archives shipped with the bot, one folder per pack). query = an emotion/content description (e.g., angry, crying, sleeping); every hit is returned as "file_name [tag] [packId] caption". Send the chosen one with qq_send_meme. When the owner has uploaded their own packs, their packs are searched together with the built-in one.',
+    'Search the bundled meme packs (local fan-art/GIF sticker archives shipped with the bot, one folder per pack). query = an emotion/content description (e.g., angry, crying, sleeping); every hit is returned as "file_name [tag] [packId] caption". Send the chosen one via qq_send_message (pass file or meme parameter, alone or together with messages). When the owner has uploaded their own packs, their packs are searched together with the built-in one.',
     {
       query: z.string().describe('Query: emotion/content description, e.g., 生气、哭、睡觉、开心、疑惑'),
       tag: z.string().optional().describe('Filter by category: happy/angry/sad/shy/confused/surprised/sigh/sleep/daily/love/work'),
@@ -2286,7 +2433,7 @@ if (cfg.social?.meme?.enabled !== false) {
         }).join('\n');
         const used = [...new Set(rows.map((r) => r.packId))];
         const tailNote = broken ? `\n（另有 ${broken} 份表情包读不出来，已跳过）` : '';
-        const selectHint = '\n\n💡 选图建议：请由你根据当前聊天的语境与情绪微表情，从上述候选列表中自主挑选最贴切的一张，传入 file 参数调用 qq_send_meme 发送。';
+        const selectHint = '\n\n💡 选图建议：请由你根据当前聊天的语境与情绪微表情，从上述候选列表中自主挑选最贴切的一张，传入 qq_send_message 的 file（或 meme）参数发送（可单独发表情，也可配合 messages 同气泡内嵌发送）。';
         return { content: [{ type: 'text', text: `找到 ${rows.length} 张表情（来自 ${used.join(', ')}）：\n${lines}${tailNote}${selectHint}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `搜索失败：${error.message}` }], isError: true };
@@ -2419,11 +2566,10 @@ if (cfg.social?.meme?.enabled !== false) {
         const napcatPath = napcatImageFileArg(tmpPath, cfgMeme);
         const [kind, id] = key.split(':');
         const hasQuote = replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '';
-        // 带引用时统一走桥的发送端点：它用 resolveReplyTarget 把「本地 seq」和「真实 QQ message id」
-        // 都解析成真正可引用的 id，并顺带做限频/防重复/会话记录。此前这里直接把模型给的原始值当
-        // QQ message id 塞进 reply 段 —— 模型传了本地 seq 或过期 id 时 NapCat 照常受理，但 QQ 端
-        // 不显示引用框，工具却回报成功，正是用户看到的"引用失败"。
-        if (hasQuote) {
+        // 统一走桥的发送端点（/api/social/send-message）：享受线性打字延迟（typingDelayMs）、
+        // 引用解析（resolveReplyTarget）、限频/防重复与会话记录。
+        const useBridgeSend = true || hasQuote;
+        if (useBridgeSend) {
           const data = await agentApi('/api/social/send-message', {
             method: 'POST',
             body: JSON.stringify({ key, messages: [], images: [tmpPath], replyToMessageId, ...(crossSession === true ? { crossSession: true } : {}) }),
