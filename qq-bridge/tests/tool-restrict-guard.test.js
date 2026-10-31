@@ -58,7 +58,7 @@ console.log('=== 校验 3：载入人设 + 读过上下文后，同回合可以�
 assert.equal(call('qq_load_persona'), undefined, 'qq_load_persona 放行');
 assert.ok(Number(sessionPersonaTurn.get(sess)) > 0, '记录本次载入的时刻');
 
-// 2026-10-29 新增门禁：唤醒正文不带转录、读工具结果回合末被剪 → 发送前必须新鲜读过上下文
+// 门禁保留（主人口径：不是改门禁而是不漏步）
 assert.ok(String(call('qq_send_message')).includes('step_3 is mandatory'), '没读上下文就发送被拦截');
 assert.equal(call('qq_get_recent_messages'), undefined, 'qq_get_recent_messages 放行');
 assert.ok(Number(sessionContextAt.get(sess)) > 0, '记录上下文读取时刻');

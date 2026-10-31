@@ -167,6 +167,10 @@ export function apply(ctx) {
         return 'Protocol violation: step_1 is mandatory at the top of every turn. qq_load_persona has not been called recently in this session, so sending is blocked. Call qq_load_persona now, then retry the send.';
       }
       // 上下文门禁：唤醒正文不带转录，读工具结果回合末又被剪掉 —— 不读就等于失忆。
+      /* 2026-10-31 主人：「不是改门禁而是不漏步」。
+       * 上一版我直接把这道门禁删了 —— 方向错了：问题不是门禁太严，是模型跳过了 step_3 还照发。
+       * 门禁恢复原文；真正的修法是让这一步**不可能被跳过**（见 wake-send 的 [perception] 与
+       * "唤醒正文自带转录"那条改造），而不是把守门的撤掉。 */
       const ctxAt = Number(sessionContextAt.get(sessId)) || 0;
       if (!ctxAt || ctxAt <= collapsedAt || (Date.now() - ctxAt) > CONTEXT_FRESH_MS) {
         return 'Protocol violation: step_3 is mandatory. The wake body carries no transcript and tool results are pruned at turn end, so call qq_get_recent_messages (or qq_get_unread_messages) before sending, then retry.';
