@@ -567,7 +567,12 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       }
       const switched = switchPersona({ cfg: cfgRef, character: isClear ? '' : want, clear: isClear });
       log(`[command] ${key} /role ${want} → ${JSON.stringify(switched)}`);
-      await sendToQQ(key, CMD_ACK);
+      /* 2026-11-01 主人：「改」。原来无论切成没切成都回「收到」——切失败（名字打错、包里没正文）时，
+       * 用户看到的是一句确认，实际上人设一点没变，这是最坏的一种反馈：骗人。
+       * 现在失败要说清原因，成功才回 ACK。 */
+      await sendToQQ(key, switched?.ok === false
+        ? `没切成：${switched.error || '未知原因'}（用 /role list 看有哪些角色）`
+        : CMD_ACK);
       return;
     }
     if (plainContent === '/persona' || plainContent.startsWith('/persona ')) {
