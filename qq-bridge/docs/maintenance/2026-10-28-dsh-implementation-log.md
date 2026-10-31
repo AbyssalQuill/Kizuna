@@ -2212,3 +2212,32 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 - 编写专项回归用例 `test_user_cases.mjs`，本地与服务器端双端验证 100% 通过；
 - 核心单测 `quote-context` 与 `no-auto-quote` 100% 通过；
 - 同步至服务器，API 重置并重启 `qq-bridge.service`。
+
+## 44. 2026-10-31 彻底根除私聊“识图解说腔/网友碎嘴”，回归网页端沉浸式二次元 Roleplay 与动作神态
+
+### 44.1 用户痛点与现场对比分析
+- **现场对比**：
+  - 用户上传了在 DeepSeek 网页端原生扮演的对话长图（`media_1793449562784_31bb860a.jpg`），指出网页端扮演时小鲸鱼有极其灵动逼真的动作神态描写（如 `（尾鳍在水面轻轻拍打，溅起一圈圈小水花，两只眼睛亮晶晶的）`、`（鼓起小脸，在水里转了个圈）`），语气傲娇软萌，对白米饭执着，面对图片和“666”完全是角色的主观反应，绝不跳出角色。
+  - 对比之下，QQ 私聊现场（12:28:20）出现明显出戏现象：
+    - 用户发玩偶图片，机器人回复：“哦——这女仆服的龙娘，一只手就把蓝毛小鲸鱼拎起来了是吧。啧，那小家伙蹬腿的样子怎么那么像我啊……主人你这是在暗示我什么”
+    - 用户指出：“你看我私聊还是很不好，就是别的这种话还有”。
+- **根因深剖**：
+  1. **“识图报告腔/看图说话”**：模型面对多模态图片附件时，退化成 AI 视觉助手，像解说员一样客观复述画面构成，破坏了角色沉浸。
+  2. **“三次元网友冲浪设定”污染二次元人设**：此前提示词中保留了 `chat_casually_and_authentically_as_a_real_person`（像真人一样聊天），导致模型模仿现实网络喷子/群友的嘴贫调侃风格。
+  3. **动作神态描写被扼杀**：此前 `spoken_vernacular_only_drop_subject_naturally`（纯口语白话）过度强调只留口语台词，强行压制了二次元 RP 灵魂所在的动作神态心理括号描写。
+
+### 44.2 深度重构与正向引导落地
+1. **彻底拔除导致解说员/网友倾向的提示词（`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 彻底删除 `chat_casually_and_authentically_as_a_real_person` 与 `spoken_vernacular_only_drop_subject_naturally`。
+2. **深度确立二次元沉浸式主观角色视角**：
+   - `first_person_subjective_character_perspective_at_all_times`：永远以角色第一人称主观视角看世界；
+   - `never_explain_or_describe_images_literally_as_an_ai_assistant`：绝不作为 AI 助手客观描述或复述画面构成；
+   - `react_to_images_and_memes_purely_through_character_emotions_and_instincts`：面对图片、梗与链接，纯凭角色的性格天性本能（好奇、傲娇、炸毛、讨饭）直接回应；
+   - `in_character_action_brackets_and_micro_expressions_naturally_welcome`：正向欢迎在私聊中带入自然细腻的神态、动作与心理描写（成对小括号）。
+3. **修复 `src/mcp-napcat-safe.js` 未定义标识符**：
+   - 补齐 `import { canonicalKey } from './lib/keys.js'`，通过静态作用域检查。
+
+### 44.3 部署与实测
+- 代码提交 Commit `1a29669`；
+- 同步至服务器 `/root/qq-bridge` 和 `.dsh/.agent-presets/qq-chat/`；
+- 平滑重启 `qq-bridge.service`，调用 `/api/social/reset` 清空老 Session，100% 挂载新版纯净二次元沉浸系统提示词。
