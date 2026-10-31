@@ -3,16 +3,15 @@
 // cfg → initPromptDeliverCore；dshReady 读 dsh-session。
 import { withTimeout } from '../lib/async.js';
 import { log } from '../lib/log.js';
-import { mdToPlain } from '../md-to-plain.js';
 import { SENSITIVE_RE } from '../sensitive.js';
 import { dshReady, ensureSession } from './dsh-session.js';
-import { state, saveState } from './config.js';
+import { state } from './config.js';
 import { currentMode, modeAllowed } from './mode.js';
 import { withSlangContext } from './slang.js';
 import { quarantineSession } from './turn-guard.js';
-import { shouldAuditKey, auditAndSend } from './audit.js';
+import { shouldAuditKey } from './audit.js';
 import { sendToQQ } from './qq-send.js';
-import { queued, queuedHintAt, queueRetries, promptQueues } from './session-state.js';
+import { queued, queueRetries, promptQueues } from './session-state.js';
 
 export const QUEUE_MAX = 50;
 let flushingQueue = false;

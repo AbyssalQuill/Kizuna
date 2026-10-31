@@ -11,9 +11,6 @@ import { makeDocx } from '../make-docx.js';
 // 2026-09-21：文档上传要和图片走同一套「宿主路径 → NapCat 能认的 file 参数」转换（见 uploadFileToQQ）
 import { napcatImageFileArg } from '../lib/napcat-file.js';
 import { beijingDateKey } from '../lib/time.js';
-import { ROOT } from '../lib/paths.js';
-import { getSocialState, saveSocialState } from './social-state.js';
-import { sendToQQ } from './qq-send.js';
 import { log } from '../lib/log.js';
 
 export const DOC_TMP_DIR = path.join(STATE_DIR, 'doc-tmp');

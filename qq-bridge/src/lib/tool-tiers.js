@@ -33,8 +33,7 @@
 
 /** 协议必需：每一轮唤醒都靠它们读/说/收尾，任何档位都得留（extreme 档也只留这几件）。 */
 const ESSENTIAL = [
-  'qq_send_message',        // 说话（唯一出口）
-  'qq_reply',               // 引用着说话
+  'qq_send_message',        // 说话（唯一出口；引用/私聊/跨会话都用它，replyToMessageId / key / crossSession 三个参数即可）
   'qq_mark_read',           // 收尾（哨兵轮的主要收尾手段）
   'qq_set_wake_config',     // 收尾的另一个选项 + 调唤醒条件
   'qq_get_prompt',          // 首连时读协议
@@ -166,7 +165,7 @@ export const TOOL_TIERS = {
     label: '极限（会丢功能）',
     note: '只留「说话 + 引用 + 收尾 + 看未读 + 查时间」九件套，成本最低；但会砍掉发米姆/语音/查记忆/看历史图这些在用的能力，只在"这个月必须省钱"时用',
     keep: [
-      'qq_send_message', 'qq_reply', 'qq_mark_read',
+      'qq_send_message', 'qq_mark_read',
       'qq_get_prompt', 'qq_social_state', 'qq_get_unread_messages', 'qq_list_groups',
       'qq_status',
       /* 2026-09-24：get_time 补进极限档 —— 提示词 [TOOLS] 1d 规定"正文不带时钟，问时间就调 get_time"，

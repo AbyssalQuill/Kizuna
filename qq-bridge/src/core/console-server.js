@@ -4,15 +4,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
 import { qqTextSeg } from '../lib/onebot-ws.js';
-import { NodeApiClient, unwrap, createTurnCollector } from '../dsh-client.js';
-import { mdToPlain, splitForQQ } from '../md-to-plain.js';
-import { SENSITIVE_RE, sensitiveHitKind, sensitiveHitSample } from '../sensitive.js';
+import { SENSITIVE_RE } from '../sensitive.js';
 import { looksLikeUnfinished } from '../wait.js';
-import { safeFetchBuffer, validateFetchUrl, looksLikeImageBuffer } from '../safe-fetch.js';
-import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from '../forward.js';
+import { safeFetchBuffer } from '../safe-fetch.js';
+import { formatForwardResponse } from '../forward.js';
 import {
   loadSlang,
   saveSlang,
@@ -39,7 +35,6 @@ import {
   markStickerUsed
 } from '../sticker-lib.js';
 import { resolveFaceRef, formatFaceList } from '../qq-faces.js';
-import { makeDocx } from '../make-docx.js';
 import {
   listPersonaFiles,
   savePersonaFile,
@@ -54,41 +49,33 @@ import {
   CROSSCHAT_FILE, LOCK_FILE,
 } from '../lib/paths.js';
 import { readJsonSafe, atomicWriteJson, atomicWriteText } from '../lib/json-fs.js';
-import { randInt } from '../lib/rand.js';
-import { BJ_WEEK, bjMinutes, bjMinToText, beijingTs, beijingDateKey, parseClockMin, fmtBeijing } from '../lib/time.js';
-import { isCjkChar, splitByCjkSpaces, isCjkLikeChar, convertExampleSpacesToComma } from '../lib/cjk-split.js';
-import { clampGap, computeGaps } from '../lib/send-gaps.js';
-import { normalizeLoopSignature, isDuplicateSendText } from '../lib/loop-guard.js';
-import { faceIdFromArtifactContent, resolveArtifactFaceId } from '../lib/qq-face-parse.js';
-import { compressImageBuffer, finalizeImageBuffer } from '../lib/image-compress.js';
-import { isSafeLocalMediaPath, isProbablySafeImageFileRef } from '../lib/media-guard.js';
-import { KNOWN_AGENT_TOKENS, redactSensitiveText, SENSITIVE_ARG_KEYS, redactSensitive, sanitizeToolArgs, escapeCqText, unquoteJsonString, splitSerializedBubbles, looksLikeSerializedBubbleArray } from '../lib/text-safe.js';
-import { normalizeOwnerQQ, normalizeIdList, allowed } from '../lib/config.js';
+import { bjMinToText, beijingDateKey, parseClockMin, fmtBeijing } from '../lib/time.js';
+import { computeGaps } from '../lib/send-gaps.js';
+import { isDuplicateSendText } from '../lib/loop-guard.js';
+import { finalizeImageBuffer } from '../lib/image-compress.js';
+import { KNOWN_AGENT_TOKENS, escapeCqText, unquoteJsonString, splitSerializedBubbles, looksLikeSerializedBubbleArray } from '../lib/text-safe.js';
+import { normalizeOwnerQQ, allowed } from '../lib/config.js';
 import { readRoleState, writeRoleState, sanitizeRoleName, listRoles } from '../lib/role-access.js';
-import { isSessionSilent, setSessionSilent, listSilentSessions } from '../lib/session-silent.js';
-import { sleep, withTimeout } from '../lib/async.js';
+import { setSessionSilent, listSilentSessions } from '../lib/session-silent.js';
+import { sleep } from '../lib/async.js';
 import { convKey, canonicalKey } from '../lib/keys.js';
-import { EXPLICIT_END_RE, hasExplicitEnd, isSleepingConfig, normalizeSpeakerIds } from '../lib/sleep-guard.js';
-import { isEmojiLikeCp, stripImeEmoji } from '../lib/emoji.js';
-import { singleLineForQQ, splitLongSegment } from '../lib/segment.js';
-import { mimeFromBuffer, mimeFromUrl, base64FromMaybe } from '../lib/media-meta.js';
+import { isSleepingConfig, normalizeSpeakerIds } from '../lib/sleep-guard.js';
+import { mimeFromBuffer, mimeFromUrl } from '../lib/media-meta.js';
 import { log, appendActivity, readActivityTail } from '../lib/log.js';
-import { SILENT_MARKER, isSilentMarker, SEND_TOOL_RE, isSendToolName, SPACE_SPLIT_HINT, DIRECTION_HINT } from '../lib/markers.js';
-import { state, loadConfig, loadState, saveState, configFilePath } from './config.js';
+import { state, saveState, configFilePath } from './config.js';
 // 表情包抽签的登记口（内置表情库直发 + 收藏表情两条路都记一笔，供 [Meme] 冷却使用）
 import { noteMemeSent } from './send-dice.js';
-import { acquireLock, releaseLock } from './runtime.js';
-import { enqueueSend, currentSendChain, cancelKeyedSends, cancelAllKeyedSends } from './send-chain.js';
-import { sendToQQ, sendMessages, initQqSendCore, setQqSendBot } from './qq-send.js';
+import { releaseLock } from './runtime.js';
+import { cancelKeyedSends, cancelAllKeyedSends } from './send-chain.js';
+import { sendMessages } from './qq-send.js';
 // 音乐分享的"卡片 → 原生卡片 → 链接"降级梯子（纯编排逻辑，media 域导出，可离线单测）
 import { sendMusicCardWithFallback } from './media.js';
 // 2026-09-17：视频平台（bilibili / 抖音…）：链接识别 + 多路降级取信息 + 拼卡片 + 关键词搜视频。
 // 这个模块是纯函数、不依赖 cfg，所以直接 import，不走 setConsoleMedia 那套注入
 // （注入点被 bridge.js / dsh-watch.js / mux.js 三处调用，动签名容易漏改）。
-import { resolveVideo, buildVideoCard, videoSearch, parseVideoUrl, extractVideoUrls, fetchMiniAppArk } from './video.js';
-import { redactKnownTokensOnly, sweepMessageArtifacts, stripMessageArtifacts, cleanOutboundText } from '../lib/outbound-text.js';
-import { planSocialTimeline, isDirectedAtAi, withTimeText, findCjkSpaceWarning, findSplitBoundaryWarning } from '../lib/social-timeline.js';
-import { createMediaDomain } from './media.js';
+import { resolveVideo, buildVideoCard, videoSearch, fetchMiniAppArk } from './video.js';
+import { redactKnownTokensOnly } from '../lib/outbound-text.js';
+import { withTimeText, findCjkSpaceWarning, findSplitBoundaryWarning } from '../lib/social-timeline.js';
 import {
   DOC_TMP_HOST_DIR, DOC_TMP_CONTAINER_DIR, MAX_DOCX_CHARS, docxQuota,
   loadDocxQuota, docxQuotaReserve, docxQuotaCommit, writeDocxToMount,
@@ -100,7 +87,7 @@ import {
   stickerEntries, stickerSyncedAt, updateStickerEntries, initStickerCore, setStickerBot,
   writeStickerTmpFile, applyStickerNote2, setStickerRemark2, collectSticker2,
 } from './sticker.js';
-import { postRandomQzone, publishCustomQzone, initQzoneCore } from './qzone.js';
+import { publishCustomQzone } from './qzone.js';
 import { sendExcel } from './excel.js';
 import { renderMarkdownToImage } from '../lib/render-markdown.js';
 import {
@@ -125,7 +112,7 @@ import {
   evaluateWakeTrigger, buildWakePrompt, sendWakePrompt,
   initWakeCore, setWakeApi, setWakeDeliver, rotateThresholdOf,
 } from './wake-send.js';
-import { resolveGroupMemberName, resolveReplyInfo, expandIncomingForwardPreview, setMessageCacheBot } from './message-cache.js';
+import { resolveReplyInfo } from './message-cache.js';
 import {
   shouldAuditKey, shouldBlockSilentReply, handleSensitiveIntercept, auditAndSend, initAuditCore,
   readFeedbackEntries, appendFeedbackEntry, readToolLog, appendToolLog,
@@ -226,7 +213,6 @@ import {
   getCachedGroupInfo, formatGroupInfoLine, initGroupCacheCore, setGroupCacheBot,
   getConvDisplayName, warmConvNames,
 } from './group-cache.js';
-import { handleIncoming, pumpMux, initMuxCore, setMuxApi, setMuxBot } from './mux.js';
 
 // 运行期注入
 let cfgRef = null;
@@ -1742,9 +1728,6 @@ export function startConsoleServer() {
           getUnread: 'qq_get_unread_messages',
           getRecent: 'qq_get_recent_messages',
           socialState: 'qq_social_state',
-          sendGroup: 'qq_send_group_message',
-          sendPrivate: 'qq_send_private_message',
-          reply: 'qq_reply',
           sendMessage: 'qq_send_message',
           waitMessages: 'qq_wait_for_messages',
           feedback: 'qq_report_feedback',
@@ -3101,7 +3084,7 @@ export function startConsoleServer() {
         if (!key || !stickerId) { sendJson({ ok: false, error: 'key 和 stickerId 不能为空' }, 400); return; }
         // 常识：表情消息只能是一张表情，不能在同一气泡里附带文字说明。
         if (caption) {
-          sendJson({ ok: false, error: '表情消息不能附带文字；请先用 qq_send_message / qq_reply 把想说的话作为单独气泡发送，再单独 qq_send_sticker 发表情' }, 400);
+          sendJson({ ok: false, error: '表情消息不能附带文字；请先用 qq_send_message 把想说的话作为单独气泡发送，再单独 qq_send_sticker 发表情' }, 400);
           return;
         }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }

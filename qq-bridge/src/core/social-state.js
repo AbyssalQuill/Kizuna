@@ -9,7 +9,7 @@ import { log } from '../lib/log.js';
 import { canonicalKey } from '../lib/keys.js';
 import { KNOWN_AGENT_TOKENS } from '../lib/text-safe.js';
 import { sanitizeForwardId } from '../forward.js';
-import { collectors, TurnStartAt, pendingWakeKeys, promptQueues, MAX_MEDIA_COUNT, activeAiTurns, wakeConfigUpdatedKeys, markReadCalledKeys, wakeConfigMissCount, messageMediaStore, activeWaits, queued, turnHasBubble } from './session-state.js';
+import { collectors, TurnStartAt, pendingWakeKeys, promptQueues, MAX_MEDIA_COUNT, wakeConfigUpdatedKeys, markReadCalledKeys, wakeConfigMissCount, messageMediaStore, activeWaits, queued, turnHasBubble } from './session-state.js';
 import { state } from './config.js';
 import { isSessionAllowedInCurrentMode } from './mode.js';
 // 私聊「不抢话」的等待/插话决策（纯函数，见 typing-hold.js）

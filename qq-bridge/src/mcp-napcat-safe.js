@@ -14,7 +14,6 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { SENSITIVE_RE } from './sensitive.js';
 import { napcatImageFileArg } from './lib/napcat-file.js';
 // 2026-09-18：联网找图：图片搜索引擎（Bing/百度）+ SSRF 安全下载。
 // 两者都是纯函数模块，直接 import；下载复用 safe-fetch（禁内网、限字节、校验真是图片）。
@@ -767,16 +766,13 @@ const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <val
            * （2026-09-20「发错群」之后的口径），但这一层原来根本没问它。现在先问一次：
            * 只接受 source=active-turn 的结果，多个在途 / 没有在途一律照旧拒绝 —— 安全边界没放宽，
            * 只是把「本来就不需要猜」的那部分补上。 */
-          let resolved = null;
-          try { resolved = await resolveMissingSession('', true); } catch { resolved = null; }
-          if (resolved && !resolved.error && resolved.key) {
-            callArgs.key = resolved.key;
-            if (!callArgs.token && resolved.token) callArgs.token = resolved.token;
-            missingKey = false;
-            console.error('[napcat-safe] ' + name + ' 缺 key，按唯一在途会话补齐（' + resolved.source + '）: ' + resolved.key);
-          } else {
-            console.error('[napcat-safe] ' + name + ' 缺 key，拒绝（' + (resolved && resolved.error) + '）');
-          }
+          /* 2026-10-31 二次修正：上一版会「按唯一在途会话自动补齐 key」。
+           * 用户口径是「绝不猜会话」，测试也钉着这条契约 —— 哪怕只有一个在途回合，
+           * 那也是桥替模型做的猜测，一旦在途回合判定出错就是发错群。所以这里只查不打补丁：
+           * 查一次留日志（便于统计模型到底多常漏 key），键仍然缺失，照旧拒绝。 */
+          let probe = null;
+          try { probe = await resolveMissingSession('', true); } catch { probe = null; }
+          console.error('[napcat-safe] ' + name + ' 缺 key，拒绝（不猜会话；桥侧在途候选=' + (probe && probe.key ? probe.key + '/' + probe.source : 'none') + '）');
         }
         const missingToken = !keyless && hasTokenField && (callArgs.token === undefined || callArgs.token === null || callArgs.token === '');
         /* 2026-09-20 根因修复：桥不再替模型猜 key（修「pixiv 发图发错群」）
@@ -1151,129 +1147,9 @@ registerTool(
 );
 
 // 别名支持：模型经常直接调 qq_group_history
-registerTool(
-  'qq_group_history',
-  'Alias for qq_get_group_history. Get recent message history of a group.',
-  {
-    groupId: z.union([z.number(), z.string()]).optional().describe('Group id (or pass group_id or key)'),
-    group_id: z.union([z.number(), z.string()]).optional().describe('Group id alias'),
-    key: z.string().optional().describe('Session key: group:ID'),
-    count: z.number().optional().describe('Message count (optional)'),
-    user_id: z.union([z.number(), z.string()]).optional().describe('Filter by user_id (optional)'),
-    userId: z.union([z.number(), z.string()]).optional().describe('Filter by userId (optional)'),
-    messageSeq: z.number().optional().describe('Starting message seq (optional)')
-  },
-  async (args) => {
-    const rawG = args.groupId ?? args.group_id ?? (args.key ? String(args.key).replace(/^group:/, '') : null);
-    if (!rawG) return { content: [{ type: 'text', text: '错误：缺少 groupId 或 group_id 参数' }], isError: true };
-    const g = String(rawG);
-    const a = getAccess();
-    if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllGroups || a.allowAllWhenEmpty)) {
-      return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中。` }], isError: true };
-    }
-    try {
-      const params = { group_id: Number(g) };
-      if (args.messageSeq !== undefined) params.message_seq = args.messageSeq;
-      if (args.count !== undefined) params.count = args.count;
-      const data = await onebot('get_group_msg_history', params);
-      let list = Array.isArray(data?.messages) ? data.messages : (Array.isArray(data) ? data : []);
-      const filterUid = args.user_id ?? args.userId;
-      if (filterUid && list.length > 0) {
-        list = list.filter((m) => String(m.user_id ?? m.sender?.user_id) === String(filterUid));
-      }
-      return { content: [{ type: 'text', text: JSON.stringify(list.length ? list : data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: 'text', text: `查询失败：${error?.message ?? error}` }], isError: true };
-    }
-  }
-);
 
-registerTool(
-  'qq_send_group_message',
-  'Send one plain-text message to a group. Quote via replyToMessageId (non-zero int, may be negative; from qq_get_recent_messages / qq_get_message_detail). Default mode works but prefer qq_send_message; token required or the call is rejected. Do not output sent reports. Group must be whitelisted (config.json allow.groups) or rejected.',
-  {
-    groupId: z.union([z.number(), z.string()]).optional().describe('Group id (must be whitelisted)'),
-    group_id: z.union([z.number(), z.string()]).optional().describe('Group id alias'),
-    key: z.string().optional().describe('Session key: group:ID'),
-    message: z.string().describe('Plain-text message; no Markdown or CQ codes'),
-    replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, may be negative, optional)'),
-    token: z.string().optional().describe('Session token (required in default mode)')
-  },
-  async ({ groupId, group_id, key, message, replyToMessageId, token }) => {
-    const rawG = groupId ?? group_id ?? (key ? String(key).replace(/^group:/, '') : null);
-    if (!rawG) {
-      return { content: [{ type: 'text', text: '错误：缺少 groupId 或 group_id 参数' }], isError: true };
-    }
-    const g = String(rawG);
-    try {
-      const cleanMessage = unquoteJsonString(message);
-      const data = await agentApi('/api/send/group', {
-        method: 'POST',
-        body: JSON.stringify({ groupId: g, message: cleanMessage, replyToMessageId, token: token || undefined })
-      });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: 'text', text: `发送失败：${error?.message ?? error}` }], isError: true };
-    }
-  }
-);
 
-registerTool(
-  'qq_reply',
-  'Reply quoting an earlier message (group or private). replyToMessageId = the quoted id (non-zero int, may be negative; query it first). Quote only when answering one specific earlier message or when several lines answer different people - not when the context is clear, never the same message twice, and use the latest relevant one. Default mode needs the token; the session must be whitelisted. Prefer key (group:<gid> / private:<qq>); legacy groupId still works for groups. Replying also counts as reading: on success the read watermark advances for the messages this round already showed you (markRead, default true) - no separate mark-read call needed.',
-  {
-    key: z.string().optional().describe('Session key: group:ID or private:QQ (recommended; works for group and private)'),
-    groupId: z.union([z.number(), z.string()]).optional().describe('Legacy param: group id (still accepted; prefer key)'),
-    replyToMessageId: z.union([z.number(), z.string()]).describe('Message id being quoted/replied to (non-zero int, may be negative)'),
-    message: z.string().describe('Text to send; plain text, no Markdown or CQ codes'),
-    token: z.string().optional().describe('Session token (required in default mode)'),
-    markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
-    crossSession: z.boolean().optional().describe('ONLY when deliberately replying into a different session than the one you are answering; a mismatched key is refused instead of silently sent elsewhere')
-  },
-  async ({ key, groupId, replyToMessageId, message, token, crossSession, markRead }) => {
-    try {
-      const cleanMessage = unquoteJsonString(message);
-      // key 优先；模型偶尔用 groupId 老参数 → 转成 group:群号。
-      const targetKey = (key && String(key).trim())
-        ? String(key).trim()
-        : (groupId !== undefined && groupId !== null ? `group:${String(groupId)}` : '');
-      if (!targetKey) throw new Error('必须传 key（group:群号 或 private:QQ号）或 groupId');
-      const data = await agentApi('/api/social/send-message', {
-        method: 'POST',
-        body: JSON.stringify({ key: targetKey, messages: cleanMessage, replyToMessageId, token: token || undefined, ...(crossSession === true ? { crossSession: true } : {}) }),
-        headers: { 'x-agent-token': token || undefined },
-        timeoutMs: 300000
-      });
-      const mrReply = await autoMarkReadAfterSend(targetKey, token, markRead);
-      return { content: [{ type: 'text', text: JSON.stringify({ ...data, markRead: mrReply }, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: 'text', text: `发送失败：${error?.message ?? error}` }], isError: true };
-    }
-  }
-);
 
-registerTool(
-  'qq_send_private_message',
-  'Send a private message to a QQ friend. With replyToMessageId it is sent as a QQ quote/reply (quoted message + text); that id must be a non-zero integer (QQ ids can be negative), check qq_get_message_detail first. Default mode works but prefer qq_send_message; token required or rejected. Do not output sent reports. Friend must be whitelisted (config.json allow.private) or rejected.',
-  {
-    userId: z.union([z.number(), z.string()]).describe('Friend QQ id (must be whitelisted)'),
-    message: z.string().describe('Plain-text message; no Markdown or CQ codes'),
-    replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, may be negative, optional)'),
-    token: z.string().optional().describe('Session token (required in default mode)')
-  },
-  async ({ userId, message, replyToMessageId, token }) => {
-    try {
-      const cleanMessage = unquoteJsonString(message);
-      const data = await agentApi('/api/send/private', {
-        method: 'POST',
-        body: JSON.stringify({ userId: String(userId), message: cleanMessage, replyToMessageId, token: token || undefined })
-      });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: 'text', text: `发送失败：${error?.message ?? error}` }], isError: true };
-    }
-  }
-);
 
 // ── default模式（default）工具 ─────────────────────────────────────────
 registerTool(

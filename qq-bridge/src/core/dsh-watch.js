@@ -4,14 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
-import { NodeApiClient, unwrap, createTurnCollector } from '../dsh-client.js';
-import { mdToPlain, splitForQQ } from '../md-to-plain.js';
-import { SENSITIVE_RE, sensitiveHitKind, sensitiveHitSample } from '../sensitive.js';
-import { looksLikeUnfinished } from '../wait.js';
-import { safeFetchBuffer, validateFetchUrl, looksLikeImageBuffer } from '../safe-fetch.js';
-import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from '../forward.js';
+import { unwrap } from '../dsh-client.js';
 import {
   loadSlang,
   saveSlang,
@@ -36,8 +29,6 @@ import {
   applyStickerNote,
   markStickerUsed
 } from '../sticker-lib.js';
-import { resolveFaceRef, formatFaceList } from '../qq-faces.js';
-import { makeDocx } from '../make-docx.js';
 import { segmentsToText, parseJsonCardText, extractMediaFromSegments, extractFilesFromSegments,
   execFileBuffer, decodeTextBuffer, extractDocxText, parseFileBuffer, fetchFileBytes, readFileContent } from '../lib/message-parse.js';
 import {
@@ -45,33 +36,10 @@ import {
   SOCIAL_STATE_FILE, STICKER_FILE, FEEDBACK_FILE, TOOL_LOG_FILE, ACTIVITY_LOG, BRIDGE_LOG,
   CROSSCHAT_FILE, LOCK_FILE,
 } from '../lib/paths.js';
-import { readJsonSafe, atomicWriteJson, atomicWriteText } from '../lib/json-fs.js';
-import { randInt } from '../lib/rand.js';
-import { BJ_WEEK, bjMinutes, bjMinToText, beijingTs, beijingDateKey, parseClockMin, fmtBeijing } from '../lib/time.js';
-import { isCjkChar, splitByCjkSpaces, isCjkLikeChar, convertExampleSpacesToComma } from '../lib/cjk-split.js';
-import { clampGap, computeGaps } from '../lib/send-gaps.js';
-import { normalizeLoopSignature, isDuplicateSendText } from '../lib/loop-guard.js';
-import { faceIdFromArtifactContent, resolveArtifactFaceId } from '../lib/qq-face-parse.js';
-import { compressImageBuffer, finalizeImageBuffer } from '../lib/image-compress.js';
-import { isSafeLocalMediaPath, isProbablySafeImageFileRef } from '../lib/media-guard.js';
-import { KNOWN_AGENT_TOKENS, redactSensitiveText, SENSITIVE_ARG_KEYS, redactSensitive, sanitizeToolArgs, escapeCqText, unquoteJsonString } from '../lib/text-safe.js';
-import { normalizeOwnerQQ, normalizeIdList, allowed } from '../lib/config.js';
-import { readRoleState, writeRoleState, sanitizeRoleName, listRoles } from '../lib/role-access.js';
-import { sleep, withTimeout } from '../lib/async.js';
-import { convKey, canonicalKey } from '../lib/keys.js';
-import { EXPLICIT_END_RE, hasExplicitEnd, isSleepingConfig, normalizeSpeakerIds } from '../lib/sleep-guard.js';
-import { isEmojiLikeCp, stripImeEmoji } from '../lib/emoji.js';
-import { singleLineForQQ, splitLongSegment } from '../lib/segment.js';
-import { mimeFromBuffer, mimeFromUrl, base64FromMaybe } from '../lib/media-meta.js';
-import { log, appendActivity, readActivityTail } from '../lib/log.js';
-import { SILENT_MARKER, isSilentMarker, SEND_TOOL_RE, isSendToolName, SPACE_SPLIT_HINT, DIRECTION_HINT } from '../lib/markers.js';
-import { state, loadConfig, loadState, saveState } from './config.js';
-import { acquireLock, releaseLock } from './runtime.js';
-import { enqueueSend, currentSendChain } from './send-chain.js';
-import { sendToQQ, sendMessages, initQqSendCore, setQqSendBot } from './qq-send.js';
-import { redactKnownTokensOnly, sweepMessageArtifacts, stripMessageArtifacts, cleanOutboundText } from '../lib/outbound-text.js';
-import { planSocialTimeline, isDirectedAtAi, withTimeText, findCjkSpaceWarning, findSplitBoundaryWarning } from '../lib/social-timeline.js';
-import { createMediaDomain } from './media.js';
+import { normalizeOwnerQQ } from '../lib/config.js';
+import { sleep } from '../lib/async.js';
+import { log } from '../lib/log.js';
+import { state } from './config.js';
 import {
   DOC_TMP_HOST_DIR, DOC_TMP_CONTAINER_DIR, MAX_DOCX_CHARS, docxQuota,
   loadDocxQuota, docxQuotaReserve, docxQuotaCommit, writeDocxToMount,
@@ -83,7 +51,7 @@ import {
   stickerEntries, stickerSyncedAt, updateStickerEntries, initStickerCore, setStickerBot,
   writeStickerTmpFile, applyStickerNote2, setStickerRemark2, collectSticker2,
 } from './sticker.js';
-import { postRandomQzone, initQzoneCore } from './qzone.js';
+import { postRandomQzone } from './qzone.js';
 import {
   cancelPendingEntry, handlePendingAnswer, handlePokeNotice, handleInputStatusNotice,
   registerPending, initEventsAuxCore, setEventsAuxApi,
@@ -98,7 +66,6 @@ import {
   evaluateWakeTrigger, buildWakePrompt, sendWakePrompt,
   initWakeCore, setWakeApi, setWakeDeliver,
 } from './wake-send.js';
-import { resolveGroupMemberName, resolveReplyInfo, expandIncomingForwardPreview, setMessageCacheBot } from './message-cache.js';
 import {
   shouldAuditKey, shouldBlockSilentReply, handleSensitiveIntercept, auditAndSend, initAuditCore,
   readFeedbackEntries, appendFeedbackEntry, readToolLog, appendToolLog,
@@ -180,8 +147,6 @@ import {
   warmGroupName, getGroupDisplayName, formatGroupListLine, warmGroupInfo,
   getCachedGroupInfo, formatGroupInfoLine, initGroupCacheCore, setGroupCacheBot,
 } from './group-cache.js';
-import { handleIncoming, pumpMux, initMuxCore, setMuxApi, setMuxBot } from './mux.js';
-import { startConsoleServer, initConsoleCore, setConsoleApi, setConsoleBot, setConsoleMedia, setConsoleLastModeSink } from './console-server.js';
 
 let cfgRef = null;
 export function initDshWatchCore(cfg) { cfgRef = cfg; lastMode = currentMode; }

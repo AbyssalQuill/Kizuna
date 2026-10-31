@@ -3,16 +3,14 @@ import { slangEntries } from './slang.js';
 // M8 唤醒引擎
 // deliverPrompt(投递) 经 setWakeDeliver 注入；api 经 setWakeApi；cfg 经 initWakeCore。
 import { fmtBeijing } from '../lib/time.js';
-import { log, appendActivity } from '../lib/log.js';
+import { log } from '../lib/log.js';
 import { isDirectedAtAi } from '../lib/social-timeline.js';
 import { withTimeout } from '../lib/async.js';
 // 2026-09-20：人设/发言规则已合成进系统提示词，靠这个判定"正文里还要不要再重复一遍"
-import { getComposedPersonaStamp } from '../lib/preset-compose.js';
 import { currentMode, selfNickname, isSessionAllowedInCurrentMode } from './mode.js';
 import { state, saveState } from './config.js';
 import { createStandbySession, ensureSession } from './dsh-session.js';
-import { formatMemory, formatProfileText, formatContactsLine, recentChatMessages, fetchUnreadChatMessages, markMessagesRead, memoryDigest, warmQueryEmbedding, getTopSocialBonds } from './memory.js';
-import { formatGroupInfoLine, formatGroupListLine } from './group-cache.js';
+import { recentChatMessages, fetchUnreadChatMessages, markMessagesRead, memoryDigest, warmQueryEmbedding, getTopSocialBonds } from './memory.js';
 // 语音/表情包：唤醒正文里注入一行「本轮轮到哪一种」的抽签数据（概率与冷却在管理端配：
 // 语音在「语音」页，表情包在桥配置页的「表情包」卡）。两边都关着/概率 0 时不会注入多余内容。
 import { voiceTurnHint } from './voice.js';
@@ -31,15 +29,12 @@ import {
 } from './social-state.js';
 // 2026-09-22：在途回合注入要附图和唤醒一样取图（同一份解析器），见 steerIntoRunningTurn 顶部注释
 import { getPromptMediaResolver } from './prompt-deliver.js';
-import { buildCrossChatBlock } from './crosschat.js';
 import { activityStatusLine } from './activity.js';
 import { armPendingWakeLease, disarmPendingWakeLease } from './turn-guard.js';
 import { wakeConfigMissCount, reverse, pendingWakeKeys, TurnStartAt, collectors, agentRunningSessions, holdActiveKeys, turnHasBubble, messageMediaStore } from './session-state.js';
 import { noteInboxDelivery } from './inbox-marks.js';
 // 文件类型标签（`[file:PDF]` 标记用）：与正文里的 `[文件:…]` 标记共用同一份映射，避免两处漂移
 import { fileKindLabel } from '../lib/message-parse.js';
-import { KNOWN_AGENT_TOKENS } from '../lib/text-safe.js';
-import { sanitizeForwardId } from '../forward.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE_DIR } from '../lib/paths.js';
@@ -353,7 +348,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
    * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
    * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
-  const anchor = '[anchor] persona_first spoken_words_only vary_sentence_shape vary_bubble_length react_to_one_detail_never_a_briefing';
+  const anchor = '[anchor] persona_first spoken_words_only vary_sentence_shape vary_bubble_length react_like_someone_scrolling_not_summarizing';
   return base ? `${base}\n${anchor}` : anchor;
 }
 

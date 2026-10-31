@@ -16,7 +16,7 @@ import { getSocialState } from './social-state.js';
 
 /** 这些工具的 key/messages 语义与 qq_send_message 一致，可以直接复用同一个端点。 */
 const RECOVERABLE = new Set([
-  'qq_send_message', 'qq_send_group_message', 'qq_send_private_message', 'qq_reply',
+  'qq_send_message',
 ]);
 
 export function isRecoverableSendTool(toolName) {

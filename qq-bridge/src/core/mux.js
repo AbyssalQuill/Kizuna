@@ -5,14 +5,10 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
-import { NodeApiClient, unwrap, createTurnCollector } from '../dsh-client.js';
-import { mdToPlain, splitForQQ } from '../md-to-plain.js';
-import { SENSITIVE_RE, sensitiveHitKind, sensitiveHitSample } from '../sensitive.js';
-import { looksLikeUnfinished } from '../wait.js';
-import { safeFetchBuffer, validateFetchUrl, looksLikeImageBuffer } from '../safe-fetch.js';
-import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from '../forward.js';
+import { createTurnCollector } from '../dsh-client.js';
+import { mdToPlain } from '../md-to-plain.js';
+import { SENSITIVE_RE } from '../sensitive.js';
+import { extractForwardIds } from '../forward.js';
 import {
   loadSlang,
   saveSlang,
@@ -37,8 +33,6 @@ import {
   applyStickerNote,
   markStickerUsed
 } from '../sticker-lib.js';
-import { resolveFaceRef, formatFaceList } from '../qq-faces.js';
-import { makeDocx } from '../make-docx.js';
 import {
   listPersonaFiles,
   savePersonaFile,
@@ -52,31 +46,22 @@ import {
   SOCIAL_STATE_FILE, STICKER_FILE, FEEDBACK_FILE, TOOL_LOG_FILE, ACTIVITY_LOG, BRIDGE_LOG,
   CROSSCHAT_FILE, LOCK_FILE,
 } from '../lib/paths.js';
-import { readJsonSafe, atomicWriteJson, atomicWriteText } from '../lib/json-fs.js';
-import { randInt } from '../lib/rand.js';
-import { BJ_WEEK, bjMinutes, bjMinToText, beijingTs, beijingDateKey, parseClockMin, fmtBeijing } from '../lib/time.js';
-import { isCjkChar, splitByCjkSpaces, isCjkLikeChar, convertExampleSpacesToComma } from '../lib/cjk-split.js';
-import { clampGap, computeGaps } from '../lib/send-gaps.js';
-import { normalizeLoopSignature, isDuplicateSendText } from '../lib/loop-guard.js';
-import { faceIdFromArtifactContent, resolveArtifactFaceId } from '../lib/qq-face-parse.js';
-import { compressImageBuffer, finalizeImageBuffer } from '../lib/image-compress.js';
-import { isSafeLocalMediaPath, isProbablySafeImageFileRef } from '../lib/media-guard.js';
-import { KNOWN_AGENT_TOKENS, redactSensitiveText, SENSITIVE_ARG_KEYS, redactSensitive, sanitizeToolArgs, extractToolTargetKey, escapeCqText, unquoteJsonString } from '../lib/text-safe.js';
-import { normalizeOwnerQQ, normalizeIdList, allowed } from '../lib/config.js';
-import { readRoleState, writeRoleState, sanitizeRoleName, listRoles } from '../lib/role-access.js';
+import { fmtBeijing } from '../lib/time.js';
+import { KNOWN_AGENT_TOKENS, sanitizeToolArgs, extractToolTargetKey } from '../lib/text-safe.js';
+import { allowed } from '../lib/config.js';
+import { readRoleState, writeRoleState } from '../lib/role-access.js';
 import { isSessionSilent, setSessionSilent, listSilentSessions } from '../lib/session-silent.js';
 // 2026-09-22：人设切换：从角色库合成 → 原子写 persona.md（斜杠命令 /role 与模型侧工具共用这一份实现）
 import { switchPersona, listCharacterPacks } from '../lib/persona-switch.js';
-import { sleep, withTimeout } from '../lib/async.js';
-import { convKey, canonicalKey } from '../lib/keys.js';
-import { log, appendActivity, readActivityTail } from '../lib/log.js';
+import { sleep } from '../lib/async.js';
+import { convKey } from '../lib/keys.js';
+import { log, appendActivity } from '../lib/log.js';
 import { SILENT_MARKER, isSilentMarker, isSendToolName } from '../lib/markers.js';
 import { looksLikeUnquotedArgs } from '../lib/args-repair.js';
 import { recoverUnquotedSend } from './args-recover.js';
-import { state, loadConfig, loadState, saveState } from './config.js';
-import { sendToQQ, initQqSendCore, setQqSendBot } from './qq-send.js';
+import { state, saveState } from './config.js';
+import { sendToQQ } from './qq-send.js';
 import { cancelKeyedSends } from './send-chain.js';
-import { createMediaDomain } from './media.js';
 import {
   DOC_TMP_HOST_DIR, DOC_TMP_CONTAINER_DIR, MAX_DOCX_CHARS, docxQuota,
   loadDocxQuota, docxQuotaReserve, docxQuotaCommit, writeDocxToMount,
@@ -100,7 +85,7 @@ import {
   evaluateWakeTrigger, buildWakePrompt, sendWakePrompt,
   initWakeCore, setWakeApi, setWakeDeliver,
 } from './wake-send.js';
-import { resolveGroupMemberName, resolveReplyInfo, expandIncomingForwardPreview, setMessageCacheBot } from './message-cache.js';
+import { resolveGroupMemberName, resolveReplyInfo, expandIncomingForwardPreview } from './message-cache.js';
 import {
   shouldAuditKey, shouldBlockSilentReply, handleSensitiveIntercept, auditAndSend, initAuditCore,
   readFeedbackEntries, appendFeedbackEntry, readToolLog, appendToolLog,

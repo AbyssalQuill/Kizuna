@@ -33,7 +33,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ROOT } from '../lib/paths.js';
-import { beijingTs } from '../lib/time.js';
 import { log } from '../lib/log.js';
 import { ftsUsable, ftsQueryOf } from '../lib/fts.js';
 import {
@@ -927,6 +926,14 @@ const MICRO_FACT_PATTERNS = [
   { re: /我(?:是|在)(?:读)?(高中|初中|大学|大[一二三四]|研[一二三]|高三|高二|高一|初三|初二|初一)[^，。！？\n]{0,16}/, cat: 'identity', imp: 74, tpl: (m) => `学业身份：${m[0].trim()}` },
   { re: /我(?:叫|名字叫|名字是|网名是)([^，。！？\n]{2,12})/, cat: 'identity', imp: 80, tpl: (m) => `姓名/网名：${m[1].trim()}` },
   { re: /我(?:今年)?(\d{1,2})(?:岁|年级)/, cat: 'identity', imp: 70, tpl: (m) => `年龄/年级：${m[0].trim()}` },
+  /* 2026-10-31 第二批：真实群聊里高频出现、且能长期有效的事实句（仍然零 LLM）。 */
+  { re: /我(?:在|住在)([^，。！？\n]{2,10})(?:上班|工作|读书|上学|生活)/, cat: 'fact', imp: 72, tpl: (m) => `所在地：${m[1].trim()}` },
+  { re: /我(?:是|在)([^，。！？\n]{2,12})(?:专业|系)的?/, cat: 'identity', imp: 76, tpl: (m) => `专业：${m[1].trim()}` },
+  { re: /我(?:做|干)([^，。！？\n]{2,10})(?:工作|这行)/, cat: 'identity', imp: 72, tpl: (m) => `职业：${m[0].trim()}` },
+  { re: /我(?:养了|家有|家里有)([^，。！？\n]{1,8})(猫|狗|仓鼠|鹦鹉|兔)/, cat: 'fact', imp: 68, tpl: (m) => `养宠物：${m[0].trim()}` },
+  { re: /我(?:有女朋友|有男朋友|单身|分手了|结婚了|订婚了)/, cat: 'fact', imp: 74, tpl: (m) => `感情状态：${m[0].trim()}` },
+  { re: /我(?:用|在用|用的)(iPhone|MacBook|Mac|Windows|iPad|小米|华为|OPPO|vivo)[^，。！？\n]{0,10}/, cat: 'fact', imp: 66, tpl: (m) => `常用设备：${m[0].trim()}` },
+  { re: /我(?:习惯|一般|通常)([^，。！？\n]{2,20})/, cat: 'preference', imp: 62, tpl: (m) => `习惯：${m[0].trim()}` },
 ];
 
 /* 私聊专用：真实私聊里主语经常省略（「下周一和三要考试了」「有点慌」）。
@@ -949,7 +956,7 @@ export function extractAndRememberMicroFact(uid, convKey, rawText, isOwner = fal
       if (m) {
         const content = item.tpl(m);
         const tier = isOwner && item.imp >= 82 ? 'permanent' : 'durable';
-        return rememberEntry({
+        const saved = rememberEntry({
           uid: cleanUid,
           convKey: String(convKey ?? ''),
           category: isOwner && item.cat === 'preference' ? 'owner' : item.cat,
@@ -959,6 +966,10 @@ export function extractAndRememberMicroFact(uid, convKey, rawText, isOwner = fal
           pinned: isOwner && item.imp >= 85,
           source: 'auto-micro-fact',
         });
+        /* 2026-10-31：以前这条路静默写入，出了「92 条记忆 30 小时零新增」都没人发现。
+         * 现在每写一条都留一行日志，命中率可以按天从日志里数出来。 */
+        if (saved?.ok && !saved.deduped) log(`[memory] 自动记入 ${convKey} ${item.cat}: ${String(content).slice(0, 40)}`);
+        return saved;
       }
     }
   } catch { /* ignore */ }
