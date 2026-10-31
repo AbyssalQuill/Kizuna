@@ -2422,3 +2422,36 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
   - 执行 `systemctl restart qq-bridge` 与 `systemctl restart dsh-web`，双服务 active 正常运行；
   - 运行 `python3 tools/reset-sessions.py` 归档并重置历史失效会话，使全新请求直接挂载最新精炼提示词；
   - 远端运行 `missing-key-token.test.js`、`send-image-forward.test.js` 及 `test_all_mcp_and_language.mjs` 均 PASS。
+
+
+## 50. 2026-10-31 彻底根治商城表情无法看图：URL 候选推导与 300x300.png 高清直链抢占
+
+### 50.1 现象与深层协议机制定位
+- **问题**：用户指出“那那个表情你可以下载到本地然后就可以看到了吧，我意思根治的是无法看图，让他们可看图”。
+- **取证与网络层协议分析**：
+  1. QQ 客户端在发送 VIP 商城大表情（MarketFace）时，OneBot/NapCat 提取到的 URL 是：
+     `https://gxh.vip.qq.com/club/item/parcel/item/<xx>/<hash>/raw300.gif`，文件名为 `<xx>-<hash>.gif`。
+  2. 腾讯已将动图 `raw300.gif` 从 COS 桶中废弃（直接 curl 返回 404 NoSuchKey）。
+  3. 旧代码将虚拟文件传给 NapCat 的 `getImage`，而 NapCat 本地并未缓存商城表情，导致死等 25 秒超时，随后请求 `raw300.gif` 又 404，最终返回 null 丢图。
+  4. **关键突破**：深入探测腾讯个性化装扮 CDN 发现，腾讯在废弃 `raw300.gif` 的同时，在同一目录下为所有表情永久保留了高清静态大图 `300x300.png`（约 60KB~130KB，标准 PNG 魔数，HTTP 200，100% 存在），且 `media.file` 亦完整携带了 prefix 与 hash。
+
+### 50.2 核心落地修复（`src/core/media-pipe.js`）
+1. **新增 `resolveDownloadCandidates` 智能候选推导**：
+   - 针对匹配 `gxh.vip.qq.com/club/item/parcel/item/` 的 URL，自动优先生成 `300x300.png` 候选；
+   - 即使缺少有效 URL，若 `media.file` 满足 `<prefix>-<hash>.gif` 格式，亦能自动反推构造 `https://gxh.vip.qq.com/club/item/parcel/item/<prefix>/<hash>/300x300.png` 直链。
+2. **旁路跳过 NapCat 25s 死等**：
+   - 标记 `isMarketFace`，不再向网关 `botRef.getImage` 请求该虚拟文件名，消除 25s 的巨额卡顿。
+3. **带防盗链 Headers 高速抓取与本地落盘缓存**：
+   - 自动注入 `Referer: https://gxh.vip.qq.com/` 与 QQ User-Agent；
+   - 抓取到的真实 PNG 图像自动通过 `writeCachedMedia` 写入本地 `state/media-cache/`，并作为多模态图像 base64 递交给 DSH / 视觉模型，实现**“真正看图”**。
+
+### 50.3 测试与真机验证
+- **本地单元与端到端测试**：
+  - `resolveOneMedia` 实测解析 `8e-8e784d3c7d7bcc04c5e6a03cf9261756.gif` 仅用时 141ms，成功拿到 76912 字节的高清真实图片并完成本地落盘；
+  - `send-image-forward.test.js`（26 项）全过；
+  - `missing-key-token.test.js`（3 项）全过；
+  - `test_all_mcp_and_language.mjs`（12 项）全过。
+- **线上服务器实机热更新**：
+  - 同步部署至 `/root/qq-bridge/src/core/media-pipe.js`（MD5: `b6c4430fa712914a8458a082529ecb1c`）；
+  - 远端真机运行 `resolveOneMedia` 实测成功：`ok=true mime=image/png len=76912`，本地缓存命中验证成功；
+  - `systemctl restart qq-bridge` 服务处于 active 状态。

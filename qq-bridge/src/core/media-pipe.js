@@ -70,6 +70,42 @@ export function getImageDimensions(buf) {
   return null;
 }
 
+/**
+ * 解析图片下载候选 URL 列表。
+ * 对于 QQ 商城大表情（MarketFace / gxh.vip.qq.com/club/item/parcel/item/<xx>/<hash>/raw300.gif）：
+ * 腾讯 COS 桶已废弃动图直链 raw300.gif (返回 404)，但对应的 300x300.png 静态预览大图始终有效且高清（约 70KB~130KB），
+ * 优先使用 300x300.png 下载，保证模型能真正拿到图片字节看到图，同时避免 404 与长时间死等。
+ */
+function resolveDownloadCandidates(media, extraUrl = null) {
+  const urls = [];
+  const rawUrl = typeof extraUrl === 'string' ? extraUrl.trim() : (typeof media?.url === 'string' ? media.url.trim() : '');
+  const fileRaw = typeof media?.file === 'string' ? media.file.trim() : '';
+
+  if (rawUrl) {
+    const match = rawUrl.match(/gxh\.vip\.qq\.com\/club\/item\/parcel\/item\/([0-9a-zA-Z]+)\/([0-9a-zA-Z]+)/i);
+    if (match) {
+      const [_, prefix, hash] = match;
+      urls.push(`https://gxh.vip.qq.com/club/item/parcel/item/${prefix}/${hash}/300x300.png`);
+      urls.push(`https://gxh.vip.qq.com/club/item/parcel/item/${prefix}/${hash}/300.png`);
+      urls.push(rawUrl);
+    } else {
+      urls.push(rawUrl);
+    }
+  }
+
+  // 若 file 格式符合商城表情 (如 8e-8e784d3c7d7bcc04c5e6a03cf9261756.gif)，可反推构造 CDN 下载地址
+  const fileMatch = fileRaw.match(/^([0-9a-zA-Z]{2})-([0-9a-zA-Z]{32})\.(gif|png|jpg)$/i);
+  if (fileMatch) {
+    const [_, prefix, hash] = fileMatch;
+    const inferred = `https://gxh.vip.qq.com/club/item/parcel/item/${prefix}/${hash}/300x300.png`;
+    if (!urls.includes(inferred)) {
+      urls.unshift(inferred);
+    }
+  }
+
+  return urls;
+}
+
 export async function fetchOneBotImage(media, opts = {}) {
   /* 2026-09-22 需求「默认转发原图，别压缩」：raw=true 时原样返回抓到的字节：
    * 喂给视觉模型那条路必须压缩（缩到 1280px 内、40KB 以上就重编码，为的是 token 与被 DSH 附件层
@@ -88,14 +124,41 @@ export async function fetchOneBotImage(media, opts = {}) {
     try { writeCachedMedia(media, buf, mime); } catch { /* 缓存失败不影响主流程 */ }
     return await asIs(buf, mime);
   };
+  const tryDownloadUrls = async (urls) => {
+    for (const targetUrl of urls) {
+      if (!targetUrl) continue;
+      try {
+        const isGxh = targetUrl.includes('gxh.vip.qq.com');
+        const qqHeaders = isGxh
+          ? { referer: 'https://gxh.vip.qq.com/', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QQ/9.7.21' }
+          : (targetUrl.includes('qq.com') ? { referer: 'https://im.qq.com/', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QQ/9.7.21' } : {});
+        const fetched = await safeFetchBuffer(targetUrl, MAX_MEDIA_BYTES, qqHeaders);
+        if (looksLikeImageBuffer(fetched.buffer)) {
+          const dims = getImageDimensions(fetched.buffer);
+          if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
+            log(`图片 URL 像素超限，已跳过（${dims.width}x${dims.height}）: ${targetUrl}`);
+          } else {
+            return await keepAnd(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(targetUrl));
+          }
+        }
+      } catch (error) {
+        log(`图片 URL 抓取失败 (${targetUrl}): ${error?.message ?? error}`);
+      }
+    }
+    return null;
+  };
+
   // 优先使用 OneBot get_image 获取网关侧信息；只有 file 是安全缓存文件名时才允许交给网关。
   /* 2026-10-28 修「图还没加载出来」：NapCat 有些版本把 file 直接给成绝对路径
    * （/root/.config/QQ/nt_data/Pic/....jpg），旧的「只认简单文件名」判据会把这类图整条跳过 ——
    * 连 get_image 都不问，最后静默退化成 [图片（获取失败）]，日志里什么都没有。
    * 绝对路径只要能通过 isSafeLocalMediaPath（仍在 QQ 缓存目录内）就照样问网关：这一步只读元数据。 */
   const fileRefRaw = media.kind === 'image' && media.file ? String(media.file) : '';
-  const fileRefIsAbs = /^([a-zA-Z]:[\\/]|\/)/.test(fileRefRaw);
-  const canAskGateway = !!fileRefRaw
+  const fileRefIsAbs = /^([a-zA-Z]:[\\\\/]|\/)/.test(fileRefRaw);
+  const isMarketFace = /parcel|gxh\.vip\.qq\.com/i.test(String(media.url || ''))
+    || /^[0-9a-f]{2}-[0-9a-f]{32}\.(gif|png|jpg)$/i.test(fileRefRaw);
+  // 商城表情在 NapCat 本地无缓存文件，询问 get_image 会死等 25 秒超时，故跳过网关直奔网络下载
+  const canAskGateway = !isMarketFace && !!fileRefRaw
     && (isProbablySafeImageFileRef(fileRefRaw) || (fileRefIsAbs && isSafeLocalMediaPath(fileRefRaw, cfgRef?.napcat?.homeDir)));
   if (canAskGateway) {
     try {
@@ -139,39 +202,20 @@ export async function fetchOneBotImage(media, opts = {}) {
         }
       }
 
-      // 3. 兜底尝试通过 URL 网络下载（独立 try-catch，防止 DNS/CDN 超时阻断后续）
+      // 3. 兜底尝试通过 URL 网络下载（支持候选解析与防盗链）
       if (obj.url) {
-        try {
-          const qqHeaders = String(obj.url).includes('qq.com') ? { referer: 'https://im.qq.com/', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QQ/9.7.21' } : {};
-          const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES, qqHeaders);
-          const dims = getImageDimensions(fetched.buffer);
-          if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
-            log(`get_image URL 图片像素超限，已跳过（${dims.width}x${dims.height}）`);
-          } else {
-            return await keepAnd(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(obj.url));
-          }
-        } catch (fetchErr) {
-          log(`get_image 内部 URL 抓取失败: ${fetchErr?.message ?? fetchErr}`);
-        }
+        const fetched = await tryDownloadUrls(resolveDownloadCandidates(media, String(obj.url)));
+        if (fetched) return fetched;
       }
     } catch (error) {
       log(`get_image 解析失败: ${error?.message ?? error}`);
     }
   }
-  // 其次直接用消息段里的 URL
-  if (media.url) {
-    try {
-      const qqHeaders = String(media.url).includes('qq.com') ? { referer: 'https://im.qq.com/', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QQ/9.7.21' } : {};
-      const fetched = await safeFetchBuffer(String(media.url), MAX_MEDIA_BYTES, qqHeaders);
-      const dims = getImageDimensions(fetched.buffer);
-      if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
-        log(`图片 URL 像素超限，已跳过（${dims.width}x${dims.height}）`);
-      } else {
-        return await keepAnd(fetched.buffer, mimeFromBuffer(fetched.buffer) || mimeFromUrl(media.url));
-      }
-    } catch (error) {
-      log(`图片 URL 抓取失败: ${error?.message ?? error}`);
-    }
+  // 其次直接用消息段里的 URL 或由 file 反推的候选地址
+  const directCandidates = resolveDownloadCandidates(media, media.url);
+  if (directCandidates.length > 0) {
+    const fetched = await tryDownloadUrls(directCandidates);
+    if (fetched) return fetched;
   }
   /* 失败必须留痕：否则线上只看到 [图片（获取失败）]，分不清是没文件、没 URL 还是下载挂了。 */
   log(`[media] 图片拿不到内容：file=${fileRefRaw ? fileRefRaw.slice(0, 96) : '(空)'} url=${media.url ? String(media.url).slice(0, 60) : '(空)'} kind=${media.kind ?? '(空)'}`);
