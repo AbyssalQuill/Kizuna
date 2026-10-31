@@ -997,6 +997,9 @@ export async function pumpMux() {
                 if (pending.size === 0) pendingSendToolCalls.delete(frame.sessionId);
                 if (!resultError) {
                   sendToolSucceededSessions.add(frame.sessionId);
+                  if (/qq_send_message/.test(String(toolName ?? ''))) {
+                    (globalThis._textSentSessions ??= new Set()).add(frame.sessionId);
+                  }
                 }
               }
             }
@@ -1299,6 +1302,20 @@ export async function pumpMux() {
               // 2026-09-06 起彻底移除兜底：正文只是思考草稿，绝不代表"要发给对方的话"。
               // 若该正文确是想回复的话，模型应在上文用发送工具发出；这里只暂存提示，让模型下一轮
               // 自己用工具补发（根治"模型不调工具只写正文→桥接乱发思考文本"的循环）。
+              const textSentThisTurn = Boolean(globalThis._textSentSessions?.has(frame.sessionId));
+              globalThis._textSentSessions?.delete(frame.sessionId);
+              const isBareOk = /^ok[.。!！]?$/i.test(String(plain).trim());
+              /* 防漏发：模型把要说的话写在正文里、本回合又没有用 qq_send_message 发过文字 ——
+               *   · 已发了表情/图片/语音（sendToolSucceeded 但无文字气泡）：正文就是配文，补发；
+               *   · 私聊里一个发送工具都没调：正文就是回复，补发。
+               * 群聊里完全没发送时仍按思考处理（群里的草稿不外发）。裸 OK 一律不发。 */
+              const salvage = !isBareOk && plain.length <= 400 && !textSentThisTurn
+                && (sendToolSucceeded || String(key).startsWith('private:'));
+              if (salvage) {
+                log(`[salvage] ${key} 正文未经发送工具发出，补发为气泡（${plain.length} 字）`);
+                void sendToQQ(key, plain).catch(() => {});
+                continue;
+              }
               if (sendToolSucceeded) {
                 log(`工具已发送消息，正文按思考忽略 (${key})`);
                 continue;
