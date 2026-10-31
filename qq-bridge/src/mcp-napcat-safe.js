@@ -1462,13 +1462,13 @@ registerTool(
 
 registerTool(
   'qq_send_message',
-  'Send messages: string = one message (recommended by default); array = several. In group chats, use replyToMessageId to quote/reply to the specific message you are answering (e.g. from unread (id:...) or qq_get_recent_messages) to keep conversations clear. images = local image paths for text+image, image-only (messages = []) or image-first. Needs the token; target must be whitelisted. Sending also counts as reading: advances read watermark automatically.',
+  'Send messages flexibly: string = one message; array = several bubbles. Supports diverse modalities: text+image inline in a single bubble, image-first, text-first, image-only (messages = []), or text-only. In group chats, use replyToMessageId to quote/reply to the specific message you are answering (e.g. from unread (id:...) or qq_get_recent_messages) to keep conversations clear. images = local image paths for inline attachments or image-only bubbles. Needs token; target must be whitelisted. Advances read watermark automatically.',
   {
     key: z.string().describe('Session key: group:ID or private:QQ'),
     token: z.string().describe('Session token (from the wake prompt)'),
-    messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('string = one message (prefer single bubble); array = several; empty array = images only'),
+    messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('string = one message; array = several bubbles (flexible and concise); empty array = images only'),
     message: z.string().optional().describe('Alias of messages (string; kept only for typos). Prefer messages.'),
-    images: z.array(z.string()).optional().describe('Absolute local paths of static images (e.g. C:\\\\path\\\\xx.webp; meme/ sticker files work too), one per sent item or a single one. Never send animated GIFs by path - QQ shows a flickering static preview; find those with qq_meme_search (GIF set) or qq_list_stickers and send via qq_send_sticker. Only static png/jpg/webp go by path.'),
+    images: z.array(z.string()).optional().describe('Absolute local paths of static images (e.g. C:\\\\path\\\\xx.webp; meme/ sticker files work too), paired with messages for inline text+image or sent as image bubbles. Never send animated GIFs by path; use qq_send_sticker for GIFs. Static png/jpg/webp go by path.'),
     replyToMessageId: z.union([z.number(), z.string()]).optional().describe('Message id to quote/reply to (non-zero int, from unread (id:...) or qq_get_recent_messages; recommended in group chats to indicate target message/peer)'),
     atUserId: z.union([z.number(), z.string()]).optional().describe('QQ id to @ (group chats; needed for at-mentions). This must be a real person\'s QQ NUMBER - never a messageId: ids you would pass to replyToMessageId are NOT QQ numbers, and mixing them up makes the whole send fail. Never hand-write [CQ:at,qq=...] in the message text - it is sent verbatim as garbage. Not together with a quote; do not overuse.'),
     gapMode: z.enum(['auto', 'fixed', 'byLength']).optional().describe('auto = random (bridge default), fixed = interval, byLength = by text length'),

@@ -2293,21 +2293,33 @@ export function startConsoleServer() {
           }
         }
         const isRawString = typeof rawMessages === 'string';
+        const extractedImages = [];
         const messages = Array.isArray(rawMessages)
-          ? rawMessages.map((m) => {
+          ? rawMessages.map((m, idx) => {
               if (typeof m === 'string') return m.trim();
               if (m && typeof m === 'object') {
+                const imgVal = m.image ?? m.file ?? m.img ?? (m.type === 'image' ? (m.data?.file ?? m.data?.url ?? m.url) : undefined);
+                if (typeof imgVal === 'string' && imgVal.trim()) {
+                  extractedImages[idx] = imgVal.trim();
+                }
                 // 同 mcp-napcat-safe：认 {"type":"text","data":{"text":"…"}} 这种内容块
                 const bt = (m.type === 'text' || m.data) ? (m.data?.text ?? (m.type === 'text' ? m.text : undefined)) : undefined;
                 if (typeof bt === 'string' && bt.trim()) return bt.trim();
                 return String(m.text ?? m.content ?? m.message ?? '').trim();
               }
               return String(m ?? '').trim();
-            }).filter(Boolean)
+            }).filter((text, idx) => text || extractedImages[idx])
           : (isRawString ? [String(rawMessages).trim()].filter(Boolean) : []);
         const replyToMessageId = body.replyToMessageId;
         const atUserId = body.atUserId ?? null;
-        const images = Array.isArray(body.images) ? body.images.map(String).filter(Boolean) : [];
+        let images = Array.isArray(body.images) ? body.images.map(String).filter(Boolean) : [];
+        if (!images.length && extractedImages.length) {
+          images = extractedImages;
+        } else if (images.length && extractedImages.length) {
+          for (let i = 0; i < extractedImages.length; i++) {
+            if (extractedImages[i] && !images[i]) images[i] = extractedImages[i];
+          }
+        }
         // default不再按空格自动分条：字符串就是一条消息；数组模式原样使用调用方间隔。
         const gapMode = (isRawString && messages.length > 1) ? 'byLength' : (body.gapMode === 'fixed' || body.gapMode === 'byLength' ? body.gapMode : 'byLength');
         const gapMs = Number(body.gapMs);
