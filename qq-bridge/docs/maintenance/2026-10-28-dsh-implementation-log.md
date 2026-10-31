@@ -1948,3 +1948,82 @@ NapCat `get_group_list` 实取：
 `python3 tools/reset-sessions.py` → 重置 4 个（group:1073589775 / group:868756515 /
 private:1736784911 / private:3619804038），跳过 6 个（本来就没有会话映射）。
 新会话会带上这一轮的提示词改动：无 personaPrefix、`[tools]` 的历史检索路由、`[bubbles]` 的长短自由、无两段式 anchor。
+
+---
+
+## 条目 63（2026-10-31）：反重力会话全量核查、三处线上故障、工具表去重与提示词转向
+
+### 1. 反重力未命名会话（fb3714c2）声明的 13 项核查
+
+会话位置 `~/.gemini/antigravity/conversations/fb3714c2-….db`（19702 步，10-30 22:0x → 10-31 02:38）。
+8 项隐性漏洞 + 5 项架构升级逐条回代码核对，结论：12 项落地，2 项有偏差。
+
+- **第 10 项是空的**：`collapseToSingleTurn` 全仓 0 定义，只在 `wake-send.js:507` 有一行注释。
+  真正让上下文不堆积的是 `autoReset.permanent: true` + 空闲 30 分钟归档 + DSH 侧 16% 压缩三件叠加。
+- **第 5 项语义被改过**：原规矩「缺 key 一律拒绝」曾被我改成「按唯一在途会话补齐」。
+  用户口径是「绝不猜会话」，测试也钉着这条契约 —— 已回退为严格拒绝，只保留 `convKey/sessionKey/session` 别名归一（纯解析、不猜目标）。
+
+### 2. 三处线上故障（都带验证）
+
+| 故障 | 根因 | 提交 | 验证 |
+|---|---|---|---|
+| 群友羁绊查询恒为空 | `memory.js` 调 `initChatDb` 未导入，ReferenceError 被 `catch` 吞 | `dc29c86` | 现场返回「常互动群友: 星痕Ofter(互动11次)…」 |
+| `selectModel` 全线 model-unavailable（10-30 18:41 起，7 天 1264 条） | `dsh-session.js` 用 `??` 取值，`visionModel` 空字符串 → 掉进已下架的 `deepseek-v4-flash-vision-exp` | `55daeec` | `已设置会话视觉模型 … -> deepseek-official/deepseek-flash (off)`；人格学习 `1 个目标（成功 1）` |
+| 全部群聊静默 8 分钟 | 群友 `/deepsleep` 打开全局静默，无 TTL、无提醒 | 运维 | 配置热加载 + `/api/social/deepsleep` 关闭，返回 `deepsleep: false` |
+
+模型名一度被我误判为过期（改成 `deepseek-v4-flash`），实测该 id 不可用、`deepseek-flash` 才可用 —— 已原样还原。
+现场对照：`deepseek-v4-flash-vision-exp` → unavailable，`deepseek-flash` → ok。
+另：卡死的旧人格学习会话（每次秒 blocked）已重建。
+
+### 3. 工具表去重（104 → 100）
+
+删掉四个薄壳，能力 1:1 保留在 `qq_send_message` / `qq_get_group_history`：
+
+- `qq_reply` → `qq_send_message(replyToMessageId=…)`
+- `qq_send_group_message` → `qq_send_message(key="group:N")`
+- `qq_send_private_message` → `qq_send_message(key="private:Q")`
+- `qq_group_history` → `qq_get_group_history`（同一实现的别名）
+
+`qq_crosschat_send` **没有删**：查实现它不是发消息，是给另一个会话留便签（内容不进任何 QQ 聊天），与 send_message 不是一回事。
+
+另修：`get_time` 裸名 → `qq_get_time`。全表 99 个工具都是 `qq_` 前缀，只有它是裸名，
+模型按前缀猜出 `qq_get_time` 后直接 `tool not found`。统一前缀，不留别名（别名等于又造一个重复入口）。
+
+线上复核：`注册 100/100 个，116590/141981 字符（82.1%）≈ 36434 token/步`。
+
+### 4. 提示词：从「指标」转向「姿态」
+
+挂谷猜想那一轮的实证（谬友圈 15:14:54 的 bilibili 卡片）：模型连发 6 条气泡，塞了 97 页 / λ³ / K(ε) / 175 页 /
+Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏」。
+
+第一版修法加了 `at_most_two_numbers_in_one_reply`、`三条封顶` 这类可数规则 —— 被用户否掉：
+「越强调越容易变为指标而不像人」。已全部删除，换成姿态：`you_are_typing_on_a_phone_in_a_group_not_composing_a_reply`、
+`nobody_in_a_group_chat_asks_you_for_a_briefing`、`say_the_one_thing_that_struck_you_then_stop`；
+`[anchor]` 改为 `react_like_someone_scrolling_not_summarizing`。
+
+`[WakeRef]` 那行（「普通消息不再按概率过滤…」）删除：它是写给人看的解释，模型读到只会把自己当概率机器。
+现在只在真处于静默时输出。
+
+### 5. 压缩代理档位
+
+`social.toolCompressor.level`：`max` → `medium` → 用户改口 `high`。当前 `high`，日志确认 `napcat MCP 走压缩代理：档位=high`。
+
+### 6. 死代码清扫
+
+后端扫掉 **370 个未使用的 import 绑定**（20 个文件，-322 行），前端 4 个，`tsc --noEmit` 通过、`check-scope` 127 文件全绿。
+`Learning.tsx` 的 `RefreshCw` 因跨行 import 未删，待补。
+
+### 7. 未完成（交接给下一轮）
+
+1. **自动记记忆仍然是空的**。规则匹配扩到 14 条后在 600 条真实消息上仍是 **1 条命中**；
+   你们群的说法（「手游比端游简单多了」）不满足「我 + 偏好」句式。结论：这条路走不通，必须上 LLM 抽取
+   （write-behind，按现价约 ¥0.11/天），需要新写一条学习会话链路。**不要再用规则硬凑。**
+2. **图片应走多模态直连**。现在图落 `state/media-cache`、正文只留 `[图片]`，模型要看还得调 `qq_get_image*`，
+   多一次 RTT 多一个失败点。正确做法是图片在消息进入时作为 image block 随唤醒正文投递，砍掉取图工具。
+   近 24 小时 `图片拿不到内容` 只有 4 条，全在 10-30 18:41–18:47（selectModel 坏掉的窗口），之后 0 条。
+3. **action 流仍不到位**。档位 max/medium/high 都试过，若模型仍只用二十几个工具，问题就在描述文案本身：
+   应把长尾工具的第一句从「这是什么 API」改成「什么时候该用它」。等一天的 `tool-calls.jsonl` 分布再定。
+
+### 8. 新增硬规矩（见 `RULES.md`）
+
+1. 改完提示词/工具表必须立刻全量 reset；2. 任务清单随完成随改；3. 图片走多模态直连。
