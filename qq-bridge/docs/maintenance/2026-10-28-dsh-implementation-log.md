@@ -2179,3 +2179,36 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 - 本地与服务器端核心单测（`quote-context` 等）100% PASS；
 - 完整核心测试套件 `npm run check` 127 项全部 PASS；
 - 代码与配置同步部署至服务器并热重启 `qq-bridge.service`。
+
+
+## 43. 条目 69（2026-10-31 20:25）：重构工具参数解析与底层智能自愈，消灭跨会话误判与模式白名单误拦
+
+### 43.1 现场深度取证与根因剖析
+- **现场报错 1（`qq_send_message`）**：
+  - 入参：`{"key": "1736784911", "token": "1736784911", "convKey": "private:1736784911", "messages": ["..."]}`
+  - 报错：`发送失败：这条调用带的是 private:1736784911 的令牌，却要发到 1736784911 —— 桥不替你猜目标会话。`
+  - **根因**：模型在私聊中传了纯数字 QQ 号 `"1736784911"`（同时传了 `convKey: "private:1736784911"`），但工具包装层只在 `key` 为空时才检查别名，保留了纯数字 `key`；而 `crossSessionRefusal` 将纯数字与 `private:数字` 判定为不同字符串，粗暴判定为跨会话未声明 `crossSession:true`。
+- **现场报错 2（`qq_get_recent_messages`）**：
+  - 入参：`{"key": "1736784911", "token": "1736784911", "limit": 15, "convKey": "private:1736784911"}`
+  - 报错：`获取最近消息失败：目标不在当前模式允许范围内`
+  - **根因**：`isSessionAllowedInCurrentMode(key)` 仅用 `/^(group|private):(\d+)$/` 正则硬匹配，纯数字传入时直接返回 `false`，导致白名单准入直接被拒。
+- **Token 填错根因**：
+  - 模型误把 QQ 号填入 `token: "1736784911"`，原代码中 `missingToken` 判为 false 不触发补齐，真 token 无法注入导致后续鉴权隐患。
+
+### 43.2 重构方案与实施落地
+1. **Key 规范化与全自动别名自愈（`src/lib/keys.js` / `src/mcp-napcat-safe.js`）**：
+   - `canonicalKey(key)` 升级：纯数字自动归一化为 `private:<id>`，支持中文前缀 `私聊:`/`群:`；
+   - 工具包装层重构：优先在 `key`、`convKey`、`sessionKey`、`session`、`sessionId`、`targetKey` 中提取带 `private:`/`group:` 的最优合法会话，并在底层自动归一化。
+2. **模式白名单准入自愈（`src/core/mode.js`）**：
+   - `isSessionAllowedInCurrentMode` 引入 `canonicalKey`，纯数字自动归一化后再行校验，彻底杜绝“目标不在当前模式允许范围内”。
+3. **跨会话判定防误伤与 Token 智能容错（`src/core/console-server.js`）**：
+   - `crossSessionRefusal` 显式判定：`callerKey === 'private:' + target` 或 `target === 'private:' + callerKey` 判定为同会话，绝不拦截；
+   - `agentTokenOk` 容错：当 `token` 传入的是纯数字且与目标 ID 一致时视为合法；
+   - MCP 包装层判定：当 `token` 缺失或为纯数字时，自动从合法会话上下文提取真正的 `agentToken` 并补齐。
+4. **提示词高维规整（`agent.cordis.yml`）**：
+   - 增加规范指引：`tool_call_key_verbatim_from_Session_line_with_prefix` 与 `tool_call_token_verbatim_from_Token_line`，兼顾沉浸式人设引导与参数准确率。
+
+### 43.3 验证
+- 编写专项回归用例 `test_user_cases.mjs`，本地与服务器端双端验证 100% 通过；
+- 核心单测 `quote-context` 与 `no-auto-quote` 100% 通过；
+- 同步至服务器，API 重置并重启 `qq-bridge.service`。

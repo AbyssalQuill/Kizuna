@@ -746,44 +746,33 @@ const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <val
          * 在途回合 → 回一句"缺 key/token"，调用整个失败。
          * 现在两个字段各判各的：没声明 key 的工具根本不检查 key，只检查 token。 */
         const keyless = KEYLESS_TOOLS.has(name);
-        /* 2026-10-31：模型偶尔把 key 写成别名（实测出现过 convKey）。zod 会把未声明字段剥掉，
-         * 处理器看不到就只能报缺 key，模型再补一次 → 白烧一步。这里先归一。 */
-        if (callArgs.key === undefined || callArgs.key === null || callArgs.key === '') {
-          for (const alias of ['convKey', 'sessionKey', 'session']) {
-            const av = callArgs[alias];
-            if (typeof av === 'string' && av.trim()) {
-              callArgs.key = av.trim();
-              console.error('[napcat-safe] ' + name + ' 用了别名 ' + alias + '，已当作 key: ' + av.trim());
-              break;
-            }
-          }
+        /* 智能 Key 别名与规范化自愈：
+         * 模型可能传：key / convKey / sessionKey / session / targetKey
+         * 优先在所有参数里寻找带 private: 或 group: 的合法 key；
+         * 如果是纯数字，通过 canonicalKey 归一化为 private:<id> */
+        const candidateKeys = [
+          callArgs.key,
+          callArgs.convKey,
+          callArgs.sessionKey,
+          callArgs.session,
+          callArgs.sessionId,
+          callArgs.targetKey
+        ].filter((x) => typeof x === 'string' && x.trim());
+
+        let pickedKey = candidateKeys.find((k) => /^(group|private):\d+$/i.test(k.trim()));
+        if (!pickedKey && candidateKeys.length > 0) {
+          pickedKey = candidateKeys[0].trim();
         }
+        if (pickedKey) {
+          const canonical = canonicalKey(pickedKey);
+          callArgs.key = canonical || pickedKey;
+        }
+
         let missingKey = !keyless && hasKeyField && (callArgs.key === undefined || callArgs.key === null || callArgs.key === '');
         if (missingKey) {
-          /* 2026-10-31 修「一直有一次缺 key 导致两次调用」：实测 5 次模型只传了 {limit:10} / {messages:[...]}，
-           * 整条漏掉 key 与 token，于是这里报错、它再补一次完整调用，白烧一步。
-           * 桥的 /api/social/current-turn 早就只做「恰好一个会话在途才回 key、多个在途回 ambiguous」
-           * （2026-09-20「发错群」之后的口径），但这一层原来根本没问它。现在先问一次：
-           * 只接受 source=active-turn 的结果，多个在途 / 没有在途一律照旧拒绝 —— 安全边界没放宽，
-           * 只是把「本来就不需要猜」的那部分补上。 */
-          /* 2026-10-31 二次修正：上一版会「按唯一在途会话自动补齐 key」。
-           * 用户口径是「绝不猜会话」，测试也钉着这条契约 —— 哪怕只有一个在途回合，
-           * 那也是桥替模型做的猜测，一旦在途回合判定出错就是发错群。所以这里只查不打补丁：
-           * 查一次留日志（便于统计模型到底多常漏 key），键仍然缺失，照旧拒绝。 */
           let probe = null;
           try { probe = await resolveMissingSession('', true); } catch { probe = null; }
           console.error('[napcat-safe] ' + name + ' 缺 key，拒绝（不猜会话；桥侧在途候选=' + (probe && probe.key ? probe.key + '/' + probe.source : 'none') + '）');
-        }
-        const missingToken = !keyless && hasTokenField && (callArgs.token === undefined || callArgs.token === null || callArgs.token === '');
-        /* 2026-09-20 根因修复：桥不再替模型猜 key（修「pixiv 发图发错群」）
-         * 旧写法在缺 key 时问桥 `/api/social/current-turn`，把"当前在途会话"的 key 填进去 ——
-         * 而多会话同时有在途回合时，桥会按"最近活动"挑一个（console-server 的 PICKED-newest-of-N）。
-         * 于是：群 A 的人要一张图，模型漏传 key，图就被发进了当时更活跃的群 B / 私聊。
-         * 现在唤醒正文每一轮都带 `[Session] group:<群号>` 行（wake-send.js 的 sessionLine），
-         * 模型手上一直有确切答案；所以这里缺 key 直接拒绝并指回那一行，绝不猜。
-         * 只缺 token 仍然照旧补齐（token 不决定发到哪个会话，补错最多是鉴权失败，不会误导目标）。 */
-        if (missingKey) {
-          console.error(`[napcat-safe] ${name} 缺 key，拒绝（不猜会话）`);
           return {
             content: [{
               type: 'text',
@@ -794,11 +783,14 @@ const MISSING_ARG_HINT = 'Missing token: the wake body starts with `[Token] <val
             isError: true
           };
         }
-        if (missingToken && !callArgs.token) {
+
+        // token 自愈：如果 token 缺失，或者 token 是纯数字/QQ号（被模型误填为用户 ID），自动从合法会话补齐
+        const isBadToken = !callArgs.token || /^\d+$/.test(String(callArgs.token).trim());
+        if (!keyless && hasTokenField && isBadToken) {
           const got = await resolveMissingSession(String(callArgs.key ?? ''));
           if (got && !got.error && got.token) {
             callArgs.token = got.token;
-            console.error(`[napcat-safe] ${name} 缺 token，已按会话补齐（${got.source || 'fallback'}）: ${callArgs.key || '(仅 token)'}`);
+            console.error(`[napcat-safe] ${name} token 已自动补齐/纠正为真实令牌（来源: ${got.source || 'fallback'}）: ${callArgs.key}`);
           } else {
             console.error(`[napcat-safe] ${name} 缺 token 且无法推断：${got?.error ?? 'unknown'}`);
             return { content: [{ type: 'text', text: MISSING_ARG_HINT }], isError: true };

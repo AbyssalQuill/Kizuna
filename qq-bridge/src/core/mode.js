@@ -3,6 +3,7 @@
 // 代码一律按default语义运行；白名单/黑名单访问控制保留（modeAllowed）。
 // 兼容导出名保留，避免扩散 import 面；currentMode 恒为 'default'。
 import { allowed } from '../lib/config.js';
+import { canonicalKey } from '../lib/keys.js';
 
 export const VALID_MODES = ['default']; // 兼容旧引用：单模式
 
@@ -36,9 +37,10 @@ export function modePreset(key, _mode, cfg) {
   return cfg?.social?.agentPreset || cfg?.agentPreset || undefined;
 }
 
-/** 判断一个会话 key 是否被白名单允许（供唤醒调度与 HTTP 路由共用）。 */
+/** 判断一个会话 key 是否被白名单允许（供唤醒调度与 HTTP 路由共用）。容错纯数字与别名。 */
 export function isSessionAllowedInCurrentMode(key) {
-  const m = /^(group|private):(\d+)$/.exec(key);
+  const normKey = canonicalKey(key) || String(key ?? '').trim();
+  const m = /^(group|private):(\d+)$/i.exec(normKey);
   if (!m) return false;
-  return modeAllowed(key, m[1], Number(m[2]), cfgRef);
+  return modeAllowed(normKey, m[1].toLowerCase(), Number(m[2]), cfgRef);
 }

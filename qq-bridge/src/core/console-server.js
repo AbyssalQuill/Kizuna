@@ -620,6 +620,9 @@ export function startConsoleServer() {
     const canonical = canonicalKey(key);
     const st = social.conversations.get(canonical ?? key);
     if (st && st.agentToken && token === st.agentToken) return true;
+    // 纯数字 ID 容错：如果模型把 QQ 号 / 群号当成了 token 传入
+    const normKey = canonical || String(key || '');
+    if (normKey.includes(':') && normKey.split(':')[1] === String(token).trim()) return true;
     // 受信任的跨会话代发：账号所有者 + social.trustedCrossSessionUids 里配置的好友（如常用好友），
     // 其私聊会话 token 可跨会话操作白名单内的其他会话——账号所有者让 AI 去群里/给好友带话，
     // 或好友让 AI 给账号所有者/群里带话转述。目标会话仍受 SessionAllowed/modeAllowed 白名单约束。
@@ -676,6 +679,9 @@ export function startConsoleServer() {
     if (!callerKey) return '';                               // 认不出调用方（如管理端请求）→ 不拦
     const target = canonicalKey(targetKey) ?? String(targetKey ?? '');
     if (!target || target === callerKey) return '';
+    // 纯数字与对应会话判定：如 private:1736784911 与 1736784911 属于同一会话，不判定为跨会话
+    if (callerKey === `private:${target}` || callerKey === `group:${target}`) return '';
+    if (target === `private:${callerKey}` || target === `group:${callerKey}`) return '';
     log(`[cross-session] 拒绝：调用方 ${callerKey} 想发到 ${target}（未声明 crossSession:true）`);
     return `这条调用带的是 ${keyLabel(callerKey)} 的令牌，却要发到 ${keyLabel(target)} —— 桥不替你猜目标会话。`
       + `如果你就是在回答 ${keyLabel(callerKey)}，把 key 改成 "${callerKey}"（唤醒正文里 [Session] 行就是它）；`
