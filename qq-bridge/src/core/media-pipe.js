@@ -248,17 +248,17 @@ async function gateImage(buffer, mimeType, label) {
 /* 2026-10-29：占位文案统一成下划线短语，并留一个稳定标记 [image_lost] 供 persona-metrics 统计发图失败。
  * 语义不变：告诉模型"图没到你手上"—— 如实说，别猜（看图乱猜是历史事故）。 */
 const IMAGE_LOST_TAG = '[image_lost]';
-const MEDIA_PLACEHOLDER_HINT = '[no_image_content] say_it_plainly_no_guess';
 export async function resolveOneMedia(media, opts = {}) {
   const raw = opts.raw === true;
   if (!media || typeof media !== 'object') return { ok: false, fallbackText: '' };
+  const isMarketFace = /parcel|gxh\.vip\.qq\.com/i.test(String(media.url || '')) || /parcel|gxh\.vip\.qq\.com/i.test(String(media.file || ''));
   if (media.kind === 'face') {
     const face = await fetchFaceMedia(media, opts);
     if (face.buffer) {
       if (raw) return { ok: true, face: true, buffer: face.buffer, mimeType: face.mimeType || 'image/png', faceText: face.text || '', raw: true };
       const g = await gateImage(face.buffer, face.mimeType || 'image/png', `表情#${media.faceId ?? ''}`);
       if (g.ok) return { ok: true, face: true, buffer: g.buffer, mimeType: g.mimeType, faceText: face.text || '' };
-      return { ok: false, fallbackText: `${face.text || `[face#${media.faceId}]`} [image_skipped] ${MEDIA_PLACEHOLDER_HINT}` };
+      return { ok: false, fallbackText: `${face.text || `[face#${media.faceId}]`} [image_skipped]` };
     }
     return { ok: false, fallbackText: face.text || `[表情#${media.faceId}]` };
   }
@@ -268,9 +268,9 @@ export async function resolveOneMedia(media, opts = {}) {
     if (raw) return { ok: true, face: false, buffer: img.buffer, mimeType: img.mimeType || 'image/jpeg', raw: true };
     const g = await gateImage(img.buffer, img.mimeType || 'image/jpeg', '图片');
     if (g.ok) return { ok: true, face: false, buffer: g.buffer, mimeType: g.mimeType };
-    return { ok: false, fallbackText: `[image_skipped] ${g.reason} ${MEDIA_PLACEHOLDER_HINT}` };
+    return { ok: false, fallbackText: isMarketFace ? `${IMAGE_LOST_TAG} [动画表情]` : `${IMAGE_LOST_TAG} [图片]` };
   }
-  return { ok: false, fallbackText: `${IMAGE_LOST_TAG} ${MEDIA_PLACEHOLDER_HINT}` };
+  return { ok: false, fallbackText: isMarketFace ? `${IMAGE_LOST_TAG} [动画表情]` : `${IMAGE_LOST_TAG} [图片]` };
 }
 
 export async function resolveMediaList(mediaList) {
@@ -290,7 +290,7 @@ export async function resolveMediaList(mediaList) {
   const results = await Promise.all(limited.map(async ({ media, index, overLimit }) => {
     if (overLimit) return { type: 'text', text: `[图片/表情 ${index}（超过单条上限 ${MAX_MEDIA_COUNT}，已跳过）]` };
     const r = await resolveOneMedia(media);
-    if (!r.ok) return { type: 'text', text: r.fallbackText || `${IMAGE_LOST_TAG} [image${index}] ${MEDIA_PLACEHOLDER_HINT}` };
+    if (!r.ok) return { type: 'text', text: r.fallbackText || `${IMAGE_LOST_TAG} [图片${index}]` };
     return r;
   }));
   const parts = [];
@@ -350,7 +350,7 @@ export async function fetchMediaData(mediaList, opts = {}) {
         index,
         kind: media?.kind === 'face' ? 'face' : 'image',
         ...(media?.kind !== 'face' ? { file: media.file ? String(media.file) : undefined, url: media.url ? String(media.url) : undefined } : {}),
-        text: r.fallbackText || `${IMAGE_LOST_TAG} ${MEDIA_PLACEHOLDER_HINT}`
+        text: r.fallbackText || `${IMAGE_LOST_TAG} [图片]`
       };
     }
     const out = {

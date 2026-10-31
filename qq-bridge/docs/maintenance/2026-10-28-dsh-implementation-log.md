@@ -2375,3 +2375,50 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 - 同步至服务器 `/root/qq-bridge` 与 DSH presets，平滑重启服务并重置 `private:1736784911` 会话。
 
 
+
+
+## 49. 2026-10-31 全量根治图片出戏道歉、打卡式多工具连调、工具缺 key 报错与群聊抢话
+
+### 49.1 案发现场取证与四大根因定位
+1. **图片未加载与出戏道歉**：
+   - 现场取证：私聊中主人发送表情/图片，机器人回复“主人发的图片我这边没加载出来呀……只看到是个gif的小图，内容真的看不清呢，不是我偷懒哦，是真的一片空白”。
+   - 根因：用户发送的为 QQ VIP 商城表情（`gxh.vip.qq.com/club/item/parcel`），NapCat 接口调用超时，腾讯 CDN 桶已失效（404）。`src/core/media-pipe.js` 在降级处理时注入了带有负面暗示的 `[image_lost] [no_image_content] say_it_plainly_no_guess`，直接诱导大模型出戏向主人道歉解释“没加载出来”。
+2. **打卡式三工具连调与单回合调用 4 次 `qq_send_message`**：
+   - 现场取证：DSH 界面中显示一轮唤醒耗时 22 秒、Token 暴涨至 60.2K，且工具调用列表赫然出现：
+     `qq_load_persona` -> `qq_get_time` -> `qq_get_recent_messages` -> 连续 4 次 `qq_send_message`。
+   - 根因：DSH 会话中烧录的旧预设含有 `perception_sequence_step_1_call_qq_load_persona`、`perception_sequence_step_2_call_qq_get_time`、`perception_sequence_step_3_call_qq_get_recent_messages` 等机械教条，强迫模型每轮都打卡调用；且缺乏多气泡单次调用的清晰契约，模型想发送 4 句话时，以多轮 tool call 往返的形式逐句调用 `qq_send_message`。
+3. **工具调用缺失 key 报错**：
+   - 现场取证：`qq_send_message` 传入 `{"key": "1736784911", "convKey": "private:1736784911", ...}`，控制台报错：`发送失败：key 格式应为 group:群号 或 private:QQ号`。
+   - 根因：`console-server.js` 校验硬编码正则 `/^(group|private):(\d+)$/`，没有对纯数字 QQ 号及 `body.convKey` 进行自动前缀推导；且 `mcp-napcat-safe.js` 未将 `convKey` 设为别名。
+4. **群聊弱智抢话（谬儿园 `group:1073589775`）**：
+   - 现场取证：群友发一张无字大盆饭图或闲聊一句“这dsh 又魔了”，机器人无脑蹦出来连续接两句话。
+   - 根因：`wake-send.js` 的 `judgeLineFor` 对群聊中的 `probability`、`anyMessage`、`topic` 唤醒缺少场景约束，导致模型误以为必须开口当路人解说员。
+
+### 49.2 核心落地修复
+1. **图片管道彻底去道歉说教（`src/core/media-pipe.js`）**：
+   - 彻底删除 `MEDIA_PLACEHOLDER_HINT`（`say_it_plainly_no_guess` 等）；
+   - 对商城大表情（`gxh.vip.qq.com/club/item/parcel`）直接识别并优雅降级为 `[动画表情]`，普通丢图统一降级为简洁中性的 `[图片]`，杜绝模型产生道歉和出戏行为。
+2. **系统提示词彻底通用化、拔除打卡指令、声明无限 Token 预算（`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 彻底拔除 `perception_sequence_step_...` 打卡教条；
+   - 声明 `unlimited_token_budget_unlock_full_depth`（不限制 token 预算激发全维深度）；
+   - 明确 `single_qq_send_message_call_per_turn_put_all_bubbles_in_messages_array`，终结单回合拆成 4 次 tool call 的延迟风暴；
+   - 保持 100% 通用角色扮演规则，不硬编码具体角色属性；
+   - 规范自然节奏（单意图发 1 句，延展自然切分 2~3 句，严禁臃肿长气泡），终结单句死板与机械三句的钟摆效应。
+3. **服务端参数归一化与 Schema 放宽（`src/core/console-server.js`、`src/mcp-napcat-safe.js`）**：
+   - `resolveReqKey` 优先读取 `convKey`、兼容纯数字 ID 并自动推断补全 `private:<id>` 前缀；
+   - `mcp-napcat-safe.js` 增加 `convKey` 别名并将类型放宽为 `z.union([z.string(), z.number()])`。
+4. **群聊潜水自律与背景注入（`src/core/wake-send.js`）**：
+   - 在 `judgeLineFor` 中，群聊普通唤醒（`probability` / `anyMessage` / `topic`）注入 `[group] peer_chatter_stay_silent_unless_specifically_addressed`，约束模型面对群友闲聊灌水默认潜水返回 `OK`。
+
+### 49.3 自动化测试与真机部署验证
+- **本地全量套件验证**：
+  - `npm run check` 50+ 个测试套件 100% 全部通过；
+  - `test_all_mcp_and_language.mjs` 12 项全部通过；
+  - `tests/send-image-forward.test.js` 26 项全部通过；
+  - `tests/missing-key-token.test.js` 3 项全部通过。
+- **服务器部署与在线验证**：
+  - 同步 5 个修改文件至 `/root/qq-bridge`，MD5 逐字节校验 100% 一致；
+  - 安装并同步至 `/root/.dsh/.agent-presets/qq-chat/agent.cordis.yml`；
+  - 执行 `systemctl restart qq-bridge` 与 `systemctl restart dsh-web`，双服务 active 正常运行；
+  - 运行 `python3 tools/reset-sessions.py` 归档并重置历史失效会话，使全新请求直接挂载最新精炼提示词；
+  - 远端运行 `missing-key-token.test.js`、`send-image-forward.test.js` 及 `test_all_mcp_and_language.mjs` 均 PASS。

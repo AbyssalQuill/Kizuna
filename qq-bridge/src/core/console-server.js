@@ -690,6 +690,8 @@ export function startConsoleServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
     const resolveReqKey = (body = null, rawParam = '') => {
+      const token = String(req.headers['x-agent-token'] || body?.token || '').trim();
+      const caller = callerKeyOfToken(token);
       const candidates = [
         rawParam,
         body?.key,
@@ -703,10 +705,17 @@ export function startConsoleServer() {
         url.searchParams.get('sessionKey'),
         url.searchParams.get('session'),
         url.searchParams.get('sessionId'),
-      ].filter((x) => typeof x === 'string' && x.trim());
-      const prefixed = candidates.find((k) => /^(group|private):\d+$/i.test(k.trim()));
-      const raw = (prefixed || candidates[0] || '').trim();
-      return canonicalKey(raw) || raw;
+      ].map((x) => (x !== null && x !== undefined ? String(x).trim() : '')).filter(Boolean);
+      const prefixed = candidates.find((k) => /^(group|private):\d+$/i.test(k));
+      if (prefixed) return canonicalKey(prefixed) || prefixed;
+      if (candidates[0]) {
+        const raw = candidates[0];
+        if (/^\d+$/.test(raw) && caller && (caller === `private:${raw}` || caller === `group:${raw}`)) {
+          return caller;
+        }
+        return canonicalKey(raw) || raw;
+      }
+      return caller || '';
     };
     const SECURITY_HEADERS = {
       'X-Frame-Options': 'DENY',

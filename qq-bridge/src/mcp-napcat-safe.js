@@ -1562,7 +1562,8 @@ registerTool(
   'qq_send_message',
   'Send messages and/or bundled memes to the session: string for a natural single reply (most common), or messages array if multiple bubbles are genuinely needed; bundled memes can be sent alone or combined. Supports text, image, meme, and quotes (replyToMessageId in groups). Advances read watermark automatically and applies natural typing pace.',
   {
-    key: z.string().describe('Session key: group:ID or private:QQ (must include prefix verbatim from [Session])'),
+    key: z.union([z.string(), z.number()]).optional().describe('Session key: group:ID or private:QQ (must include prefix verbatim from [Session])'),
+    convKey: z.union([z.string(), z.number()]).optional().describe('Alias of key: group:ID or private:QQ'),
     token: z.string().describe('Session token (from the wake prompt)'),
     messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('Send all bubbles of this turn in ONE call: string = one message (recommended for simple direct replies); array = multiple bubbles sent sequentially with natural typing pace; omit or empty array = send image/meme only'),
     message: z.string().optional().describe('Alias of messages (string; kept only for typos). Prefer messages.'),
@@ -1582,8 +1583,9 @@ registerTool(
     markRead: z.boolean().optional().describe(MARK_READ_PARAM_DESC),
     crossSession: z.boolean().optional().describe('ONLY for deliberately sending into a DIFFERENT session than the one you are answering (e.g. the owner asks you in private to say something in a group): set true to confirm. key MUST be the [Session] value from the wake prompt you are answering - a wrong key is refused instead of silently sent elsewhere, so only set this when the target really is another chat. Never set it to "fix" a mismatch you did not intend.')
   },
-  async ({ key, token, messages, message, images, meme, file, fileName, query, emotion, tag, pack, replyToMessageId, atUserId, gapMode, gapMs, gaps, crossSession, markRead }) => {
+  async ({ key, convKey, token, messages, message, images, meme, file, fileName, query, emotion, tag, pack, replyToMessageId, atUserId, gapMode, gapMs, gaps, crossSession, markRead }) => {
     try {
+      const targetKey = String(key || convKey || '').trim();
       // 兼容模型误用 message 单数字段（schema 也有同名兼容别名）；messages 为空时回退到 message。
       if (messages === undefined || messages === null || (Array.isArray(messages) && messages.length === 0)) {
         if (typeof message === 'string' && message.trim()) messages = message;
@@ -1670,7 +1672,7 @@ registerTool(
       }
       const data = await agentApi('/api/social/send-message', {
         method: 'POST',
-        body: JSON.stringify({ key, messages: finalMessages, images: imgList, replyToMessageId, atUserId: atUserId ?? null, gapMode, gapMs, gaps, ...(crossSession === true ? { crossSession: true } : {}) }),
+        body: JSON.stringify({ key: targetKey, convKey: targetKey, token, messages: finalMessages, images: imgList, replyToMessageId, atUserId: atUserId ?? null, gapMode, gapMs, gaps, ...(crossSession === true ? { crossSession: true } : {}) }),
         headers: { 'x-agent-token': token },
         timeoutMs: 300000
       });

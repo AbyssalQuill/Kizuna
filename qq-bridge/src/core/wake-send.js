@@ -476,9 +476,12 @@ function styleGuideLines() {
 
 /** 群聊因为 anyMessage 被叫醒时，补一句"可以选择不说话"——其它唤醒原因不需要，加了反而稀释。 */
 function judgeLineFor(key, reason) {
-  return (String(key).startsWith('group:') && /anyMessage/i.test(String(reason || '')))
-    ? '[turn] every_message_reaches_you_choose_silence_unless_you_add_something'
-    : '';
+  if (!String(key).startsWith('group:')) return '';
+  const r = String(reason || '');
+  if (/anyMessage|probability|topic/i.test(r)) {
+    return '[group] peer_chatter_stay_silent_unless_specifically_addressed';
+  }
+  return '';
 }
 
 /**
