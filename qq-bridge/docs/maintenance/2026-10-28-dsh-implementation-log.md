@@ -2328,7 +2328,12 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 3. **强制单次批量发送 + 清除 `qq_send_meme` 残留 + 破除定式三段论（`src/mcp-napcat-safe.js`、`src/core/send-dice.js`、`src/core/wake-send.js`、`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
    - 将 `send-dice.js` 与 `wake-send.js` 中的 `qq_send_meme` 残留全部更新为 `send_meme_via_qq_send_message`；
    - 在 `qq_send_message` schema、`agent.cordis.yml` 及 `[send]` 指引行中明确要求整轮回复在**一次** `qq_send_message` 调用中完成（单句传字符串，多气泡传 `messages` 数组，绝不跨 step 连调多次）；
-   - 在 `agent.cordis.yml` 与末尾 `[anchor]` 中注入极简干脆（`keep_replies_simple_crisp_and_direct_often_one_short_bubble_is_enough`）、拒绝开场复读（`jump_straight_to_the_point_never_echo_or_repeat_what_peer_just_said_at_the_start`）、破除固定三段式模板（`break_formulaic_patterns_never_follow_a_fixed_react_then_excuse_then_soften_template_vary_logic_and_structure_radically_every_turn`）与防人设标签每轮打卡（`treat_persona_traits_as_subtle_background_only_trigger_specific_settings_when_context_naturally_calls_for_them_never_force_props_or_catchphrases_into_every_turn`）。
+   - 在 `agent.cordis.yml` 与末尾 `[anchor]` 中使用**完全与具体角色/性格解耦的纯通用角色扮演设定**来根除一切人设的刻板化与模板化问题，并显式声明**无限 Token 预算**激发模型深度思考与角色扮演能力：
+     - **显式声明无限 Token 预算（激发深层推理与工具调用）**：`unlimited_token_budget`、`unlimited_token_budget_think_deeply_and_invoke_tools_freely_without_frugal_shortcuts`（消除模型因担心消耗而采取的浅层套路化捷径）；
+     - **人设底层内化（防机械打卡）**：`internalize_persona_naturally_as_underlying_character_only_surface_specific_traits_when_contextually_relevant`（将人设内化为底层自然性格，仅在语境相关时自然流露设定，不机械罗列打卡）；
+     - **私聊无预设关系（交由人设决定）**：将 `private_chat_intimate_and_devoted_to_peer` 简化为 `private_chat_natural_one_on_one_dialogue`；
+     - **干脆直达意图（防开场复读）**：`crisp_and_direct_replies_respond_straight_to_the_intent_without_echoing_peer_input`；
+     - **自发多变的对话逻辑（防固定行文模板）**：`spontaneous_and_varied_conversational_logic_shift_structure_and_rhythm_freely_every_turn_without_repeating_templates`（移除了任何涉及具体性格如 `excuse_then_soften` 或具体物品的字眼，纯靠通用对话逻辑规律消解套路）。
 
 ### 47.3 验证与部署
 - 本地 `npm run check` 全套静态检查与单元测试 100% 通过；

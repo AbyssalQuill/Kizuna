@@ -473,7 +473,7 @@ async function resolveMemeToTmpPath({ file, fileName, meme, query, emotion, tag,
     if (!pickedByQuery) {
       const hint = (query || tag)
         ? `按「${String(query ?? tag).trim()}」没搜到匹配的表情，换个说法（生气/哭/睡觉/开心/疑惑/害羞/干活/日常）或者先用 qq_meme_search 看看有哪些。`
-        : '要发哪一张？file/meme 传 qq_meme_search 结果里的文件名（如 蓝发女仆生气.webp），或者改成传 query/emotion（情绪/内容描述，如 生气）让我挑一张。';
+        : '要发哪一张？file/meme 传 qq_meme_search 结果里的文件名，或者改成传 query/emotion（情绪/内容描述，如 生气）让我挑一张。';
       return { ok: false, error: hint };
     }
     wantFile = pickedByQuery.file;
@@ -1566,9 +1566,9 @@ registerTool(
     token: z.string().describe('Session token (from the wake prompt)'),
     messages: z.union([z.string(), z.array(z.union([z.string(), z.record(z.any())])).min(1)]).optional().describe('Send all bubbles of this turn in ONE call: string = one message (recommended for simple direct replies); array = multiple bubbles sent sequentially with natural typing pace; omit or empty array = send image/meme only'),
     message: z.string().optional().describe('Alias of messages (string; kept only for typos). Prefer messages.'),
-    images: z.array(z.string()).optional().describe('Local image paths or bundled meme file names (e.g. C:\\\\path\\\\xx.webp or 蓝发女仆生气.webp), paired with messages for inline text+image or sent as image bubbles.'),
-    meme: z.string().optional().describe('Optional bundled meme file_name (from qq_meme_search, e.g. 蓝发女仆生气.webp) or emotion keyword (e.g. happy/angry/shy/sleep/生气/开心) to send alone or inline with messages'),
-    file: z.string().optional().describe('Bundled meme file_name from qq_meme_search (e.g. 蓝发女仆生气.webp; "<packId>/<file_name>" also works); can be sent alone or combined with messages'),
+    images: z.array(z.string()).optional().describe('Local image paths or bundled meme file names (e.g. C:\\\\path\\\\xx.webp or <file_name>.webp), paired with messages for inline text+image or sent as image bubbles.'),
+    meme: z.string().optional().describe('Optional bundled meme file_name (from qq_meme_search) or emotion keyword (e.g. happy/angry/shy/sleep) to send alone or inline with messages'),
+    file: z.string().optional().describe('Bundled meme file_name from qq_meme_search ("<packId>/<file_name>" also works); can be sent alone or combined with messages'),
     fileName: z.string().optional().describe('Alias of file/meme for bundled meme file name'),
     query: z.string().optional().describe('Optional meme query when sending a bundled meme by emotion/content description (e.g. 生气/开心/睡觉/happy/angry/shy)'),
     emotion: z.string().optional().describe('Optional meme emotion tag: happy, sad, angry, shy, confused, surprised, sigh, sleep, daily, love, work'),
@@ -3214,7 +3214,7 @@ registerTool(
     content: z.string().describe('Mood text content'),
     file: z.string().optional().describe('Optional: absolute local path of an image/gif to attach (attached through the bridge\'s NapCat path helper, so a Docker NapCat can read it)'),
     imageUrl: z.string().optional().describe('Optional: direct image URL to attach (e.g. one from qq_image_search). Takes precedence over the search parameters'),
-    imageQuery: z.string().optional().describe('Optional: keyword - the bridge searches the web for a picture (Bing/Baidu) and attaches the best hit, e.g. 蓝鲸 高清'),
+    imageQuery: z.string().optional().describe('Optional: keyword - the bridge searches the web for a picture (Bing/Baidu) and attaches the best hit, e.g. 晚霞 风景'),
     pixivIllustId: z.string().optional().describe('Optional: a Pixiv work id or pixiv.net/artworks/<digits> link to attach (original quality)'),
     pixivQuery: z.string().optional().describe('Optional: keyword - the bridge searches Pixiv and attaches the best hit, e.g. 初音ミク 壁紙'),
     pixivSize: z.enum(['original', 'master']).optional().describe('Pixiv quality: original (default, the untouched file) or master (1200px jpg, use when the original is over 15MB)'),
@@ -3881,7 +3881,7 @@ if (cfg.social?.tools?.imageSearch !== false) {
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       token: z.string().describe('Session token'),
-      query: z.string().describe('What to look for, e.g. 蓝鲸 高清 / 猫娘 表情包 / deepseek logo'),
+      query: z.string().describe('What to look for, e.g. 晚霞 风景 / 动漫 壁纸 / deepseek logo'),
       limit: z.number().optional().describe('How many candidates, default 8, max 20'),
       source: z.enum(['bing', 'baidu']).optional().describe('Only use one engine (default: both)'),
     },
