@@ -850,12 +850,11 @@ systemctl restart dsh-web     # 2. 再重启 DSH，热加载最新 MCP 子进程
 
 ## 12. 致谢（Acknowledgments）
 
-Kizuna Pro 的诞生与演进离不开以下优秀开源项目与作者的启发与基础设施支持（核心调度内核 `qq-bridge` 与内置扩展插件均为本项目自研）：
+Kizuna Pro 的诞生与演进离不开以下开源项目的启发与基础设施支持（核心调度内核 `qq-bridge` 与所有内置 DSH 扩展插件均为本项目原创自研）：
 
-- **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — 感谢 DeepSeek 团队开源的现代化、高度模块化的“一切皆插件（Everything-is-a-Plugin）” Agent 运行时宿主框架与 Cordis 元框架，为本项目提供了坚实可靠的底层推理与事件溯源宿主环境。
-- **[NapCatQQ](https://github.com/NapNeko/NapCatQQ)**（作者/组织：**[NapNeko](https://github.com/NapNeko)**）— 感谢 NapNeko 团队维护的高性能、低内存占用的新版 QQ NT 无头 OneBot v11 协议实现，让稳定可靠的跨平台 QQ 协议接入成为可能。
-- **[mcp-compressor](https://github.com/atlassian-labs/mcp-compressor)**（**[Atlassian Labs](https://github.com/atlassian-labs)**）— 感谢 `mcp-compressor` 项目在 MCP 工具表代理压缩与按需 Schema 展开方向上的开创性工程实践，助力我们将 100+ 个工具的每步 Schema 开销压缩 96% 以上。
-- **[Genie-TTS](https://github.com/High-Logic/Genie-TTS)**（作者：**[High-Logic](https://github.com/High-Logic)**）— 感谢 High-Logic 开源的基于 GPT-SoVITS 的轻量级 ONNX 语音转换与本地推理引擎，为本项目的本地零成本、高拟真角色语音合成 Sidecar 提供了核心驱动力。
+- **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — 感谢 DeepSeek 团队开源的高性能 Agent 运行时宿主环境与事件溯源框架。
+- **[NapCatQQ](https://github.com/NapNeko/NapCatQQ)** — 感谢 NapNeko 团队维护的高性能新版 QQ NT OneBot v11 协议网关。
+- **[Genie-TTS](https://github.com/High-Logic/Genie-TTS)** — 感谢 High-Logic 开源的轻量级 ONNX 语音转换与本地推理引擎。
 
 ---
 

@@ -68,7 +68,12 @@ await t('④ 修复后的 key 不合法 → 不发（防串会话）', async () 
 
 await t('⑤ 工具名识别（长短名都要认）', () => {
   assert.equal(isRecoverableSendTool('mcp__napcat__qq_send_message'), true);
-  assert.equal(isRecoverableSendTool('qq_reply'), true);
+  assert.equal(isRecoverableSendTool('qq_send_message'), true);
+  /* 2026-10-31：qq_reply / qq_send_group_message / qq_send_private_message 三个薄壳已删，
+   * 能力全部由 qq_send_message 的 replyToMessageId / key / crossSession 覆盖。
+   * 这里断言它们不再被当成可兜底的发送入口，避免删了工具还留着兜底分支。 */
+  assert.equal(isRecoverableSendTool('qq_reply'), false);
+  assert.equal(isRecoverableSendTool('qq_send_group_message'), false);
   assert.equal(isRecoverableSendTool('mcp__napcat__qq_mark_read'), false);
 });
 

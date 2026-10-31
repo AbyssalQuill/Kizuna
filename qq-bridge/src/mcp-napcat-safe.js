@@ -1015,7 +1015,9 @@ registerTool(
  *
  * 零副作用、零网络、零 NapCat 调用：只读系统时钟，纯字符串格式化，可以放心被频繁调用。 */
 registerTool(
-  'get_time',
+  /* 2026-10-31：原来叫裸名 get_time，模型却一直按 qq_ 前缀去猜（现场：tool not found: "qq_get_time"）。
+   * 全表 99 个工具都是 qq_ 开头，只有它是裸名 —— 统一成 qq_get_time，不再留别名，避免又变成两个入口。 */
+  'qq_get_time',
   'Get the CURRENT date and time in Beijing time (UTC+8), accurate to the minute. Call it whenever someone asks what time it is, what day/date it is, how long until or since something, or whenever you need "now" — never guess from message timestamps, they are from the past.',
   {},
   async () => {

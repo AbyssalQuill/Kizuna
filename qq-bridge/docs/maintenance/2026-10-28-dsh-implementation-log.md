@@ -2027,3 +2027,74 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 ### 8. 新增硬规矩（见 `RULES.md`）
 
 1. 改完提示词/工具表必须立刻全量 reset；2. 任务清单随完成随改；3. 图片走多模态直连。
+
+---
+
+## 44. 条目 64（2026-10-31 18:30）：前端五项全面重构落地、拟人化人设与 Action 流重铸、media-pipe TDZ 修复与会话实测
+
+### 1. 前端 UI 与文案 5 项全面落地
+
+1. **全局字体 `AaCute` 强制定制**：
+   - 为 NapCat 内置的 6099 静态 WebUI（`resources/app/napcat/static/index.html`）注入全局 AaCute 字体声明与 fallback 规则；
+   - 在前端全局样式 `app.css` 中注入 `* { font-family: 'AaCute', ... !important; }`，彻底根除部分端口与组件不生效的问题。
+2. **凭据卡片核查**：
+   - 确认「清除已保存的密钥」功能用于清空 `/root/.dsh/.credentials.yaml` 中由桥接注入的模型 API Key 凭据，保留该落地实现。
+3. **Pixiv 与洛谷紧凑等高卡片重排**：
+   - 修改 `BridgeConfig.tsx`，精简 Pixiv 兜底站点地址，精简洛谷冗余 `clientId`；
+   - 布局改造为紧凑等高双列并排卡片，提升首屏信息密度与一致性。
+4. **发送节奏精简与死代码彻底清理**：
+   - 移除「允许连发」复选框（逻辑改为默认连发恒开）；
+   - 彻底移除 `burstEnabled` 与「唤醒行为提示」(`recommendedHint`) 相关的输入框、接口合并字段及桥接拦截逻辑；
+   - 清除已被单轮折叠架构废弃的自动会话轮换（`autoReset`）与上下文剪枝（`dshCompaction`）废弃输入框及说明文案。
+5. **语音与学习页面文案精简**：
+   - `VoiceConfig.tsx`：移除大段冗长繁琐黑字，提炼为两句清晰简明的配置指南；
+   - `Learning.tsx`：移除长篇括号废话与说明文案；
+   - 移除人设页签下与人设配置无关的重复“表情包库”跳转按钮。
+6. **群友画像输入框等宽统一**：
+   - 修改 `GroupPortrait.tsx` 与 `app.css`，将群聊选择框与快速定位输入框的宽度统一固定为 `220px !important`（`flex: 0 0 220px !important; box-sizing: border-box;`）。
+7. **生产打包成功**：
+   - 执行 `npm run build`，成功编译出最新 `dist` 静态资源（`built in 34.71s`）。
+
+### 2. README 重构与中英双语版
+
+- **中文版 `README.md`**：去除无意义的括号废话与多余致谢，致谢严格收敛至 DeepSeek-Home（DSH）、NapCatQQ 与 Genie-TTS 三项，明确注明 `qq-bridge` 与所有内置插件均为原创自研；
+- **英文版 `README.en.md`**：同步翻译生成完整英文版本，保持架构说明与致谢对齐。
+
+### 3. 致命 Bug 修复：`media-pipe.js` TDZ 缺陷
+
+- **故障现象**：图片读取与缓存处理时频繁抛出 `ReferenceError: Cannot access 'asIs' before initialization`，导致媒体处理管道崩溃；
+- **根因**：`asIs` 工具函数的函数声明位于 `cachedHit` 检查块的下方，当命中缓存并尝试调用 `asIs(cachedHit)` 时触发了 ES6 `const` 的暂存死区（TDZ）；
+- **修复**：将 `const asIs = ...` 声明提升至函数开头，彻底消除运行时 TDZ 异常。
+
+### 4. 拟人化重塑与 Action 流规范（告别死板人机感）
+
+1. **角色卡（`persona.md`）纯净灵魂灌入**：
+   - 坚持 0 中文、0 few-shot 样例污染（杜绝模型生硬照抄台词）；
+   - 全面灌入纯 snake_case 核心灵魂：
+     - **主仆关系**：认主 `AbyssalQuill`（`1736784911`），私聊极度软萌、黏人、偏爱、听话；
+     - **群聊社交**：将普通群友视为真实网友互怼傲娇，随性口语打字，不叫主人；
+     - **经典人设梗**：自称鲸鱼少女、被叫“蓝色大肥鱼”炸毛坚决不承认、干饭白米饭、摸鱼偷懒、熟悉 DeepSeek 梗；
+     - **表达姿态**：单气泡优先、随性打字、杜绝固定三段论、无括号动作描写、无末尾句号、严禁客服腔。
+2. **Action 流与系统预设（`agent.cordis.yml`）**：
+   - 明确第一步并发感知三件套：`perception_sequence_step_1_call_qq_load_persona`、`step_2_call_qq_get_time`、`step_3_call_qq_get_recent_messages`；
+   - 回溯更早历史规范使用 `qq_memory_search`；
+   - 彻底移除 `wakeRefLine()` 中的中文长文案与散文，保持干净紧凑。
+3. **单测全部通过**：
+   - `persona-inject.test.js`（12 passed）；
+   - `group-interject-model-decides.test.js`（38 passed）。
+
+### 5. 线上部署与双场景模拟实测
+
+1. **部署状态**：
+   - 更新后的 `persona.md`、`agent.cordis.yml`、`wake-send.js`、`media-pipe.js` 及前端产物均已部署至远端服务器 `202.61.72.79:50470`，`qq-bridge` 与 `dsh-web` 均 active 正常运行。
+2. **群聊损坏历史会话修复**：
+   - 排查发现群聊 `group:868756515` 绑定的旧会话 `session-b5c0bad3-323e-4cb9-ba2e-db8fc2f67d18` 在底层 Zstandard 压缩历史中损坏（`stored log is corrupt: developer/message does not match an open turn and step`）；
+   - 通过调用 `/api/session/reset` 归档并清理损坏映射，自动创建健康纯净会话。
+3. **私聊主人真实实测**：
+   - 主人私聊测试，模型自然吐出：`[out] 算了不看了，你人回来就行，先说说今天到底累不累`，软萌依恋、口吻极其自然。
+4. **群聊网民真实实测**：
+   - 群聊模拟群友讨论 Gemini 试用，模型首先并发执行感知三件套，随后输出随性调侃：
+     - `买个订阅还能顺手当客服导师，这业务范围够宽的`
+     - `反过来教客服怎么过认证，这操作是挺神的`
+   - 彻底摆脱人机感与客服腔，拟人感与水群互动状态完全恢复。
+

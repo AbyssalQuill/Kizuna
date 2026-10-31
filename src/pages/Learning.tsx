@@ -1166,7 +1166,7 @@ export default function Learning({ onBack }: Props) {
 
                   {/* 人格学习 */}
                   <div className="lrn-block">
-                    <div className="lrn-block-title">人格学习（学习指定 QQ 的语言风格与性格）</div>
+                    <div className="lrn-block-title">人格学习</div>
                       {/* 2026-09-26 主人要求：人格学习也要有和黑话那边一样的「空闲（随时可开始）」标识。
                           黑话那边由桥 GET /api/slang 的 learning 快照给 phase；人格这边桥没有等价快照，
                           故按「目标名单里有没有 state=learning 的行」+ 本次是否刚点过「人格立即学习」判断。 */}
@@ -1254,15 +1254,9 @@ export default function Learning({ onBack }: Props) {
               <div className="lrn-status-body">
               {/* ——— 上面一栏：人格学习（现有那批人格学习目标；点一条展开看完整资料，行为不变） ——— */}
               <div className="lrn-status-block">
-                <div className="lrn-block-title">人格学习<span className="lrn-status-hint">只学「目标 QQ」中的成员 · 点一条查看完整资料</span></div>
-                {/* 现状为「学习完成后仅留存一份性格档案」，故在栏标题处写明边界与出口：
-                    学习对象范围，以及学习结果如何转成机器人自身人设。 */}
-                <div style={{ margin: '-4px 0 8px', fontSize: 11.5, lineHeight: 1.65, color: 'var(--nc-foreground-400)' }}>
-                  仅学习左侧「目标 QQ」中配置的成员，本栏亦只列出目标名单内成员。展开一条可查看学习产出的
-                  <b>英文人设正文</b>，并可「结合原人设完善」（在现有基础上按已学特点增删改，先生成草稿）或直接「整篇覆盖人设」。
-                  {pOtherRows.length > 0 && (
-                    <> 另有 {pOtherRows.length} 条档案不在目标名单中（由画像学习自动筛出），已归入下方「画像学习」栏。</>
-                  )}
+                <div className="lrn-block-title">人格学习<span className="lrn-status-hint">只学目标名单成员 · 点选查看完整资料</span></div>
+                <div style={{ margin: '-4px 0 8px', fontSize: 11.5, lineHeight: 1.6, color: 'var(--nc-foreground-400)' }}>
+                  学习目标成员性格档案。展开可查看产出正文，支持结合原人设完善或直接覆盖为机器人人设。
                 </div>
               {statusErr ? (
                 <div className="lrn-error">
@@ -2767,7 +2761,7 @@ function PortraitLearnBlock() {
 
   return (
     <div className="lrn-block" style={{ marginTop: 18, paddingTop: 14, borderTop: '1px dashed hsl(339.33 90% 90% / .9)' }}>
-      <div className="lrn-block-title">群友画像学习（自动筛选活跃群成员，结果直接写入 profiles，画像页立即可见）</div>
+      <div className="lrn-block-title">群友画像学习</div>
 
       <div className="lrn-grid">
         <div className="switch-row" style={{ gridColumn: '1 / -1' }}>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyRound, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Eye, EyeOff, Copy } from 'lucide-react';
 import { getNapcatTokens, applyNapcatTokens } from '../api';
 import { initialFromCache, writeCacheValue, dropCacheValue, warmCache } from '../lib/read-cache';
-import { ReadBar, Skeleton } from './ReadState';
+import { Skeleton } from './ReadState'
 
 /**
  * NapCat 鉴权令牌卡（WebUI / HTTP / WS）

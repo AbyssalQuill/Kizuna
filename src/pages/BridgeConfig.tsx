@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { sshServiceAction, listPersonas, savePersonaItem, activatePersonaItem, deletePersonaItem, type PersonaFileItem } from '../api';
 import { api, getBridgeConfig, saveBridgeConfig, saveActivityHours, getActivityTargets, resetSpeechRules, listCharacters, importCharacter, instanceAction, listProfiles, saveProfile, deleteProfile, getRemoteBridgeConfig, saveRemoteBridgeConfig, memePacks, memePackUpload, memePackDelete, memePackBind, getToolSchemaStats, type CharacterEntry, type ConfigProfile, type ActivityTarget, type MemePackEntry, type MemePackUploadReport, type ToolSchemaStats } from '../api';
 import { TOOL_SCHEMA_CHARS, SLIM_PREFIX } from '../tool-schema-chars';
-import { ArrowLeft, Save, Upload, FileText, X, HelpCircle, Loader2, Coffee, DownloadCloud, Activity, Users, MessageSquare, MessagesSquare, RotateCcw, Library, BookOpen, Terminal, Layers, Trash2, Check, Server, AlertTriangle, Mic, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Save, Upload, FileText, X, HelpCircle, Loader2, Coffee, DownloadCloud, Activity, Users, MessageSquare, RotateCcw, Library, BookOpen, Terminal, Layers, Trash2, Check, Server, AlertTriangle, Mic, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import NapcatTokensCard from '../components/NapcatTokensCard';
 import { warmNapcatTokens } from '../components/NapcatTokensCard';
 import NumInput from '../components/NumInput';
@@ -1652,12 +1652,6 @@ export default function BridgeConfig({ onBack, onRefresh, onOpenLearning, onOpen
                 <button className="btn btn-soft btn-sm" disabled={uploading} onClick={() => openCharLib()}>
                   <Library size={14} /> 角色库导入
                 </button>
-                {/* 2026-09-20：表情包卡在「常用设置」页（挨着上面那张「表情包」卡）；这里给个入口，
-                    省得用户记得"它到底在哪一页"——点它切页并滚到那张卡。 */}
-                <button className="btn btn-soft btn-sm"
-                  onClick={() => { setTab('common'); setTimeout(() => document.getElementById('meme-packs-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); }}>
-                  <Layers size={14} /> 表情包库
-                </button>
                 <span className="upload-hint">支持载入 .md/.txt，保存后即刻生效</span>
                 <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => saveCard('persona')}>
                   {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />} 保存人设
@@ -2281,8 +2275,7 @@ function LuoguCard({ cfg, ch, onHelp }: {
       </div>
       <div className="cfg-fields">
         <Field path="luogu.uid" val={s('uid')} label="洛谷用户 UID" ch={ch} onHelp={onHelp} cfg={cfg} />
-        <Field path="luogu.clientId" val={s('clientId')} label="洛谷 Client ID（__client_id）" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
-        <Field path="luogu.cookie" val={s('cookie')} label="洛谷完整登录 Cookie" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
+        <Field path="luogu.cookie" val={s('cookie')} label="洛谷登录 Cookie" ch={ch} onHelp={onHelp} cfg={cfg} secret={!reveal} wide />
       </div>
       <div className="cfg-card-desc" style={{ display: 'block', lineHeight: 1.6, marginTop: 6 }}>
         <div>

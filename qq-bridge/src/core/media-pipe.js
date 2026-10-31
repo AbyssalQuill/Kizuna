@@ -80,9 +80,9 @@ export async function fetchOneBotImage(media, opts = {}) {
    * QQ 图片直链寿命很短，等模型想起来看时常常已经 400/404（见 media-cache.js 顶部的真机日志）。
    * 消息一进来 prewarmMedia() 就把字节存下来了，所以这里的命中率才是关键路径，
    * 而不是"再抓一次"。缓存存的是**未压缩的原始字节**，raw 与压缩两条路都从它派生。 */
+  const asIs = (buf, mime) => (raw ? { buffer: buf, mimeType: mime, compressed: false } : finalizeImageBuffer(buf, mime));
   const cachedHit = readCachedMedia(media);
   if (cachedHit) return await asIs(cachedHit.buffer, cachedHit.mimeType);
-  const asIs = (buf, mime) => (raw ? { buffer: buf, mimeType: mime, compressed: false } : finalizeImageBuffer(buf, mime));
   /** 抓到的原始字节先落盘，再交给 asIs 做（可选的）压缩 —— 顺序不能反，否则缓存里存的是压缩图。 */
   const keepAnd = async (buf, mime) => {
     try { writeCachedMedia(media, buf, mime); } catch { /* 缓存失败不影响主流程 */ }

@@ -210,10 +210,9 @@ check('social-state.js 的 proactive 定时器里没有掷骰判定 / 概率系�
   assert.ok(!/prob\s*\*=/.test(src), 'proactive 里又出现了概率系数（prob *= …）');
   assert.ok(/proactiveGate\(/.test(body), '定时器没有走 proactiveGate 判定');
 });
-check('wakeRefLine 不再要求模型"把 triggers.probability 填成这个值"', () => {
+check('wakeRefLine 不再注入冗余散文说教（纯短语化 / 仅静默时提示）', () => {
   const src = readSrc('core/wake-send.js');
   assert.ok(!/把 triggers\.probability 填成这个值/.test(src), '旧文案又回来了：它会让模型继续按概率回话');
-  assert.ok(/不再按概率过滤/.test(src), 'wakeRefLine 没有说明新语义');
 });
 
 console.log('\n=== ⑤ 「不死板发 3 段」：代码里没有固定条数逻辑 ===');
@@ -276,22 +275,15 @@ const buildGroupPrompt = (triggerPatch) => {
   socialMod.social.conversations.delete(key);
   return { reason, prompt };
 };
-check('真配置 + 真群事件（probability=0.15）→ 理由 probability，正文里 [WakeRef] 说明"不再按概率过滤"', () => {
+check('真配置 + 真群事件（probability=0.15）→ 理由 probability，且正文无冗余散文说教', () => {
   const { reason, prompt } = buildGroupPrompt({ probability: 0.15, probabilitySource: 'owner' });
   assert.equal(reason, 'probability');
-  const ref = prompt.split('\n').find((l) => l.includes('[WakeRef]'));
-  assert.ok(ref, '正文里没有 [WakeRef] 行');
-  assert.match(ref, /不再按概率过滤/);
-  assert.match(ref, /主人配置=0\.15/);
-  assert.match(ref, /来源=owner/);
+  assert.ok(!/不再按概率过滤/.test(prompt), '散文说教已被移除');
   assert.ok(!/填成这个值/.test(prompt), '旧的"把 probability 填成这个值"文案又回来了');
 });
-check('配置缺 recommendedProbability（老配置）→ 仍产生理由，[WakeRef] 如实写"未设置"，不抛异常', () => {
-  const { reason, prompt } = buildGroupPrompt({}); // 没有任何 probability 键
+check('配置缺 recommendedProbability（老配置）→ 仍产生理由，不抛异常', () => {
+  const { reason } = buildGroupPrompt({}); // 没有任何 probability 键
   assert.equal(reason, 'probability');
-  const ref = prompt.split('\n').find((l) => l.includes('[WakeRef]'));
-  assert.match(ref, /不再按概率过滤/);
-  assert.match(ref, /未设置/);
 });
 check('probability=0（关闭开关）→ 不产生唤醒理由，且照旧构造正文不抛异常', () => {
   const key = 'group:123457';

@@ -1062,14 +1062,14 @@ export default function GroupPortrait({ onBack }: Props) {
           style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '8px 12px', marginBottom: 14 }}>
           <span className="pg-filter-label" style={{ fontSize: 12.5, color: C.text, whiteSpace: 'nowrap' }}>选择群聊：</span>
           <Dropdown className="select pg-filter-select" value={grpSel} onChange={(v) => { setGrpSel(v); setRelayout((x) => x + 1); }}
-            style={{ width: 220, minWidth: 220, maxWidth: 220, fontSize: 12.5 }}
+            style={{ width: 220, minWidth: 220, maxWidth: 220, flex: '0 0 220px', boxSizing: 'border-box', fontSize: 12.5 }}
             options={[
               { value: '', label: '全部群' },
               ...groupsList.map((g) => ({ value: g.id, label: `${g.id.replace(/^group:/, '群')}（${g.members.length}人）` })),
             ]} />
           <span className="pg-filter-label" style={{ fontSize: 12.5, color: C.text, whiteSpace: 'nowrap', marginLeft: 10 }}>快速定位：</span>
           <input className="input pg-filter-loc" list="pvLoc" value={locQ} onChange={(e) => setLocQ(e.target.value)}
-            placeholder="输入昵称或 QQ" style={{ width: 220, minWidth: 220, maxWidth: 220, fontSize: 12.5 }} />
+            placeholder="输入昵称或 QQ" style={{ width: 220, minWidth: 220, maxWidth: 220, flex: '0 0 220px', boxSizing: 'border-box', fontSize: 12.5 }} />
           <datalist id="pvLoc">
             {locCands.map((n) => <option key={n.uid} value={cleanName(n.name)}>{n.uid}</option>)}
           </datalist>

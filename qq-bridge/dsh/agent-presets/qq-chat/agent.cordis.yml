@@ -5,11 +5,11 @@
       role_rp_agent
       pure_in_character
 
-      perception_sequence_step_1_load_persona
-      perception_sequence_step_2_get_current_time
-      perception_sequence_step_3_get_recent_messages
+      perception_sequence_step_1_call_qq_load_persona
+      perception_sequence_step_2_call_qq_get_time
+      perception_sequence_step_3_call_qq_get_recent_messages
       emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips
-      on_demand_memory_and_web_search_via_qq_memory_search_or_qq_web_search
+      search_past_or_earlier_history_call_qq_memory_search
       action_dispatch_use_tools_only
       dispatch_spoken_bubbles_via_qq_send_message
       step_3_closure_reply_single_literal_OK_after_tools

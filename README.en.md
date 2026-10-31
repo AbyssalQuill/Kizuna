@@ -797,12 +797,11 @@ systemctl restart dsh-web     # 2. Reloads MCP child processes and agent profile
 
 ## 12. Acknowledgments
 
-The creation and evolution of Kizuna Pro build upon the foundation and inspiration of the following outstanding open-source projects and authors (while the core scheduling kernel `qq-bridge`, built-in DSH plugins, and visual management console are developed in-house):
+The creation and evolution of Kizuna Pro build upon the foundation and inspiration of the following open-source projects (the core scheduling kernel `qq-bridge`, built-in DSH plugins, and visual management console are developed in-house):
 
-- **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — Special thanks to the DeepSeek team for open-sourcing the modern, modular "Everything-is-a-Plugin" agent runtime and Cordis meta-framework that power our isolated inference host and event-sourced surface operations.
-- **[NapCatQQ](https://github.com/NapNeko/NapCatQQ)** (by **[NapNeko](https://github.com/NapNeko)**) — Special thanks to the NapNeko team for maintaining a high-performance, low-memory headless OneBot v11 protocol implementation on modern QQ NT.
-- **[mcp-compressor](https://github.com/atlassian-labs/mcp-compressor)** (by **[Atlassian Labs](https://github.com/atlassian-labs)**) — Special thanks to the `mcp-compressor` project for pioneering proxy-based MCP tool-surface compression and on-demand schema expansion, enabling us to cut per-step schema tokens across 100+ tools by over 96%.
-- **[Genie-TTS](https://github.com/High-Logic/Genie-TTS)** (by **[High-Logic](https://github.com/High-Logic)**) — Special thanks to High-Logic for the lightweight ONNX model converter and local inference engine built on GPT-SoVITS, powering our zero-API-cost local voice synthesis sidecar.
+- **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — Special thanks to the DeepSeek team for open-sourcing the modern, modular agent runtime and event-sourced surface operations.
+- **[NapCatQQ](https://github.com/NapNeko/NapCatQQ)** — Special thanks to the NapNeko team for maintaining a high-performance OneBot v11 protocol implementation on modern QQ NT.
+- **[Genie-TTS](https://github.com/High-Logic/Genie-TTS)** — Special thanks to High-Logic for the lightweight ONNX speech model conversion and local inference engine.
 
 ---
 

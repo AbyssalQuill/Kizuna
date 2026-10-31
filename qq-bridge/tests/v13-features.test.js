@@ -184,7 +184,8 @@ await check('② high 档：实测被调用过的能力一个都不丢，零调�
   const r = resolveToolTier({ enabled: true, level: 'high' });
   assert.equal(r.level, 'high');
   // 协议闭环 + 服务器调用日志里出现过的工具，切 high 后必须还在
-  for (const keep of ['qq_send_message', 'qq_reply', 'qq_mark_read', 'qq_get_unread_messages',
+  /* 2026-10-31：qq_reply 已并入 qq_send_message（replyToMessageId 参数），能力没丢，工具名少一个。 */
+  for (const keep of ['qq_send_message', 'qq_mark_read', 'qq_get_unread_messages',
     'qq_meme_search', 'qq_send_meme', 'qq_send_voice', 'qq_profile_set', 'qq_memory_search',
     'qq_get_message_images', 'qq_get_recent_messages']) {
     assert.equal(toolAllowedByTier(keep, r), true, `应保留 ${keep}`);
@@ -247,7 +248,7 @@ await check('② 选了具体档位时，手写 allow/deny 一律忽略（避免
 await check('② 实测占比：按字符加权算（不是按工具个数），档位严格递减', () => {
   const tools = [
     { name: 'qq_send_message', cost: 2744 }, { name: 'qq_send_pixiv', cost: 6277 },
-    { name: 'qq_reply', cost: 1387 }, { name: 'qq_send_rich', cost: 4866 },
+    { name: 'qq_send_rich', cost: 4866 },
     { name: 'qq_mark_read', cost: 643 }, { name: 'qq_get_prompt', cost: 407 },
     { name: 'qq_social_state', cost: 420 }, { name: 'qq_get_unread_messages', cost: 451 },
     { name: 'qq_list_groups', cost: 208 }, { name: 'qq_status', cost: 198 },
@@ -255,9 +256,9 @@ await check('② 实测占比：按字符加权算（不是按工具个数），
   const total = tools.reduce((s, t) => s + t.cost, 0);
   const m = measureSchemaShare(tools, new Set(TOOL_TIERS.extreme.keep));
   assert.equal(m.totalChars, total);
-  // extreme 名单里这 8 个都在：2744+1387+643+407+420+451+208+198
-  assert.equal(m.keptChars, 6458);
-  assert.equal(m.keptCount, 8);
+  // extreme 名单里这 7 个都在：2744+643+407+420+451+208+198（qq_reply 已并入 qq_send_message）
+  assert.equal(m.keptChars, 5071);
+  assert.equal(m.keptCount, 7);
   assert.ok(m.share < 1);
   // 不带名单 = 全量（off 档）
   const all = measureSchemaShare(tools, null);

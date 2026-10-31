@@ -13,7 +13,7 @@ import { initialFromCache, writeCacheValue, dropCacheValue, warmCache } from '..
 /** 角色清单的取数与显示口径（读 characterList、回退 characters、label 空则显示 name、
  *  语言 zh/jp/en/kr → 中文名）—— 与桥侧契约同源，见该文件顶部说明。 */
 import { normalizeChars, charDisplay, type LocalChar, type LocalStatCharacter } from '../lib/char-list';
-import { ReadBar, Skeleton } from '../components/ReadState';
+import { Skeleton } from '../components/ReadState'
 
 /**
  * Kizuna · 语音（MiMo-V2.5 TTS／音色设计／音色复刻／语音识别）
@@ -1817,19 +1817,10 @@ export default function VoiceConfig({ onBack }: Props) {
                       placeholder="名字（留空自动命名）" aria-label="冻结样本与本地音色的名字"
                       onChange={(e) => setCtName(e.target.value)} />
                   </div>
-                  <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.75 }}>
-                    <div>
-                      <b>保存并冻结</b>：把这次合出来的音频固化成该音色的<b>固定参考样本</b>，此后用这个音色合成固定走这一段，
-                      音色不再漂。与既成的「文字设计 → 冻结 → 复刻」共用同一套存储 —— 样本与记录都落进音色样本库
-                      （合成时可以按类型分别取），类型是复刻型
-                      （合成时读的就是这段样本字节，与 design 型音色读冻结锚点是同一条复刻路径）；
-                      冻结完在「音色库」里点它的「设为默认音色」，再点本卡的「应用配置」即生效。
-                    </div>
-                    <div>
-                      <b>用这段音频新建本地音色</b>：把同一段音频交给本机引擎当参考音频（本地那侧走复刻），
-                      样本上限与下面本地那张卡一致；本机引擎没装或没有角色时会在那张卡上如实报错，不会悄悄成功。
-                    </div>
-                    {ctMsg && <div><b>结果：</b>{ctMsg}</div>}
+                  <div className="lrn-inline-note" style={{ display: 'block', lineHeight: 1.6, marginTop: 8 }}>
+                    <div><b>保存并冻结</b>：固化为该音色的专属参考音频样本，防止后续语音合成出现音色漂移。</div>
+                    <div><b>用这段音频新建本地音色</b>：将当前音频直接录入本地离线语音引擎，作为新的复刻参考音色。</div>
+                    {ctMsg && <div style={{ marginTop: 4 }}><b>执行结果：</b>{ctMsg}</div>}
                   </div>
                 </div>
                 <label className="switch-row">
