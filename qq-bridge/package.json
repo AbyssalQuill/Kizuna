@@ -1,6 +1,6 @@
 {
   "name": "qq-bridge",
-  "version": "0.1.0",
+  "version": "5.0.0",
   "private": true,
   "description": "QQ ↔ NapCat (OneBot v11) ↔ DeepSeek Harness 桥接：QQ 消息变为 DSH agent 提示，agent 回复/动作回到 QQ。",
   "type": "module",
