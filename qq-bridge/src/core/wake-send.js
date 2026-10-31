@@ -348,7 +348,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
    * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
    * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
-  const anchor = '[anchor] persona_first spoken_words_only vary_sentence_shape vary_bubble_length react_like_someone_scrolling_not_summarizing';
+  const anchor = '[anchor] persona_first spoken_words_only';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -471,9 +471,9 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    '[style] friendly_internet_tone pure_spoken_words no_action_brackets use_wo_or_drop_subject tail_no_period',
-    '[tools] parallel_step_1_2_3_supported in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally group_treat_all_as_netizens closure_reply_literal_ok earlier_than_today_or_what_you_said_before_use_qq_memory_search_not_qq_get_recent_messages',
-    '[bubbles] usually_one_bubble_two_when_thought_splits_never_over_three several_remarks_use_messages_array_one_remark_per_bubble bubble_length_from_one_word_to_full_paragraph',
+    '[style] friendly_internet_tone pure_spoken_words no_action_brackets',
+    '[tools] every_qq_tool_call_carries_key_from_Session_line_and_token_from_Token_line perception_once_at_turn_start earlier_history_use_qq_memory_search',
+    '[send] text_then_image_or_image_then_text_or_image_alone_text_length_free',
   ].join('\n');
 }
 

@@ -1365,19 +1365,8 @@ export async function pumpMux() {
                 const lw = String(getSocialState(key)?.lastWakeReason ?? '').split(':')[0];
                 const isExplicitWake = key.startsWith('private:') || /^(atMention|poke|question)$/.test(lw);
 
-                if (!isContentFiltered && !isInternalError && isExplicitWake) {
-                  // 非内部/过滤类未知错误，且属于显式提问：给一句简短自然的话，防连环刷屏（10分钟冷却）
-                  if (!globalThis._agentErrMuted) globalThis._agentErrMuted = {};
-                  const lastHint = globalThis._agentErrMuted[key] || 0;
-                  if (Date.now() - lastHint > 10 * 60 * 1000) {
-                    globalThis._agentErrMuted[key] = Date.now();
-                    void sendToQQ(key, '刚刚卡了一下没发出来，你再说一次？').catch(() => {}); // 泵内不阻塞
-                  } else {
-                    log(`[agent-err] ${key} 距上次失败提示不足 10 分钟，静默跳过`);
-                  }
-                } else {
-                  log(`[agent-err] ${key} 错误命中静默规则 (contentFiltered=${isContentFiltered}, internalError=${isInternalError}, explicitWake=${isExplicitWake})，已静默处理`);
-                }
+                // 任何错误都只写日志，不向聊天框发送提示语
+                log(`[agent-err] ${key} 错误已静默处理 (contentFiltered=${isContentFiltered}, internalError=${isInternalError}, explicitWake=${isExplicitWake})`);
               }
             } else if (ended.reason.kind === 'aborted') {
               // 回合被取消/终止：只在日志记录，不再向聊天框广播「已停止」等确认话

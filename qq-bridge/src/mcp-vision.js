@@ -138,16 +138,29 @@ async function bridgeApi(pathname, init = {}) {
  * 做法：ffmpeg 把动图抽成最多 4 张等间隔的 PNG，按顺序一起交给模型 ——
  * 它能同时看到"怎么开始、怎么结束"，而不是一张快照。
  * 失败一律回退成单帧（绝不因为抽帧失败就不给图）。 */
-const GIF_MAX_FRAMES = 4;
-function extractAnimatedFrames(real) {
+/** 抽帧产物是我们自己刚生成的 512 宽 PNG（在系统临时目录，不走读图白名单），直接读成 image 块。 */
+function frameBlock(f) {
+  try { return { type: 'image', mimeType: 'image/png', data: fs.readFileSync(f).toString('base64') }; } catch { return null; }
+}
+const GIF_MAX_FRAMES = 8;
+function probeDurationSec(real) {
+  try {
+    const out = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', real], { timeout: 8000 }).toString().trim();
+    const d = Number(out);
+    return Number.isFinite(d) && d > 0 ? d : 0;
+  } catch { return 0; }
+}
+function extractAnimatedFrames(real, maxFrames = GIF_MAX_FRAMES) {
   let tmpDir;
   try {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vision-gif-'));
     const out = path.join(tmpDir, 'f%02d.png');
-    // fps=2 抽 2 帧/秒，再由 -frames:v 限制总数；对短表情包足够覆盖起止
-    execFileSync('ffmpeg', ['-loglevel', 'error', '-i', real, '-vf', 'fps=2,scale=512:-1:flags=lanczos', '-frames:v', String(GIF_MAX_FRAMES), out], { timeout: 15000 });
+    // 按总时长把帧均匀铺开：短动图（不足 1 秒）也能取满 maxFrames 张，而不是只剩一帧
+    const dur = probeDurationSec(real);
+    const fps = dur > 0 ? Math.min(30, Math.max(1, maxFrames / dur)) : 5;
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-i', real, '-vf', 'fps=' + fps.toFixed(3) + ',scale=512:-1:flags=lanczos', '-frames:v', String(maxFrames), out], { timeout: 20000 });
     const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.png')).sort().map((f) => path.join(tmpDir, f));
-    return { dir: tmpDir, files };
+    return { dir: tmpDir, files, duration: dur };
   } catch (e) {
     try { if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     log('抽帧失败，回退单帧：' + String(e?.message ?? e).slice(0, 120));
@@ -176,8 +189,8 @@ server.tool(
         if (files.length > 1) {
           const blocks = [];
           for (const f of files) {
-            const one = await imageBlockFromFile(f);
-            if (one?.block) blocks.push(one.block);
+            const blk = frameBlock(f);
+            if (blk) blocks.push(blk);
           }
           if (blocks.length > 1) {
             return {
@@ -245,5 +258,57 @@ server.tool(
   }
 );
 
-log('视觉 MCP 已加载（直连，不经压缩代理）：qq_view_image / qq_view_message_image');
+server.tool(
+  'qq_read_gif',
+  'READ an animated GIF/sticker frame by frame: returns up to 8 evenly spaced frames in time order so you can follow the motion (a plain image view only shows the first frame). Give messageId (+ key and token) for a picture that arrived in chat, or file for a local path. Use it when a message carries a GIF / animated sticker and its meaning depends on the motion.',
+  {
+    key: z.string().optional().describe('Session key: group:ID or private:QQ (needed with messageId)'),
+    token: z.string().optional().describe('Session token (needed with messageId)'),
+    messageId: z.union([z.number(), z.string()]).optional().describe('QQ message id carrying the GIF'),
+    imageIndex: z.number().optional().describe('Which picture of that message, 0-based (default 0)'),
+    file: z.string().optional().describe('Absolute path of a GIF on the bridge host (alternative to messageId)'),
+    maxFrames: z.number().optional().describe('Frames to return, 2-8 (default 8)'),
+  },
+  async ({ key, token, messageId, imageIndex, file, maxFrames }) => {
+    const want = Math.min(GIF_MAX_FRAMES, Math.max(2, Number(maxFrames) || GIF_MAX_FRAMES));
+    let real = '';
+    let tmpFile = '';
+    try {
+      if (file) {
+        real = withinRoots(String(file).trim()) || '';
+        if (!real) return { content: [{ type: 'text', text: '不在允许读取的图片目录内' }], isError: true };
+      } else if (messageId !== undefined && key && token) {
+        const qs = new URLSearchParams({ key, messageId: String(messageId) });
+        const data = await bridgeApi('/api/images/message?' + qs.toString(), { headers: { 'x-agent-token': token } });
+        const all = (Array.isArray(data?.images) ? data.images : []).filter((i) => i?.data);
+        if (!all.length) return { content: [{ type: 'text', text: '消息 ' + messageId + ' 里没有可读的图片' }], isError: true };
+        const pick = all[Math.max(0, Number(imageIndex) || 0)] || all[0];
+        const buf = Buffer.from(String(pick.data), 'base64');
+        tmpFile = path.join(os.tmpdir(), 'vision-src-' + Date.now() + '.gif');
+        fs.writeFileSync(tmpFile, buf);
+        real = tmpFile;
+      } else {
+        return { content: [{ type: 'text', text: '需要 messageId + key + token，或者 file' }], isError: true };
+      }
+      const { dir, files, duration } = extractAnimatedFrames(real, want);
+      try {
+        if (!files.length) return { content: [{ type: 'text', text: '这张图抽不出帧' }], isError: true };
+        const blocks = [];
+        for (const f of files) {
+          const blk = frameBlock(f);
+          if (blk) blocks.push(blk);
+        }
+        return { content: [{ type: 'text', text: JSON.stringify({ animated: files.length > 1, frames: blocks.length, durationSec: duration || null, note: '按时间顺序排列的帧' }) }, ...blocks] };
+      } finally {
+        cleanupDir(dir);
+      }
+    } catch (e) {
+      return { content: [{ type: 'text', text: '读取动图失败：' + (e?.message ?? e) }], isError: true };
+    } finally {
+      try { if (tmpFile) fs.rmSync(tmpFile, { force: true }); } catch {}
+    }
+  }
+);
+
+log('视觉 MCP 已加载（直连，不经压缩代理）：qq_view_image / qq_view_message_image / qq_read_gif');
 await server.connect(new StdioServerTransport());
