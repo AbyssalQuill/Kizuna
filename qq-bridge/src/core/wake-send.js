@@ -348,7 +348,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
    * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
    * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
-  const anchor = '[anchor] persona_first spoken_words_only';
+  const anchor = '[anchor] persona_first';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -471,9 +471,8 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    '[style] casual_natural_spoken_chat direct_lively_reaction pure_spoken_words',
     '[tools] carry_key_and_token perception_once_at_turn_start tools_for_history_or_memory_when_needed',
-    '[send] words_via_qq_send_message free_cadence final_assistant_text_exactly_OK',
+    '[send] words_via_qq_send_message finish_with_single_literal_OK',
   ].join('\n');
 }
 

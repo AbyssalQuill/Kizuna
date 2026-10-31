@@ -107,19 +107,10 @@ t('⑤ 唤醒正文里没有引用标记时保持原样（不带多余的引用�
 t('⑥ 系统提示词里有缩略语与引用归属的规则', () => {
   // 2026-09-24：preset 目录名随 default → qq-chat 的合并改名。
   const preset = fs.readFileSync(path.join(process.cwd(), 'dsh', 'agent-presets', 'qq-chat', 'agent.cordis.yml'), 'utf8');
-  /* 2026-09-21 提示词压缩后的断言口径：
-   * 这三条原来钉的是 1.2.5 的原句（`ABBREVIATIONS ARE THE ROOM'S LANGUAGE` 之类）。
-   * 2026-09-21 把 [COMPREHEND] 压成短行 spec（TEACHER/缩略语/引用归属一条不删，只是换了更短的写法），
-   * 原句自然就没了 —— 测试跟着失效说明它钉的是"措辞"而不是"规则"。
-   * 现在改成钉规则本身：断言那条规则的关键词都在（缩写表、引用归属判据、抓住整条线），
-   * 并且断言规则里点名的中文缩略语样本确实还在（那是最容易被压缩顺手删掉的东西）。
-   * 目的不变：只要有人把这三条规则删掉或删空，这个用例必须红。 */
-  /* 2026-10-31：preset 已改成全小写 snake_case 正向短语（用户明确要求"提示词正向且精简"），
-   * 旧断言钉的是大写 token 与带括号的样本写法，属于"钉措辞"而不是"钉规则"。
-   * 现在按大小写不敏感匹配，并且继续守住「样本词不能被压缩顺手删掉」。 */
-  assert.match(preset, /abbreviation/i, '缩略语规则不见了');
-  assert.match(preset, /yyds/, '缩略语规则里的中文样本被删空了');
-  assert.match(preset, /xdm/, '拼音首字母样本不见了');
+  /* 2026-10-31（用户要求）：系统提示词不要有示例（no few-shot / no sample words），
+   * 提炼为最通用最智能的高维规则，杜绝写死 yyds/xdm 等局部样本导致模型注意力定式化。
+   * 断言守住高维通用规则：网络缩略语理解、引用归属、完整对话线程。 */
+  assert.match(preset, /abbreviation/i, '缩略语与黑话通用理解规则不见了');
   assert.match(preset, /quote_attribution/i, '引用归属判据（引用别人=在跟别人说话）不见了');
   assert.match(preset, /conversational_thread/i, '抓住整条线（而不只最后一句）的规则不见了');
 });
