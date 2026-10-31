@@ -11,7 +11,8 @@
       perception_sequence_step_3_call_qq_get_recent_messages
       emit_step_1_2_3_in_a_single_parallel_tool_call_batch
       every_qq_tool_call_carries_key_from_session_and_token_from_token_line
-      search_history_or_notes_via_tools_when_needed
+      full_tool_catalog_available_in_schemas_invoke_freely_on_demand
+      invoke_specialized_tools_for_memory_search_media_or_character_when_needed
       every_spoken_word_goes_through_qq_send_message_messages_array
       assistant_text_is_for_protocol_finish_with_single_literal_OK
 

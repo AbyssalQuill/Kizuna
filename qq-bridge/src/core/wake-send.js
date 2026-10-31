@@ -471,7 +471,7 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    '[tools] carry_key_and_token perception_once_at_turn_start tools_for_history_or_memory_when_needed',
+    '[tools] carry_key_and_token perception_sequence_ready full_tools_available_on_demand',
     '[send] words_via_qq_send_message finish_with_single_literal_OK',
   ].join('\n');
 }

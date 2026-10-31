@@ -2149,3 +2149,33 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
      - `express_freely_in_natural_cadence_short_or_long`：长短随心，自然松弛。
    - **`wake-send.js`**：`styleGuideLines` 极简收敛为纯正向 3 行；修复 `[Meme Directive]` 正则，杜绝带 `[表情479]` 文本时误触发硬性发表情指令。
 4. **验证**：核心单测全绿，代码已部署到服务器并全量重置会话。
+
+
+## 42. 条目 68（2026-10-31 19:55）：系统提示词五层优先级重塑为零示例深度正向架构，声明全量工具按需生态与嵌入模型机制
+
+### 42.1 核心问题与诉求深度复盘
+1. **示例（Examples / Few-shots）对大模型通用智能的定式化污染**：
+   - 现场取证：此前系统提示词中列举了 `yyds xdm srds...` 等缩写样本，以及末端钉着 `spoken_words_only` 等词，导致模型注意力机制收窄在局部样例上，面对主人发图时出现了像小学生做看图写话般的定式复读（如“主人发图啦，是在学我打扮吗？蓝头发、鲸鱼尾巴...”），完全丧失了原汁原味的拟人生动感。
+   - 对标 DeepSeek 官方 App：用户实测证明，仅输入 11 行纯大写经典人设短语时，基底模型展现出极高水准的傲娇、娇憨、软萌与心理小动作流露，生命力十足。
+2. **全量工具生态的感知与按需调用机制**：
+   - 模型不仅拥有时空感知三件套，还注册了记忆（`qq_memory_*`）、角色卡（`qq_character_*`）、媒体搜图（`qq_pixiv_*` / `qq_send_meme` / `qq_send_image`）等丰富工具。
+   - 需要在最高优先级执行层正向告知模型：系统函数声明中具备全量工具库（`full_tool_catalog_available_in_schemas_invoke_freely_on_demand`），模型可随时按需自由调用，兼顾极致响应速度与强大的多模态工具能力。
+
+### 42.2 落地改动
+1. **系统预设（`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 建立高维、零示例、深度正向的五层优先级架构：
+     - `L1 [EXECUTION]`：三件套首步并发感知、声明全量工具表按需自主调用（`full_tool_catalog_available_in_schemas_invoke_freely_on_demand`）、纯工具发消息、单一字面值 `OK` 协议收尾；
+     - `L2 [SCENARIO]`：私聊独宠主人甜宠依恋、群聊普通网民机智调侃不叫主人、针对回复走 `replyToMessageId`；
+     - `L3 [STYLE]`：像真人朋友般随性真诚交流、深度领会潜台词与情绪、绝不解释对方字面意思、自然省略主语、无机械尾句号；
+     - `L4 [CADENCE]`：灵活呼吸节奏打破死板模板、随手单气泡或随心多气泡、表情包自然契合绝不连发重复；
+     - `L5 [PERSONA]`：经典 11 行纯大写人设 `【PERSONA_LOAD】`。
+2. **唤醒词（`src/core/wake-send.js`）**：
+   - 末端 anchor 收敛为极简纯净的 `[anchor] persona_first`；
+   - `styleGuideLines` 明确 `[tools] carry_key_and_token perception_sequence_ready full_tools_available_on_demand`，告知工具按需就绪。
+3. **单测守卫（`tests/quote-context.test.js`）**：
+   - 移除写死要求包含 `yyds/xdm` 示例的旧断言，升级为断言高维通用网络理解规则。
+
+### 42.3 验证
+- 本地与服务器端核心单测（`quote-context` 等）100% PASS；
+- 完整核心测试套件 `npm run check` 127 项全部 PASS；
+- 代码与配置同步部署至服务器并热重启 `qq-bridge.service`。
