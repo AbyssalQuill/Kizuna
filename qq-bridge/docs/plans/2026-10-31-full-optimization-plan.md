@@ -61,6 +61,20 @@ model before sending a message` → `学习会话 turn 未正常完成：blocked
 
 所以 P0-1 的顺序要改：先修 `selectModel` 为什么拿不到可用模型，再谈人格学习。
 
+**07:29 UTC 复查（排查到一半，结论又变了）**：直接打 DSH 的 `session/selectModel` 接口，
+同一个会话、同一个 `deepseek-flash`、同样的 `reasoningEffort: off`，**返回 ok**。
+也就是说模型目录是「一度为空、后来自己恢复了」，不是模型名写错：
+
+- 失败的 1252 次全部落在 10-30 18:41 → 10-31 07:29 这个窗口内；
+- 07:29:33 之后不再有新失败；
+- 过程中 `deepseek-v4-flash` 明确不可用，`deepseek-flash` 与 `deepseek-v4-pro` 可用
+  （我们配置里的 `deepseek-flash` 本来就是对的，我一度改成 `deepseek-v4-flash` 是错的，已原样还原，
+  `config.json` 与备份语义完全一致）。
+
+留下来的真问题不是「选哪个模型」，而是**这一层没有任何健康检查与告警**：目录空了 13 小时没人知道，
+桥每次唤醒还照打两遍日志（7 天 1264 条），人格学习因此空转一整天。
+P0 应该加的是：`selectModel` 失败后指数退避 + 一次性告警，而不是每次唤醒重试两次。
+
 ### 2.3 记忆自动写入等于没写
 
 - 回放最近 600 条真实入站消息跑 `extractAndRememberMicroFact`：命中 1 条（0.17%），
