@@ -2130,3 +2130,22 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
      - **无漏发无草稿泄漏**：正文作为思考完全符合收尾规范，日志清晰记录：`[default] 工具统一发送 private:***: 成功 2/2 条`、`工具已发送消息，正文按思考忽略`；
      - 彻底摆脱“只发表情把正文丢掉”的缺陷，拟人感与行为完全由系统提示词原生驱动。
 
+
+---
+
+## 47. 条目 67（2026-10-31 19:35）：彻底物理隔离记忆与人设、清理历史Bug记忆、深度正向提示词精简
+
+1. **记忆与人设彻底物理隔离**：
+   - 彻底移除 `wake-send.js` 中 `buildDynamicTurnContext` 向唤醒正文强行注入 `[Memory]` 的逻辑；
+   - 根治此前由于唤醒正文硬塞过往规则备忘导致模型将“历史规则”误当做“最高铁律”从而引发的定式反常行为（如连发表情包、死板复读做阅读理解）；
+   - 明确记忆是外部客观数据，人设是纯粹口吻。需要时由模型自主调用工具读取（`qq_memory_query` / `qq_memory_search`），绝不自动注入上下文污染人设。
+2. **清理历史 Bug 记忆条目**：
+   - 本地与服务器 SQLite 记忆库（`memory.db`）同步彻底物理删除 9 条历史 bug 残留条目（包含“打八折”、“工作纪律”、“收敛太多”、“过度描述”、“10字以内拆条”等旧规则），触发器自动同步清理全文索引。
+3. **深度正向提示词重构（全面去定式、杜绝做语文阅读理解）**：
+   - **`agent.cordis.yml`**：全面采用深度正向姿态表达，剔除反向否定词堆砌；
+     - `spoken_text_is_the_primary_voice_memes_and_images_are_occasional_expression`：明确文字是主要表达，表情包与图片为偶尔辅助，杜绝每轮硬塞表情包；
+     - `chat_casually_and_lively_like_real_human_friend`：像真实朋友一样随性生动打字；
+     - `respond_directly_to_intent_with_genuine_reaction`：就事论事直接接话与真情实感反应，彻底杜绝“xx是吧就是问xx嘛”这种语文阅读理解复读机病；
+     - `express_freely_in_natural_cadence_short_or_long`：长短随心，自然松弛。
+   - **`wake-send.js`**：`styleGuideLines` 极简收敛为纯正向 3 行；修复 `[Meme Directive]` 正则，杜绝带 `[表情479]` 文本时误触发硬性发表情指令。
+4. **验证**：核心单测全绿，代码已部署到服务器并全量重置会话。

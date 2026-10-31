@@ -471,9 +471,9 @@ function ownerMarkLines() {
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
   return [
-    '[style] friendly_internet_tone pure_spoken_words no_action_brackets',
-    '[tools] every_qq_tool_call_carries_key_from_Session_line_and_token_from_Token_line perception_once_at_turn_start earlier_history_use_qq_memory_search',
-    '[send] words_only_via_qq_send_message text_then_image_or_image_then_text_or_image_alone_text_length_free final_assistant_text_exactly_OK',
+    '[style] casual_natural_spoken_chat direct_lively_reaction pure_spoken_words',
+    '[tools] carry_key_and_token perception_once_at_turn_start tools_for_history_or_memory_when_needed',
+    '[send] words_via_qq_send_message free_cadence final_assistant_text_exactly_OK',
   ].join('\n');
 }
 
@@ -498,11 +498,7 @@ function buildDynamicTurnContext(key, st, reason) {
     const lastUnread = unreadList.length ? unreadList[unreadList.length - 1] : null;
     const activeUid = String(lastUnread?.userId || (String(key).startsWith('private:') ? String(key).slice('private:'.length) : '') || '');
     const textSample = unreadList.map((m) => String(m?.plain || m?.text || '')).join('\n');
-    const mem = memoryDigest({ uid: activeUid, convKey: key, query: textSample, limit: 4, maxChars: 260 });
-    const bonds = String(key).startsWith('group:') && activeUid ? getTopSocialBonds(activeUid, key, 2) : '';
-    if (mem || bonds) {
-      parts.push(`[Memory]\n${[mem, bonds ? `- [bond] ${bonds}` : ''].filter(Boolean).join('\n')}`);
-    }
+    // 2026-10-31: 不再往唤醒正文注入 [Memory]（记忆改由模型按需调 qq_memory_query / qq_memory_search 读取）
     if (textSample && Array.isArray(slangEntries) && slangEntries.length) {
       const slangBlock = detectSlangMatches(textSample, slangEntries, key, 4);
       if (slangBlock) parts.push(slangBlock);
@@ -1093,7 +1089,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   const diceLines = voiceTurnHint(key) + memeTurnHint(key);
   const textAll = unreadToSend.map((m) => m.raw || m.text || '').join('\n');
   let explicitMeme = '';
-  if (/(?:多发|发点|来个|发个|要|想看)?(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
+  if (/(?:多发|发点|来个|发个|要|想看)(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
     explicitMeme = '\n[Meme Directive] qq_send_meme\n';
   }
   let explicitVoice = '';
