@@ -2335,7 +2335,43 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
      - **干脆直达意图（防开场复读）**：`crisp_and_direct_replies_respond_straight_to_the_intent_without_echoing_peer_input`；
      - **自发多变的对话逻辑（防固定行文模板）**：`spontaneous_and_varied_conversational_logic_shift_structure_and_rhythm_freely_every_turn_without_repeating_templates`（移除了任何涉及具体性格如 `excuse_then_soften` 或具体物品的字眼，纯靠通用对话逻辑规律消解套路）。
 
-### 47.3 验证与部署
-- 本地 `npm run check` 全套静态检查与单元测试 100% 通过；
-- 同步至服务器 `/root/qq-bridge` 与 DSH preset 目录，清理驻留的旧 `mcp-napcat-safe.js` 进程，重启 `qq-bridge.service` 并重置会话上下文以清除旧三段式历史污染。
+## 48. 2026-10-31 全量重构去人机化：拔除唤醒正文中的生硬协议说教、彻底净化系统提示词与末梢锚点
+
+### 48.1 现场私聊取证与致命根因复盘
+在 22:05~22:09 的私聊真机交互中，暴露出极为严重的“人机套路化与三段式定式”：
+```text
+[22:05:37] 用户: 你好呀
+[22:05:50] 机器人: 你好呀……主人这个点才想起我哦
+[22:05:51] 机器人: 尾巴都在水里甩累了，还以为你把我忘啦
+[22:05:52] 机器人: 不过喊我一声我就来了嘛
+
+[22:06:09] 用户: 可爱捏
+[22:06:22] 机器人: 才、才不是专门装可爱给你看的
+[22:06:23] 机器人: 不过主人既然夸了……那我就勉强收下好了
+[22:06:24] 机器人: 尾鳍再甩两下给你看看？就两下哦
+
+[22:08:46] 用户: 为什么还是定式思维啊
+[22:09:07] 机器人: 你念得对
+[22:09:08] 机器人: 刚才那三条确实一个模子：先扭、再解释、最后收一句
+[22:09:09] 机器人: 改了也不保证能一次改对，反正我先记着
+```
+- **核心根因**：
+  1. **正文末尾强塞机器口令污染自注意力**：`wake-send.js` 每轮在正文末尾强行注入 `[send] single_qq_send_message_call_per_turn_use_messages_array_if_multi_bubbles finish_with_single_literal_OK` 以及长串 `[anchor]`。由于它们处在离模型生成最近的位置（Transformer RoPE 强权重区），直接把模型注意力洗脑成“协议机器”，强迫模型用 `messages_array` 凑多条气泡（每轮固定三句话连环），造成严重出戏与人机味；
+  2. **规则越多越人机**：系统提示词此前堆砌了大量负向否定指令（如“不要嘴硬、不要复读、不要套路”），在大模型自注意力中反而加深了对这些模板套路的执念。
+
+### 48.2 全量重构方案（能不写就不写，最少最灵活）
+1. **彻底清空 `styleGuideLines()`（`src/core/wake-send.js`）**：
+   - 彻底删除 `[send] ...` 和 `[tools] ...` 每轮正文追加，不向正文输出任何生硬协议指令。
+2. **末端权重锚恢复极简（`src/core/wake-send.js`）**：
+   - 将 `appendTurnTailPersonaAnchor` 恢复为纯粹的 `[anchor] persona_first`，拔除所有冗余短语。
+3. **系统提示词五层极简通用重构（`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 砍掉所有微指令与负向说教，仅保留纯粹通用的场景关系与角色扮演底层（`[EXECUTION]`、`[SCENARIO]`、`[STYLE]`、`[CADENCE]`、`[PERSONA]`）；
+   - 明确 `natural_conversational_cadence_often_a_single_direct_bubble_is_best`，引导模型自然拟人，日常私聊多以干脆单句为主，打破机械凑 3 句的定式。
+4. **工具描述自然化（`src/mcp-napcat-safe.js`）**：
+   - 清理 `qq_send_message` 中恐吓式的大写英文与连发诱导，平实声明支持单句与多句。
+
+### 48.3 部署与验证
+- 运行 `node test_all_mcp_and_language.mjs`，全量 12 项测试 100% 全部通过；
+- 同步至服务器 `/root/qq-bridge` 与 DSH presets，平滑重启服务并重置 `private:1736784911` 会话。
+
 

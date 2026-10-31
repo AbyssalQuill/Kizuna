@@ -349,7 +349,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
    * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
    * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
-  const anchor = '[anchor] unlimited_token_budget persona_first crisp_direct_unpredictable_logic_no_formulaic_template';
+  const anchor = '[anchor] persona_first';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -471,10 +471,7 @@ function ownerMarkLines() {
  * 于是 [style]/[tools]/[bubbles]/[turn] 这些指引一整天都没送到模型面前 —— 群聊照旧无脑接话就是这么来的。
  * 现在改成模块级函数，由 sendWakePrompt 在**所有**路径的最后统一追加，只此一处，不会再漏。 */
 function styleGuideLines() {
-  return [
-    '[tools] carry_key_and_token perception_sequence_ready full_tools_available_on_demand',
-    '[send] single_qq_send_message_call_per_turn_use_messages_array_if_multi_bubbles finish_with_single_literal_OK',
-  ].join('\n');
+  return '';
 }
 
 /** 群聊因为 anyMessage 被叫醒时，补一句"可以选择不说话"——其它唤醒原因不需要，加了反而稀释。 */

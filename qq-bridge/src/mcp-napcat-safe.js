@@ -1560,7 +1560,7 @@ registerTool(
 
 registerTool(
   'qq_send_message',
-  'Send your ENTIRE reply of this turn in ONE single unified call (NEVER split one turn into multiple sequential qq_send_message calls across steps): pass a string for one bubble, or pass messages: ["bubble 1", "bubble 2"] to send multiple bubbles in one call; meme/file/query/emotion/tag = bundled meme from meme packs (can be sent alone without messages, or combined with messages for inline text+meme, meme-first, or text-first). Supports diverse modalities: text+image/meme inline in a single bubble, image/meme-first, text-first, image/meme-only (omit messages), or text-only. In group chats, use replyToMessageId to quote/reply to the specific message you are answering (from unread (id:...) or qq_get_recent_messages). Needs token; target must be whitelisted. Advances read watermark automatically and applies natural linear typing pace to both text and memes.',
+  'Send messages and/or bundled memes to the session: string for a natural single reply (most common), or messages array if multiple bubbles are genuinely needed; bundled memes can be sent alone or combined. Supports text, image, meme, and quotes (replyToMessageId in groups). Advances read watermark automatically and applies natural typing pace.',
   {
     key: z.string().describe('Session key: group:ID or private:QQ (must include prefix verbatim from [Session])'),
     token: z.string().describe('Session token (from the wake prompt)'),
