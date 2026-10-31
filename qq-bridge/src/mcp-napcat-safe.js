@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { canonicalKey } from './lib/keys.js';
 import { napcatImageFileArg } from './lib/napcat-file.js';
 // 2026-09-18：联网找图：图片搜索引擎（Bing/百度）+ SSRF 安全下载。
 // 两者都是纯函数模块，直接 import；下载复用 safe-fetch（禁内网、限字节、校验真是图片）。
