@@ -64,10 +64,10 @@ export function memeTurnHint(key) {
   if (!c.enabled) return '';
   const { p, cooling, hit } = dice('meme', key, c.probability, c.cooldownMs);
   if (hit) {
-    return '[meme_hit] qq_send_meme\n';
+    return '[meme_hit] send_meme_via_qq_send_message\n';
   }
   // 同上（主人更正）：这是授权不是催促 —— 允许发，但不要求；默认发文字。
-  return '[meme_free] qq_send_meme_allowed_not_required\n';
+  return '[meme_free] meme_via_qq_send_message_allowed_not_required\n';
 }
 
 /** 供诊断/日志：当前生效的表情包参数 */

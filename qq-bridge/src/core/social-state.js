@@ -1079,10 +1079,11 @@ function schedulePendingWake(key, reason, st) {
   if (rbAt > 0 && !isReplayWake) st._rebroadcastWake = 0; // 过期即清，杜绝泄漏成“永久提速”
   const interactiveReasons = /^(atMention|question|nameMention|poke|private)$/;
   const isPrivateWake = key.startsWith('private:') && /^(private|poke|nameMention|question)$/.test(String(reason).split(':')[0]);
+  const turnBusy = isTurnActivelyRunning(key) || pendingWakeKeys.has(key);
   let batchMs = isReplayWake
     ? 200
     : (interactiveReasons.test(String(reason))
-      ? (isPrivateWake ? 1000 : 800)
+      ? (turnBusy ? (isPrivateWake ? 1000 : 800) : 250)
       : Math.min(3000, Math.max(400, Number(st.wakeConfig?.batchWindowMs) || 2000)));
   // 私聊智能等待（2026-09-15 需求：看对方打字状态、等打完再回，并用概率骰子决定要不要插话）：
   //   · 命中"等"→ 把唤醒窗口拉长（上限 social.typing.holdMaxMs），期间到的消息全进 unread → 合并成一次注入；

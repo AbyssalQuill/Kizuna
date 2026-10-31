@@ -689,6 +689,25 @@ export function startConsoleServer() {
   };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
+    const resolveReqKey = (body = null, rawParam = '') => {
+      const candidates = [
+        rawParam,
+        body?.key,
+        body?.convKey,
+        body?.sessionKey,
+        body?.session,
+        body?.sessionId,
+        body?.targetKey,
+        url.searchParams.get('key'),
+        url.searchParams.get('convKey'),
+        url.searchParams.get('sessionKey'),
+        url.searchParams.get('session'),
+        url.searchParams.get('sessionId'),
+      ].filter((x) => typeof x === 'string' && x.trim());
+      const prefixed = candidates.find((k) => /^(group|private):\d+$/i.test(k.trim()));
+      const raw = (prefixed || candidates[0] || '').trim();
+      return canonicalKey(raw) || raw;
+    };
     const SECURITY_HEADERS = {
       'X-Frame-Options': 'DENY',
       'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
@@ -1166,7 +1185,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/slang/extract') {
         if (cfgRef.slang?.enabled === false) { sendJson({ ok: false, error: '黑话学习已关闭（slang.enabled=false）' }, 400); return; }
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (key && slangWindows.has(key)) {
           queueSlangTask(() => runSlangExtraction(key));
           sendJson({ ok: true, key });
@@ -1341,7 +1360,7 @@ export function startConsoleServer() {
       // ── 后台控制端引导：向指定会话的 DSH agent 投递提醒 ──────────────────
       if (req.method === 'POST' && url.pathname === '/api/console/notify-ai') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const message = String(body.message ?? '').trim();
         if (!key || !message) {
           sendJson({ ok: false, error: 'key 和 message 不能为空' }, 400);
@@ -1664,7 +1683,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/state') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -1718,7 +1737,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/prompt') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -1819,7 +1838,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/unread') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 30));
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -1872,7 +1891,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/recent') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
         const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
@@ -1937,7 +1956,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/mark-read') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -2039,7 +2058,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/wake-config') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -2227,7 +2246,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/wake') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const reason = String(body.reason ?? 'admin').trim() || 'admin';
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         const keyMatch = /^(group|private):(\d+)$/.exec(key);
@@ -2253,7 +2272,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/send-message') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         let rawMessages = body.messages;
         // 兼容模型误用单数 message / msg / text 字段（schema 名叫 messages，模型偶发记错参数名，
         // 若直接报"至少一个不能为空"会让模型陷入"换参数名反复重试"的循环，撞上重复拦截）。
@@ -2555,7 +2574,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/send-poke') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const targetUserId = String(body.targetUserId ?? body.userId ?? '').trim();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: 'default 模式发送拍一拍必须携带 agent token' }, 403); return; }
@@ -2646,7 +2665,7 @@ export function startConsoleServer() {
       // ── 表情包体系（default） ──────────────────────────────────────
       if (req.method === 'GET' && url.pathname === '/api/social/sticker-image') {
         if (!stickerEnabled()) { sendJson({ ok: false, error: '表情包体系已关闭' }, 403); return; }
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const stickerId = String(url.searchParams.get('stickerId') ?? '').trim();
         if (!key || !stickerId) { sendJson({ ok: false, error: 'key 和 stickerId 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -2680,7 +2699,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/self-image') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -2699,7 +2718,7 @@ export function startConsoleServer() {
       // ========== qq_like: 点赞工具 ==========
       if (req.method === 'POST' && url.pathname === '/api/social/like') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const targetUserId = String(body.targetUserId ?? body.userId ?? '').trim();
         const times = Math.min(10, Math.max(1, Number(body.times) || 1));
         // default 模式工具必须携带有效会话令牌：原写法 `if (headers['x-agent-token'] && ...)`
@@ -2881,7 +2900,7 @@ export function startConsoleServer() {
       // ========== qq_withdraw_message: 撤回自己发的消息 ==========
       if (req.method === 'POST' && url.pathname === '/api/social/withdraw') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const messageId = String(body.messageId ?? '').trim();
         if (!key || !messageId) { sendJson({ ok: false, error: '需要 key 和 messageId' }, 400); return; }
         const agentTokenW = String(req.headers['x-agent-token'] ?? '').trim();
@@ -2921,7 +2940,7 @@ export function startConsoleServer() {
       // ========== 登记自己刚发出的消息（内置表情包等直发通道，撤回要用 messageId） ==========
       if (req.method === 'POST' && url.pathname === '/api/social/record-own-sent') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const messageId = String(body.messageId ?? body.msgId ?? '').trim();
         const text = String(body.text ?? body.file ?? '[图]').trim().slice(0, 120);
         if (!key || !messageId) { sendJson({ ok: false, error: '需要 key 和 messageId' }, 400); return; }
@@ -2988,7 +3007,7 @@ export function startConsoleServer() {
       // ========== qq_send_forward: 智能合并转发 ==========
       if (req.method === 'POST' && url.pathname === '/api/social/forward-send') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const nodes = Array.isArray(body.nodes) ? body.nodes : [];
         const replyToMessageId = body.replyToMessageId;
         if (!key || !nodes.length) { sendJson({ ok: false, error: '需要 key 和 nodes' }, 400); return; }
@@ -3059,7 +3078,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/social/sticker-note') {
         if (!stickerEnabled()) { sendJson({ ok: false, error: '表情包体系已关闭' }, 403); return; }
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const stickerId = String(body.stickerId ?? '').trim();
         if (!key || !stickerId) { sendJson({ ok: false, error: 'key 和 stickerId 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -3077,7 +3096,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/social/sticker-remark') {
         if (!stickerEnabled()) { sendJson({ ok: false, error: '表情包体系已关闭' }, 403); return; }
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const stickerId = String(body.stickerId ?? '').trim();
         if (!key || !stickerId) { sendJson({ ok: false, error: 'key 和 stickerId 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -3095,7 +3114,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/social/send-sticker') {
         if (!stickerEnabled()) { sendJson({ ok: false, error: '表情包体系已关闭' }, 403); return; }
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const stickerId = String(body.stickerId ?? '').trim();
         const caption = String(body.message ?? body.caption ?? '').trim();
         const replyToMessageId = body.replyToMessageId;
@@ -3207,7 +3226,7 @@ export function startConsoleServer() {
       }
       // QQ 自带表情（face）对照表：MCP qq_face_list
       if (req.method === 'GET' && url.pathname === '/api/social/qq-face-list') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -3219,7 +3238,7 @@ export function startConsoleServer() {
       // 发送 QQ 自带表情（face，含动态大表情）：MCP qq_send_qq_face
       if (req.method === 'POST' && url.pathname === '/api/social/send-qq-face') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const faceRef = String(body.faceId ?? body.name ?? body.face ?? '').trim();
         const replyToMessageId = body.replyToMessageId;
         const atUserId = body.atUserId ?? null;
@@ -3311,7 +3330,7 @@ export function startConsoleServer() {
       // 发送富文本/卡片（music/contact/location/json/xml/dice/rps）：MCP qq_send_rich
       if (req.method === 'POST' && url.pathname === '/api/social/send-rich') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const type = String(body.type ?? '').trim();
         const replyToMessageId = body.replyToMessageId;
         const atUserId = body.atUserId ?? null;
@@ -3769,7 +3788,7 @@ export function startConsoleServer() {
       }
       // 音乐搜索（网易云/QQ音乐网页链接，海外可访问）：MCP qq_music_search
       if (req.method === 'GET' && url.pathname === '/api/social/music-search') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const q = String(url.searchParams.get('q') ?? '').trim();
         const platform = String(url.searchParams.get('platform') ?? 'all').trim();
         const limit = Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 5));
@@ -3790,7 +3809,7 @@ export function startConsoleServer() {
        * "用户甩了个 B 站/抖音链接过来" 时先看内容再说话 —— 标题/UP主/时长/播放量/封面。
        * 只读、不发送；解析失败也不要当场编内容，把 error 原样给模型，让它说"我看不到这条"。 */
       if (req.method === 'GET' && url.pathname === '/api/social/video-parse') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const target = String(url.searchParams.get('url') ?? '').trim();
         if (!key || !target) { sendJson({ ok: false, error: 'key 和 url 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -3806,7 +3825,7 @@ export function startConsoleServer() {
       }
       /* 2026-09-17：按关键词搜视频（MCP qq_video_search）：找片子/找资料用；只读。 */
       if (req.method === 'GET' && url.pathname === '/api/social/video-search') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const q = String(url.searchParams.get('q') ?? '').trim();
         const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit')) || 8));
         if (!key || !q) { sendJson({ ok: false, error: 'key 和 q 不能为空' }, 400); return; }
@@ -3824,7 +3843,7 @@ export function startConsoleServer() {
       // 发送 docx 文档（写小说/长文用）：MCP qq_send_docx
       if (req.method === 'POST' && url.pathname === '/api/social/send-docx') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const title = String(body.title ?? '').trim();
         const content = String(body.content ?? '').trim();
         const replyToMessageId = body.replyToMessageId;
@@ -3938,7 +3957,7 @@ export function startConsoleServer() {
       // ── Excel (.xlsx) 表格生成与发送端点 ────────────────────────
       if (req.method === 'POST' && url.pathname === '/api/social/send-excel') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const filename = String(body.filename ?? body.title ?? '表格.xlsx').trim();
         const replyToMessageId = body.replyToMessageId;
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
@@ -3984,7 +4003,7 @@ export function startConsoleServer() {
       // ── Markdown 图片渲染与发送端点（DeepSeek 网页端排版风格） ──────
       if (req.method === 'POST' && url.pathname === '/api/social/render-markdown-image') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const markdown = String(body.markdown ?? body.content ?? '').trim();
         const title = body.title ? String(body.title).trim() : '';
         const replyToMessageId = body.replyToMessageId;
@@ -4016,7 +4035,7 @@ export function startConsoleServer() {
       // ── 洛谷 (Luogu) 插件端点：题面、题解、每日一题、公开视奸 ──────
       if (req.method === 'POST' && url.pathname === '/api/social/luogu/problem') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const pid = String(body.pid ?? '').trim();
         if (!pid) { sendJson({ ok: false, error: 'pid 不能为空' }, 400); return; }
         if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
@@ -4031,7 +4050,7 @@ export function startConsoleServer() {
 
       if (req.method === 'POST' && url.pathname === '/api/social/luogu/user') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const uid = String(body.uid ?? '').trim();
         if (!uid) { sendJson({ ok: false, error: 'uid 不能为空' }, 400); return; }
         if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
@@ -4046,7 +4065,7 @@ export function startConsoleServer() {
 
       if (req.method === 'POST' && url.pathname === '/api/social/luogu/daily') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
         try {
           const daily = await getLuoguDaily(body.date);
@@ -4059,7 +4078,7 @@ export function startConsoleServer() {
 
       if (req.method === 'POST' && url.pathname === '/api/social/luogu/solution') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const pid = String(body.pid ?? '').trim();
         if (!pid) { sendJson({ ok: false, error: 'pid 不能为空' }, 400); return; }
         if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token' }, 403); return; }
@@ -4095,7 +4114,7 @@ export function startConsoleServer() {
        *   GET  /api/social/memory-stats     库规模 + 全文索引状态（诊断/管理端）
        * 对应 MCP 工具 qq_memory_remember / qq_memory_notes。写接口只认本会话令牌。 */
       if (req.method === 'GET' && url.pathname === '/api/social/memory-remember') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const token = req.headers['x-agent-token'];
         if (key && token && !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim' }, 403); return; }
         if (key && token && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -4129,7 +4148,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/memory-notes') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const token = req.headers['x-agent-token'];
         if (key && token && !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim' }, 403); return; }
         if (key && token && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -4205,7 +4224,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/chat-messages') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const query = String(url.searchParams.get('query') ?? '').trim();
         const dirRaw = String(url.searchParams.get('direction') ?? '').trim();
         const r = searchChatMessages({
@@ -4223,7 +4242,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/chat-delete') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const ids = Array.isArray(body.ids) ? body.ids : null;
         const beforeMs = Number(body.beforeMs) || 0;
         const all = body.all === true;
@@ -4251,7 +4270,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/history-search') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const query = String(url.searchParams.get('query') ?? '').trim();
         const sender = String(url.searchParams.get('sender') ?? '').trim();
         const date = String(url.searchParams.get('date') ?? '').trim();
@@ -4321,7 +4340,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/history-delete') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const ids = body.ids;
         const query = String(body.query ?? '').trim();
         const sender = String(body.sender ?? '').trim();
@@ -4337,7 +4356,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/history-clear') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (body.confirm !== true) { sendJson({ ok: false, error: '清空操作需 confirm:true' }, 400); return; }
         if (key && req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (key && req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -4350,7 +4369,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/social/collect-sticker') {
         if (!stickerEnabled()) { sendJson({ ok: false, error: '表情包体系已关闭' }, 403); return; }
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const messageRef = String(body.messageId ?? body.seq ?? '').trim();
         const remark = String(body.remark ?? '').trim();
         if (!key || !messageRef) { sendJson({ ok: false, error: 'key 和 messageId/seq 不能为空' }, 400); return; }
@@ -4393,7 +4412,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'GET' && url.pathname === '/api/social/sticker-list') {
         if (!stickerEnabled()) { sendJson({ ok: false, error: '表情包体系已关闭' }, 403); return; }
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const query = String(url.searchParams.get('query') ?? '').trim();
         const maxCount = Math.max(1, Number(cfgRef.social?.sticker?.maxListCount) || 100);
         const count = Math.min(500, Math.max(1, Math.min(Number(url.searchParams.get('count')) || 48, maxCount)));
@@ -4530,7 +4549,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/wait') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -4778,7 +4797,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/check-send') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const tool = String(body.tool ?? '').trim();
         const token = String(body.token ?? '').trim();
         if (!key || !tool || !token) {
@@ -4836,7 +4855,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/feedback') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const level = body.level === 'warning' || body.level === 'error' ? body.level : 'info';
         const rawMessage = String(body.message ?? '').trim();
         if (!key || !rawMessage) { sendJson({ ok: false, error: 'key 和 message 不能为空' }, 400); return; }
@@ -4866,7 +4885,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/my-recent') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 10));
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -4886,7 +4905,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/message-detail') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const messageId = String(url.searchParams.get('messageId') ?? '').trim();
         if (!key || !messageId) { sendJson({ ok: false, error: 'key 和 messageId 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -4939,7 +4958,7 @@ export function startConsoleServer() {
       // 支持 md/txt/word（docx）等文本类文件：取 OneBot 文件段 → 直链或 get_file → 解析文本返回。
       if (req.method === 'POST' && url.pathname === '/api/social/file-content') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const messageId = String(body.messageId ?? '').trim();
         const fileIndex = Math.max(0, Number(body.fileIndex) || 0);
         if (!key || !messageId) { sendJson({ ok: false, error: 'key 和 messageId 不能为空' }, 400); return; }
@@ -4962,7 +4981,7 @@ export function startConsoleServer() {
       }
       // ── 合并转发消息查询端点（MCP qq_get_forward_msg 走这里） ────────────
       if (req.method === 'GET' && url.pathname === '/api/social/forward-message') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const id = String(url.searchParams.get('id') ?? '').trim();
         const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
         const keyMatch = /^(group|private):(\d+)$/.exec(key);
@@ -5051,7 +5070,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/forward-media') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const media = Array.isArray(body.media) ? body.media : [];
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -5130,7 +5149,7 @@ export function startConsoleServer() {
       }
       // ── 活跃时段表（用户自然语言设定 → qq_set_activity_hours / qq_get_activity_hours） ──
       if (req.method === 'GET' && url.pathname === '/api/social/activity-hours') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -5140,7 +5159,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/activity-hours') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         if (!key || !/^(group|private):\d+$/.test(key)) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
         if (req.headers['x-agent-token'] && !SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -5216,7 +5235,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/active-members') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit')) || 10));
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -5241,7 +5260,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'GET' && url.pathname === '/api/social/group-members') {
         // 群成员/群主查询（带会话令牌）：返回全部成员（含 role=owner/admin/member）+ 群主 + 管理员摘要。
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const groupId = String(url.searchParams.get('groupId') ?? '').trim();
         if (!key || !key.startsWith('group:')) { sendJson({ ok: false, error: 'key 必须是 group:群号' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -5268,7 +5287,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/social/admin-set') {
         // 管理员授权/取消（模型按自然语言调用；仅账号所有者私聊会话可用）
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const token = String(body.token ?? '').trim();
         const uid = String(body.uid ?? '').trim();
         const action = String(body.action ?? '').trim();
@@ -5293,7 +5312,7 @@ export function startConsoleServer() {
       if (req.method === 'POST' && url.pathname === '/api/social/whitelist') {
         // 群白名单加/移（模型按自然语言调用；仅账号所有者私聊会话可用）
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const token = String(body.token ?? '').trim();
         const groupId = String(body.groupId ?? '').trim();
         const action = String(body.action ?? '').trim();
@@ -5317,7 +5336,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/memory-append') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const category = String(body.category ?? '').trim();
         const content = String(body.content ?? '').trim();
         const extra = body.extra && typeof body.extra === 'object' ? body.extra : {};
@@ -5334,7 +5353,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/memory-update') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const category = String(body.category ?? '').trim();
         const oldContent = String(body.oldContent ?? '').trim();
         const target = redactKnownTokensOnly(String(body.target ?? '').trim());
@@ -5386,7 +5405,7 @@ export function startConsoleServer() {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/social/memory') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const category = String(url.searchParams.get('category') ?? '').trim();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -5413,7 +5432,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/memory-remove') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const category = String(body.category ?? '').trim();
         const content = String(body.content ?? '').trim();
         const target = String(body.target ?? '').trim();
@@ -5439,7 +5458,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/memory-clear') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const category = String(body.category ?? '').trim();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (category && !['activeTopic', 'pendingThought', 'memberImpression'].includes(category)) { sendJson({ ok: false, error: 'category 必须是 activeTopic / pendingThought / memberImpression' }, 400); return; }
@@ -5456,7 +5475,7 @@ export function startConsoleServer() {
       }
       // ── default黑话学习（default）：AI 查询/提交黑话候选 ─────────────────
       if (req.method === 'GET' && url.pathname === '/api/social/slang/query') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();
         if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
         if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim; the same value also authorizes cross-session view/actions' }, 403); return; }
@@ -5480,7 +5499,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/social/slang/submit') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const token = String(body.token ?? '').trim();
         const content = redactKnownTokensOnly(String(body.content ?? '')).trim();
         const context = redactKnownTokensOnly(String(body.context ?? '')).trim();
@@ -5544,7 +5563,7 @@ export function startConsoleServer() {
       }
       if (req.method === 'POST' && url.pathname === '/api/authorize/read') {
         const body = await readBody();
-        const key = String(body.key ?? '').trim();
+        const key = resolveReqKey(body);
         const token = String(body.token ?? '').trim();
         const keyMatch = /^(group|private):(\d+)$/.exec(key);
         if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
@@ -5563,7 +5582,7 @@ export function startConsoleServer() {
       }
       // ── 图片/表情查询端点（MCP qq_get_message_images 走这里） ────────────
       if (req.method === 'GET' && url.pathname === '/api/images/message') {
-        const key = String(url.searchParams.get('key') ?? '').trim();
+        const key = resolveReqKey();
         const messageId = String(url.searchParams.get('messageId') ?? '').trim();
         const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
         const keyMatch = /^(group|private):(\d+)$/.exec(key);
@@ -6180,7 +6199,7 @@ export function startConsoleServer() {
         }
         // 发送语音（模型工具 qq_send_voice）：与文字发送同一套令牌/白名单/限频规矩
         if (req.method === 'POST' && url.pathname === '/api/voice/send') {
-          const key = String(body.key ?? '').trim();
+          const key = resolveReqKey(body);
           const token = String(req.headers['x-agent-token'] ?? '').trim();
           if (!token) { sendJson({ ok: false, error: '语音发送必须携带 agent token' }, 403); return; }
           if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim' }, 403); return; }
@@ -6262,7 +6281,7 @@ export function startConsoleServer() {
         }
         // 语音识别（模型工具 qq_transcribe_voice）
         if (req.method === 'POST' && url.pathname === '/api/voice/transcribe') {
-          const key = String(body.key ?? '').trim();
+          const key = resolveReqKey(body);
           const token = String(req.headers['x-agent-token'] ?? '').trim();
           if (!token) { sendJson({ ok: false, error: '语音识别必须携带 agent token' }, 403); return; }
           if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'Invalid agent token - use the [Token] value at the top of the latest wake prompt, copied verbatim' }, 403); return; }
@@ -6475,7 +6494,7 @@ export function startConsoleServer() {
        * —— 群里换人设正是这个场景，群友插一句话就会把这条授权挡掉。 */
       if (req.method === 'POST' && url.pathname === '/api/persona/switch') {
         const body = await readBody();
-        const key = String(body?.key ?? '').trim();
+        const key = resolveReqKey(body);
         const token = String(body?.token ?? '').trim();
         const character = String(body?.character ?? '').trim();
         const clear = body?.clear === true || /^(clear|off|none|default|默认|清除|关闭)$/i.test(character);

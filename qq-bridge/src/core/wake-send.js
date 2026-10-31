@@ -31,6 +31,7 @@ import {
 import { getPromptMediaResolver } from './prompt-deliver.js';
 import { activityStatusLine } from './activity.js';
 import { armPendingWakeLease, disarmPendingWakeLease } from './turn-guard.js';
+import { resetSendPace } from './send-chain.js';
 import { wakeConfigMissCount, reverse, pendingWakeKeys, TurnStartAt, collectors, agentRunningSessions, holdActiveKeys, turnHasBubble, messageMediaStore } from './session-state.js';
 import { noteInboxDelivery } from './inbox-marks.js';
 // 文件类型标签（`[file:PDF]` 标记用）：与正文里的 `[文件:…]` 标记共用同一份映射，避免两处漂移
@@ -348,7 +349,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
    * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
    * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
-  const anchor = '[anchor] persona_first';
+  const anchor = '[anchor] persona_first simple_direct_unpredictable_logic_no_formulaic_template';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -472,7 +473,7 @@ function ownerMarkLines() {
 function styleGuideLines() {
   return [
     '[tools] carry_key_and_token perception_sequence_ready full_tools_available_on_demand',
-    '[send] words_via_qq_send_message finish_with_single_literal_OK',
+    '[send] single_qq_send_message_call_per_turn_use_messages_array_if_multi_bubbles finish_with_single_literal_OK',
   ].join('\n');
 }
 
@@ -1089,7 +1090,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   const textAll = unreadToSend.map((m) => m.raw || m.text || '').join('\n');
   let explicitMeme = '';
   if (/(?:多发|发点|来个|发个|要|想看)(?:表情包?|贴图|表情|sticker|meme)/i.test(textAll) || /贴贴/i.test(textAll)) {
-    explicitMeme = '\n[Meme Directive] qq_send_meme\n';
+    explicitMeme = '\n[Meme Directive] send_meme_via_qq_send_message\n';
   }
   let explicitVoice = '';
   if (/(?:发语音|说句话|音色|语音|听听声音|voice)/i.test(textAll)) {
@@ -1133,6 +1134,7 @@ export async function steerIntoRunningTurn(key, reason, opts = {}) {
   const content = imageParts.length ? [...textOnly, ...imageParts] : textOnly;
   let attachedCount = imageParts.filter((p) => p && p.type === 'image').length;
   try {
+    resetSendPace(key);
     let res = await withTimeout(
       apiRef.sessions.prompt({ sessionId, mode: 'steer', content }),
       15000,
@@ -1794,7 +1796,7 @@ export async function sendWakePrompt(key, reason) {
     const unreadTextAll = unreadMsgs.map((m) => m.raw || m.text || '').join('\n');
     let explicitMeme = '';
     if (/(?:多发|发点|来个|发个|要|想看)(?:表情包?|贴图|表情|sticker|meme)/i.test(unreadTextAll)) {
-      explicitMeme = '[Meme Directive] qq_send_meme';
+      explicitMeme = '[Meme Directive] send_meme_via_qq_send_message';
     }
     let explicitVoice = '';
     if (/(?:发语音|说句话|音色|语音|听听声音|voice|连麦|叫一声|想听)/i.test(unreadTextAll)) {
@@ -1917,6 +1919,7 @@ export async function sendWakePrompt(key, reason) {
     // 2026-10-27：每轮唤醒在最终投递给模型的末尾全量注入人设与最高优先级说话口吻，
     // 享受 Transformer RoPE 最小衰减距离，赋予人设最高的自注意力权重，彻底解决工具调用稀释人设问题！
     promptText = appendTurnTailPersonaAnchor(promptText);
+    resetSendPace(key);
     let result = await deliverRef(key, promptText, { media: wakeMedia });
     if (!result.ok && wakeMedia.length > 0) {
       // 视觉投递失败（模型/网关不接受图像内容）时回退纯文本，避免丢失这次唤醒

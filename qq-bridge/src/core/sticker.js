@@ -18,7 +18,7 @@ import { validateFetchUrl } from '../safe-fetch.js';
 import { sleep } from '../lib/async.js';
 import { randInt } from '../lib/rand.js';
 import { log } from '../lib/log.js';
-import { enqueueSend, typingDelayMs, markSendDelivered } from './send-chain.js';
+import { enqueueSend, nextSendPaceMs, typingDelayMs, markSendDelivered } from './send-chain.js';
 import { getSocialState } from './social-state.js';
 import { fetchOneBotImage, fetchFaceMedia } from './media-pipe.js';
 import { napcatImageFileArg, resolveStickerTmpDir, rewriteToContainerPath } from '../lib/napcat-file.js';
@@ -294,9 +294,9 @@ export async function sendSticker2(key, stickerRef, options = {}) {
   });
   const sendRun = enqueueSend(async () => {
     try {
-      // 表情包同样走线性打字延迟（等效 6 字打字节拍；关闭线性延迟时退回 300~700ms 随机停顿）。
-      const stickerPace = typingDelayMs(6);
-      await sleep(stickerPace != null && stickerPace > 0 ? stickerPace : randInt(300, 700));
+      // 表情包同样走线性打字延迟（首条 0ms 秒发，后续气泡等效 6 字打字节拍；关闭线性延迟时退回 300~700ms 随机停顿）。
+      const stickerPace = nextSendPaceMs(key, 6);
+      await sleep(stickerPace != null ? stickerPace : randInt(300, 700));
       const post = async () => {
         const r = await fetch(`${httpUrl}/${action}`, {
           method: 'POST',
@@ -388,8 +388,8 @@ export async function sendQqFace2(key, faceId, faceName, options = {}) {
   });
   const sendRun = enqueueSend(async () => {
     try {
-      const facePace = typingDelayMs(4);
-      await sleep(facePace != null && facePace > 0 ? facePace : randInt(500, 1500));
+      const facePace = nextSendPaceMs(key, 4);
+      await sleep(facePace != null ? facePace : randInt(500, 1500));
       const res = await fetch(`${httpUrl}/${action}`, {
         method: 'POST',
         headers: {

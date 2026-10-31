@@ -531,13 +531,13 @@ export function sendMessages(key, messages, delays, replyToMessageId, atUserId =
     const useAt = i === 0 ? atUserId : null;
     enqueueSend(async () => {
       const useReply = (i === 0 && explicitQuote) ? String(replyToMessageId).trim() : null;
-      /* 内置线性延迟（2026-09-24 复原）：每条气泡都先等"它自己打完要多久"再发 ——
-       *   等 = clamp(本条字数 × linearPerCharMs × (1 ± linearJitterRatio), linearMinMs, linearCapMs)。
-       * 不看清零、不看批内序号：模型是一次工具调用发一条气泡，任何"只给第 2 条起算"的写法
-       * 在真实调用形态下都等于完全不延迟（342 次调用 / 0 次一次带多条）。
-       * linearEnabled=false（或 perChar=0）→ typingDelayMs 返回 null → 不延迟，节奏交回调用方。 */
+      /* 内置线性延迟（2026-10-31 加速首条回复）：
+       *   · 本回合第 1 条气泡（rec.n === 0）：nextSendPaceMs 返回 0ms → 立即秒发，消除开头等待；
+       *   · 本回合第 2 条及后续气泡（无论是一次调用传 messages 数组，还是分多次调用）：
+       *     等 = clamp(本条字数 × linearPerCharMs × (1 ± linearJitterRatio), linearMinMs, linearCapMs)。
+       *   · linearEnabled=false（或 perChar=0）→ nextSendPaceMs 返回 null → 不延迟。 */
       const paceLen = String(msg || '').length + (img ? 6 : 0);
-      const pace = typingDelayMs(paceLen);
+      const pace = nextSendPaceMs(key, paceLen);
       if (pace != null && pace > 0) log(`[pace] ${key} ${paceLen} 字(含图等效) → 等 ${pace}ms 再发`);
       if (pace != null && pace > 0) await sleep(pace);
       try {

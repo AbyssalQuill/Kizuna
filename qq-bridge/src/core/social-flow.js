@@ -69,17 +69,20 @@ export function appendSocialMessage(key, sender, textContent, plainContent, quot
     time: Date.now()
   };
   st.lastUnreadSeq = msg.seq;
-  st.lastIncomingAt = Date.now();
+  const prevIncomingAt = Number(st.lastIncomingAt) || 0;
+  const now = Date.now();
+  st.lastIncomingAt = now;
   // 2026-09-15 需求「不停打字发消息，打字状态应该是不断的」
   // QQ 的 input_status 事件并不可靠（有时只在开始/结束各来一次，中间一直打字也不重发），
-  // 所以这里用"消息本身"续上打字窗口：收到对方一条消息 = ta 刚才在打字，很可能还在接着打。
-  // 私聊才这么做（群里多人说话不代表某一个人在连续打字，误续会把群聊唤醒拖慢）。
+  // 所以这里用"消息本身"续上打字窗口：当对方正在连发（距上一条 < 3s）或当前已有未过期的正在输入状态时，
+  // 用 refreshOnMessageMs 续期；若对方在静默状态下只发来首条消息且无 input_status，绝不凭空制造 5s 假打字等待（加速首条回复）。
   if (String(key).startsWith('private:') && cfgRef?.social?.typing?.enabled !== false) {
+    const isBursting = (prevIncomingAt > 0 && now - prevIncomingAt < 3000) || (Number(st.peerTypingUntil) || 0) > now;
     const refreshMs = Number(cfgRef?.social?.typing?.refreshOnMessageMs);
     const keep = Number.isFinite(refreshMs) && refreshMs >= 0 ? refreshMs : 5000;
-    if (keep > 0) {
-      const until = Date.now() + keep;
-      if (!st.peerTypingSince) st.peerTypingSince = Date.now();
+    if (isBursting && keep > 0) {
+      const until = now + keep;
+      if (!st.peerTypingSince) st.peerTypingSince = now;
       st.peerTypingUntil = Math.max(Number(st.peerTypingUntil) || 0, until);
     }
   }

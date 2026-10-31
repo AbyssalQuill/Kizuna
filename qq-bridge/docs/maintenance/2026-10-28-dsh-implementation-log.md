@@ -2293,3 +2293,44 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 ### 46.2 验证与部署
 - 本地 `npm run check`（127 个文件静态作用域检查 + 全套 48 个测试文件）100% 通过；
 - 同步部署至远程服务器 `/root/qq-bridge` 及 DSH preset 目录，更新服务器 `config.json`（`stripActionBrackets: false`），平滑重启 `qq-bridge.service` 并执行 `/api/social/reset`。
+
+## 47. 2026-10-31 修复 `qq_send_message` 缺前缀报错与多次单发、加速首条回复速度、破除“定式三段论”套路
+
+### 47.1 线上聊天记录与会话日志取证（Root Cause Analysis）
+通过对服务器 `/root/qq-bridge/state/social-state.json`、`tool-calls.jsonl`、`bridge.log` 及 DSH 会话日志（`session-eebd8aaf-5dbd-457d-bee6-78c18611cfcf` Turn 1~5）进行全链路取证，定位出四大核心问题根因：
+
+1. **为什么 `qq_send_message` 报错 `发送失败：key 格式应为 group:群号 或 private:QQ号`？**
+   - **取证现场**：模型调用 `qq_get_recent_messages` 与 `qq_send_message` 时传入了 `{"key": "1736784911", "convKey": "private:1736784911"}`。
+   - **根因 A（服务端端点未识别 `convKey` 且未做 `canonicalKey` 归一化）**：`src/core/console-server.js` 中 `/api/social/recent`、`/api/social/send-message` 等 68 处端点直接读取 `const key = String(body.key ?? '').trim()`，既忽略了 `convKey`/`sessionKey` 等别名，也未调用 `canonicalKey()`。更严重的是，`/api/social/recent` 内部调用 `getSocialState("1736784911")` 成功拿到数据后，在响应 JSON 中把未加前缀的 `key: "1736784911"` 原样回传给模型，误导模型认为 `"1736784911"` 是合法 `key`，随后传给 `/api/social/send-message` 触发正则校验失败。
+   - **根因 B（DSH 驻留的旧 MCP 子进程未重启）**：`systemctl restart qq-bridge` 仅重启桥接主进程，而 DSH daemon 拉起的常驻 `mcp-napcat-safe.js` 子进程仍运行旧代码。
+
+2. **为什么最开头的回复速度慢（首条气泡耗时 14.4s，整轮耗时 22s）？**
+   - **取证现场**（Turn 4 `21:31:36.612` 用户发 `梳梳头发` → `21:31:50.997` 首条气泡发出）：
+     - **唤醒前白等 5.5s**：`src/core/social-flow.js` 的 `appendSocialMessage` 在收到任何私聊消息时，无条件将 `st.peerTypingUntil` 设为 `Date.now() + 5000`。即使对方只发了一句话且未继续输入，`schedulePendingWake` 的 `typingHoldDecision` 也会强制等待 `5000 + 500 = 5500ms` 才唤醒模型；
+     - **空闲会话合并窗 1.0s**：会话空闲时收到首条消息仍固定等待 `1000ms` 合并窗；
+     - **首条气泡发出前又白等 4.4s**：`src/core/qq-send.js` 的 `sendMessages` 对本轮**第 1 条气泡**也调用了 `typingDelayMs(paceLen)`，导致第 1 条气泡在工具调用到达后又苦等 `4389ms` 才发往 OneBot。
+
+3. **为什么模型一轮分 3~4 次单发 `qq_send_message`？**
+   - 唤醒提示词（`send-dice.js`、`wake-send.js`）中仍残留 `[meme_hit] qq_send_meme` 旧指令；
+   - `qq_send_message` 工具描述与系统提示词缺少“整轮回复必须在**单次** `qq_send_message` 调用中完成（多气泡传 `messages` 数组，严禁跨 step 连续调用多次）”的明确约束。
+
+4. **为什么发言不够简单灵活、逻辑全是千篇一律的“定式三段论”？**
+   - **取证现场**：连续 5 轮回复全部套用同一个模具——① 先 `唔…` 复读/确认对方的话（`唔…要抱抱呀` / `唔…想摸鲸鲸的头呀` / `唔…要梳头发呀`）→ ② 再 `不过…` 嘴硬找借口（`看在你今天这么乖的份上` / `先把爪子擦干净` / `那主人轻点`）→ ③ 最后露软或硬扯尾巴/犯困（`就给你抱一小会儿` / `反正我正好也有点困了` / `尾巴尖给你勾一下手指`）。甚至在 Turn 5 用户吐槽“每条逻辑都一样”时，模型自己都承认：“确实每条都差不多一个模子：先反应一下，再嘴硬，最后露一点软”。
+   - **根因**：分步单发导致模型每发完一句就在下一步补齐人设标签（第一步反应、第二步嘴硬、第三步露软），加上缺少“极简直接、拒绝开场复读（Anti-Echo）”、“破除反应→找借口→露软三段式公式（Anti-Formula）”、“人设属性按需自然触发而非每轮打卡（Anti-Flanderization）”的提示词引导。
+
+### 47.2 核心修复与优化方案
+1. **服务端全端点 `resolveReqKey` 统一归一化（`src/core/console-server.js`）**：
+   - 新增 `resolveReqKey(body, rawParam)`，自动从 `key`、`convKey`、`sessionKey`、`session`、`sessionId`、`targetKey` 及 URL Query 参数中优先提取带 `group:`/`private:` 前缀的候选值，并通过 `canonicalKey()` 将纯数字 QQ 号自动归一化为 `private:<id>`，覆盖全部 68 处 API 端点。
+2. **三段式提速：大幅缩短最开头的首条气泡响应延迟**：
+   - **消除假打字 5.5s 阻塞（`src/core/social-flow.js`）**：`appendSocialMessage` 中仅当对方正在连发（距上一条消息 `< 3000ms`）或当前已有未过期的 `peerTypingUntil`（真实 `input_status` 触发）时才续期打字窗口；安静状态下单发一句话不再凭空触发 5s 打字等待；
+   - **空闲会话快速唤醒窗（`src/core/social-state.js`）**：`schedulePendingWake` 中当会话无在途回合（`!turnBusy`）且为交互唤醒时，合并窗从 `1000ms`/`800ms` 缩短至 `250ms`（忙时保持原值以保障 `mid-turn-steer` 合并稳定性）；
+   - **首条气泡 0ms 秒发、后续气泡保持线性打字延迟（`src/core/wake-send.js`、`src/core/qq-send.js`、`src/core/sticker.js`）**：在每轮唤醒/注入投递前调用 `resetSendPace(key)` 归零本轮计数；`sendMessages`、`sendSticker2`、`sendQqFace2` 统一改用 `nextSendPaceMs(key, paceLen)`——本轮第 1 条气泡返回 `0ms` 立即发出，第 2 条及后续气泡（无论数组批量发还是分次发）严格按字数执行线性延迟。
+3. **强制单次批量发送 + 清除 `qq_send_meme` 残留 + 破除定式三段论（`src/mcp-napcat-safe.js`、`src/core/send-dice.js`、`src/core/wake-send.js`、`dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 将 `send-dice.js` 与 `wake-send.js` 中的 `qq_send_meme` 残留全部更新为 `send_meme_via_qq_send_message`；
+   - 在 `qq_send_message` schema、`agent.cordis.yml` 及 `[send]` 指引行中明确要求整轮回复在**一次** `qq_send_message` 调用中完成（单句传字符串，多气泡传 `messages` 数组，绝不跨 step 连调多次）；
+   - 在 `agent.cordis.yml` 与末尾 `[anchor]` 中注入极简干脆（`keep_replies_simple_crisp_and_direct_often_one_short_bubble_is_enough`）、拒绝开场复读（`jump_straight_to_the_point_never_echo_or_repeat_what_peer_just_said_at_the_start`）、破除固定三段式模板（`break_formulaic_patterns_never_follow_a_fixed_react_then_excuse_then_soften_template_vary_logic_and_structure_radically_every_turn`）与防人设标签每轮打卡（`treat_persona_traits_as_subtle_background_only_trigger_specific_settings_when_context_naturally_calls_for_them_never_force_props_or_catchphrases_into_every_turn`）。
+
+### 47.3 验证与部署
+- 本地 `npm run check` 全套静态检查与单元测试 100% 通过；
+- 同步至服务器 `/root/qq-bridge` 与 DSH preset 目录，清理驻留的旧 `mcp-napcat-safe.js` 进程，重启 `qq-bridge.service` 并重置会话上下文以清除旧三段式历史污染。
+
