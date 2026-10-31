@@ -226,3 +226,13 @@ P0 应该加的是：`selectModel` 失败后指数退避 + 一次性告警，而
 **计划项（P3）**：deepsleep 加 TTL（默认 2 小时自动解除）、被 @ 时自动解除并回一句「我醒了」、
 管理端与唤醒正文都要显式标注当前处于静默。
 
+## 9. 本轮顺手修掉的三个线上故障（都带验证）
+
+| 故障 | 根因 | 修复 | 验证 |
+|---|---|---|---|
+| 群友羁绊查询恒为空 | `memory.js` 调 `initChatDb` 未导入，ReferenceError 被 catch 吞 | `dc29c86` 补导入 | 现场返回「常互动群友: 星痕Ofter(互动11次)…」 |
+| selectModel 全线 model-unavailable（10-30 18:41 起，7 天 1264 条） | `dsh-session.js` 用 `??` 取值，`visionModel` 空字符串 → 掉进已下架的 `deepseek-v4-flash-vision-exp` | `55daeec` 改 `||` 链，回落主模型 | `已设置会话视觉模型 … -> deepseek-official/deepseek-flash (off)`；人格学习 `1 个目标（成功 1）`；07:35 后 0 失败 |
+| 全部群聊静默 8 分钟 | `social.deepsleep` 被打开，无 TTL、无提醒 | 配置热加载 + `/api/social/deepsleep` 关闭 | 返回 `deepsleep: false`（消息侧待下一条群消息复验） |
+
+另修一处：卡死的旧人格学习会话（每次都秒 blocked）已重建。
+
