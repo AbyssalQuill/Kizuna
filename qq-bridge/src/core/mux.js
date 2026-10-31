@@ -554,7 +554,10 @@ export async function handleIncoming(kind, id, event, cfgRef) {
        * 原来这条还认 `/role 默认` / `/role 清除` / `/role 关闭` 三个中文子命令别名，已全部删除；
        * 清除角色只认英文 `clear|off|none|default`（`/role clear` 是文档里的规范写法）。 */
       const isClear = /^(clear|off|none|default)$/i.test(want);
-      if (!want || want === '?') {
+      /* 2026-10-31 主人：「我说 role list 还能回答收到？」——原来 `/role list` 被当成"要切换到名叫 list 的角色"，
+       * 切换失败后仍然回一句「收到」，看起来像没执行。list/ls/列表 都按"列角色库"处理。 */
+      const isList = /^(list|ls|列表)$/i.test(want);
+      if (!want || want === '?' || isList) {
         const { root, packs, loose } = listCharacterPacks(cfgRef);
         const names = [...packs, ...loose].slice(0, 40);
         await sendToQQ(key, names.length
