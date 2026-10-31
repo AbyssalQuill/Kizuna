@@ -473,7 +473,7 @@ function styleGuideLines() {
   return [
     '[style] friendly_internet_tone pure_spoken_words no_action_brackets',
     '[tools] every_qq_tool_call_carries_key_from_Session_line_and_token_from_Token_line perception_once_at_turn_start earlier_history_use_qq_memory_search',
-    '[send] text_then_image_or_image_then_text_or_image_alone_text_length_free',
+    '[send] words_only_via_qq_send_message text_then_image_or_image_then_text_or_image_alone_text_length_free final_assistant_text_exactly_OK',
   ].join('\n');
 }
 

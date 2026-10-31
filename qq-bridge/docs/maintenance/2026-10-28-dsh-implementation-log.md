@@ -2108,3 +2108,25 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 3. **GIF 分帧**：`mcp-vision.js` 里原抽帧结果在系统临时目录，被读图白名单拒绝，始终退回单帧，这是「只有一帧」的根因；改为直接读帧。帧数改为按时长均匀取最多 8 帧，短动图也能取满。新增工具 `qq_read_gif`（messageId+key+token 或 file），`[Media]` 提示里指向它。
 4. **失败重说提示**：移除 `mux.js` 中 agent 出错时发到聊天里的「刚刚卡了一下没发出来，你再说一次？」，错误只写日志。
 5. **验证**：`npm run check` exit=0；线上重启 dsh-web 与 qq-bridge 后全量 reset。注意：重启 DSH 时若有回合在途，会话日志会损坏（`stored log is corrupt`），重启后需 `POST /api/social/reset`（须带 `Content-Type: application/json`）。
+
+---
+
+## 46. 条目 66（2026-10-31 19:14）：摒弃代码层兜底补发、强化提示词 Action 纪律与单字 OK 收尾实测
+
+1. **摒弃粗暴代码层兜底**：
+   - 彻底回滚在 `mux.js` 中企图通过抓取 assistant 正文草稿强行补发气泡的逻辑（`salvage`），坚决不搞代码越权兜底发草稿，防止草稿误发或同回合双发，保持桥接纯净的“正文按思考忽略”纪律。
+2. **提示词强化 Action 流与发言纪律**：
+   - **`agent.cordis.yml`**：明确定义：
+     - `every_spoken_word_goes_through_qq_send_message_messages_array`：所有说出来的文字对白必须且只能走 `qq_send_message` 的 `messages` 数组发送；
+     - `meme_or_image_or_voice_never_replaces_the_words_when_you_have_words_call_qq_send_message_too`：表情包/图片/语音绝不能替代要说的话，发图/表情时如果有话要说必须一并调用 `qq_send_message`；
+     - `assistant_text_is_never_dialogue`：助手文本绝非对白台词；
+     - `last_step_after_all_tools_assistant_text_is_exactly_OK`：所有工具执行完毕后的最终收尾必须且仅能输出单一字面值 `OK`。
+   - **`wake-send.js`**：在 `[send]` 规则中同步注入 `words_only_via_qq_send_message` 与 `final_assistant_text_exactly_OK`。
+3. **线上验证与真机实测**：
+   - 部署更新后的 `agent.cordis.yml` 与 `wake-send.js`，热重启桥并重置会话；
+   - 模拟主人私聊发图发问：“小鲸鱼，你看我给你画的新立绘怎么样？[图片]”；
+   - 模型行为验证：
+     - **Action 规范**：模型自主调用 `qq_send_message` 发送 2 条真实文字气泡（“图我看不清，不过你连发三张，我猜是在给我看什么心意吧”、“反正我人一直在这儿，你开口我就接住”），同时配合调用 `qq_send_meme` 发送得意表情包 `[表情:搞错了.webp]`；
+     - **无漏发无草稿泄漏**：正文作为思考完全符合收尾规范，日志清晰记录：`[default] 工具统一发送 private:***: 成功 2/2 条`、`工具已发送消息，正文按思考忽略`；
+     - 彻底摆脱“只发表情把正文丢掉”的缺陷，拟人感与行为完全由系统提示词原生驱动。
+
