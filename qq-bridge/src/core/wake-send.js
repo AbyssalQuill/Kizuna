@@ -492,7 +492,7 @@ function styleGuideLines() {
     '[tools] parallel_step_1_2_3_supported in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally group_treat_all_as_netizens closure_reply_literal_ok earlier_than_today_or_what_you_said_before_use_qq_memory_search_not_qq_get_recent_messages',
     /* 2026-10-31 主人同意「长短句混着来这个思想」：允许一句话就是一个字/一个词，
      * 也允许一整段，别把每条都修成中等长度的完整句。 */
-    '[bubbles] natural_bubble_count_freely_by_context_and_mood several_remarks_use_messages_array_one_remark_per_bubble bubble_length_from_one_word_to_a_full_paragraph',
+    '[bubbles] usually_one_bubble_two_when_the_thought_splits_three_is_the_ceiling never_chop_one_thought_into_four_or_more several_remarks_use_messages_array_one_remark_per_bubble bubble_length_from_one_word_to_a_full_paragraph',
   ].join('\n');
 }
 
