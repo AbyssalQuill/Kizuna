@@ -38,11 +38,18 @@ export { resetVisionModelApplications } from './session-state.js';
 export async function ensureVisionModel(sessionId, customOpts = {}) {
   if (!sessionId || visionModelAppliedSessions.has(sessionId)) return;
   if (!cfgRef || !apiRef?.sessions?.selectModel) return;
-  const rawProvider = String(customOpts?.provider ?? cfgRef.dsh?.provider ?? '').trim();
-  const rawModel = String(customOpts?.model ?? cfgRef.dsh?.visionModel ?? cfgRef.dsh?.model ?? '').trim();
+  /* 2026-10-31 修「selectModel 全线 model-unavailable、人格学习空转 13 小时」：
+   * 原来用 ?? 取值，visionModel 留空（空字符串是很常见的"不配置"写法）时 rawModel 变成 ''，
+   * 于是掉到下面的硬编码兜底 deepseek-v4-flash-vision-exp —— 那个实验模型已在服务商目录下架，
+   * 每个走 ensureVisionModel 的会话都被判 model-unavailable，日志 7 天 1264 条。
+   * 现场证据：同一会话同一档位，model=deepseek-v4-flash-vision-exp → unavailable，
+   * model=deepseek-flash → ok。改成 || 链：空字符串视同没配，回落到主模型；仍为空就不调 selectModel。 */
+  const rawProvider = String(customOpts?.provider || cfgRef.dsh?.provider || '').trim();
+  const rawModel = String(customOpts?.model || cfgRef.dsh?.visionModel || cfgRef.dsh?.model || '').trim();
   if (!rawProvider && !rawModel) return; // 未显式配置则用 DSH 默认（官方 deepseek）
   const provider = rawProvider || 'deepseek-official';
-  const model = rawModel || 'deepseek-v4-flash-vision-exp';
+  const model = rawModel;
+  if (!model) return;
   const rawEffort = String(customOpts?.reasoningEffort ?? cfgRef.dsh?.reasoningEffort ?? '').trim();
   const configured = rawEffort.toLowerCase() === 'auto' ? '' : rawEffort;
 
