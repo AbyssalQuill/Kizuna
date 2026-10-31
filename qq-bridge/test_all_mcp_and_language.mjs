@@ -79,7 +79,7 @@ async function main() {
   // 6. 系统提示词架构守卫（五层优先级无示例）
   await check('PROMPT', '系统提示词五层优先级与零示例规则', async () => {
     const preset = fs.readFileSync(path.join(process.cwd(), 'dsh', 'agent-presets', 'qq-chat', 'agent.cordis.yml'), 'utf8');
-    assert.ok(preset.includes('[EXECUTION]'), '必须有执行层');
+    assert.ok(preset.includes('[EXECUTION]') || preset.includes('[FLOW]'), '必须有执行或流程层');
     assert.ok(preset.includes('[SCENARIO]'), '必须有场景层');
     assert.ok(preset.includes('[STYLE]'), '必须有风格层');
     assert.ok(preset.includes('[CADENCE]'), '必须有节奏层');
@@ -90,8 +90,8 @@ async function main() {
     assert.ok(!preset.includes('打八折'), '绝对禁止历史旧 bug 规则');
     
     // 工具按需全量声明守卫
-    assert.ok(preset.includes('full_tool_catalog_available_in_schemas_invoke_freely_on_demand'), '必须声明全量工具按需生态');
-    assert.ok(preset.includes('assistant_text_is_for_protocol_finish_with_single_literal_OK'), '必须严格OK收尾');
+    assert.ok(preset.includes('reach_for_any_tool_in_the_catalog') || preset.includes('full_tool_catalog_available_in_schemas_invoke_freely_on_demand'), '必须声明全量工具按需生态');
+    assert.ok(preset.includes('assistant_text_carries_only_the_single_literal_OK') || preset.includes('assistant_text_is_for_protocol_finish_with_single_literal_OK'), '必须严格OK收尾');
 
     return { fiveLayersConfirmed: true, zeroFewShot: true };
   });

@@ -22,7 +22,7 @@
 - [3. Permanent Single-Session Single-Turn Collapse Architecture & Pure Snake-Case Prompt Engineering](#3-permanent-single-session-single-turn-collapse-architecture--pure-snake-case-prompt-engineering)
   - [3.1 Paradigm Shift: From Multi-Turn Snowballing to Permanent Single-Session + Physical Single-Turn Collapse (`collapseToSingleTurn`)](#31-paradigm-shift-from-multi-turn-snowballing-to-permanent-single-session--physical-single-turn-collapse-collapsetosingleturn)
   - [3.2 Zero-Chinese, Zero-Sample-Pollution Pure Lowercase Snake-Case Prompt Specification](#32-zero-chinese-zero-sample-pollution-pure-lowercase-snake-case-prompt-specification)
-  - [3.3 Single-Batch Parallel Perception Pipeline & De-Regexification at the Source](#33-single-batch-parallel-perception-pipeline--de-regexification-at-the-source)
+- [3.3 Full-Dimensional Action Architecture: Single-Turn Batch Dispatch (Unified Text & Memes) & Autonomous Perception](#33-full-dimensional-action-architecture-single-turn-batch-dispatch-unified-text--memes--autonomous-perception)
   - [3.4 Orthogonal Dual-Track Persona System: Single-File `.md` Persona Deck vs. Built-In Character Skill Library](#34-orthogonal-dual-track-persona-system-single-file-md-persona-deck-vs-built-in-character-skill-library)
   - [3.5 Adaptive Group Velocity Window, Context-Aware Smart Targeting & Bidirectional Social Bond Graph](#35-adaptive-group-velocity-window-context-aware-smart-targeting--bidirectional-social-bond-graph)
   - [3.6 Context-Driven Proactive Reply Backoff (`waiting-peer-reply`)](#36-context-driven-proactive-reply-backoff-waiting-peer-reply)
@@ -55,7 +55,7 @@
   - [5.18 MCP Safe Web Search Service (2 Tools)](#518-mcp-safe-web-search-service-2-tools)
   - [5.19 Three-Layer Token Optimization: `slimTools`, `mcp-compressor` Proxy & Single-Turn Collapse](#519-three-layer-token-optimization-slimtools-mcp-compressor-proxy--single-turn-collapse)
 - [6. Multimedia & Signature Capabilities](#6-multimedia--signature-capabilities)
-  - [6.0 Photography-Grade High-Fidelity Vision & Temperature 1.0 Lock](#60-photography-grade-high-fidelity-vision--temperature-10-lock)
+- [6.0 Photography-Grade High-Fidelity Vision, QQ MarketFace Resolution & Temperature 1.0 Lock](#60-photography-grade-high-fidelity-vision-qq-marketface-resolution--temperature-10-lock)
   - [6.1 22-Platform Concurrent Federated Web Search & SSRF Sandbox](#61-22-platform-concurrent-federated-web-search--ssrf-sandbox)
   - [6.2 Original-Resolution Pixiv Artwork Delivery & Integrity Verification](#62-original-resolution-pixiv-artwork-delivery--integrity-verification)
   - [6.3 Dual Voice Synthesis Engines (Cloud High-Fidelity TTS + Local Genie-TTS / GPT-SoVITS ONNX)](#63-dual-voice-synthesis-engines-cloud-high-fidelity-tts--local-genie-tts--gpt-sovits-onnx)
@@ -156,24 +156,24 @@ The complete lifecycle from a user sending a QQ message to the agent executing s
                                                         (Permanent session ID + clean single-turn surface)
                                                                        │
                                                                        ▼
-                                                    [Step 1-2-3 Single-Batch Parallel Tool Calls]
-                                                    ├─ qq_load_persona (loads pure snake_case persona)
-                                                    ├─ get_time (fetches exact Beijing time)
-                                                    ├─ qq_get_recent_messages (reads chat window)
-                                                    └─ On-demand parallel qq_memory_search / web_search
-                                                                       │
-                                                                       ▼
-                                                    [Contextual Reasoning & Action Dispatch]
-                                                    ├─ Smart targeting: quote / @ / natural direct reply
-                                                    ├─ Free bubble cadence: qq_send_message / qq_send_meme
-                                                    └─ Output single literal "OK" to close turn
-                                                                       │
-                       ┌───────────────────────────────────────────────┴───────────────────────────────┐
-                       ▼                                                                               ▼
-          [Enter Typing Pace Smoother send-pace.js]                                  [Turn-End Harvest & Single-Turn Collapse]
-          ├─ Compute realistic typing delay by char count                            ├─ 1. Async Micro-Fact Extraction
-          ├─ Insert natural inter-bubble pauses (800~5000ms)                         │    Zero-LLM extraction into SQLite + BGE 512d vector
-          └─ Deliver via NapCat OneBot API to QQ                                     └─ 2. Physical Single-Turn Collapse (collapseToSingleTurn)
+                                                     [On-Demand Autonomous Perception & Deep Reflection]
+                                                     ├─ Persona & spatio-temporal context pre-mounted or loaded on-demand
+                                                     ├─ On-demand autonomous search via qq_memory_search / web_search / slang
+                                                     └─ unlimited_token_budget activates full-depth cognitive reasoning & anti-formula
+                                                                        │
+                                                                        ▼
+                                                     [Single-Turn Batch Dispatch (Unified Modalities)]
+                                                     ├─ qq_send_message unified dispatch: multi-bubbles + memes + quotes & images
+                                                     ├─ Smart targeting: quote cross-distance / @ / direct natural remark
+                                                     ├─ Group lurk self-discipline: default to "OK" without chatter for idle chatter
+                                                     └─ Output single literal "OK" to close the turn cleanly
+                                                                        │
+                        ┌───────────────────────────────────────────────┴───────────────────────────────┐
+                        ▼                                                                               ▼
+           [Enter Typing Pace Smoother send-pace.js]                                  [Turn-End Harvest & Single-Turn Collapse]
+           ├─ 0ms instant dispatch on first bubble (zero lag)                          ├─ 1. Async Micro-Fact Extraction
+           ├─ Linear typing pace by character count for trailing bubbles              │    Zero-LLM extraction into SQLite + BGE 512d vector
+           └─ Deliver via NapCat OneBot API to QQ                                     └─ 2. Physical Single-Turn Collapse (collapseToSingleTurn)
                                                                                             Replaces all turn nodes (except system/message &
                                                                                             tool registry) with 1 empty developer/message!
 ```
@@ -248,45 +248,54 @@ Through extensive production telemetry and A/B testing, both our System Prompt (
 3. **Positive Behavioral Anchoring**:
    - Eliminates defensive workarounds for legacy bugs in favor of clean, positive behavioral directives.
 
-#### Full System Prompt (`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml`)
+#### Full System Prompt (`agent.cordis.yml` 5-Layer Minimal Universal Specification)
 ```yaml
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
       role_rp_agent
       pure_in_character
+      unlimited_token_budget_unlock_full_depth
 
-      perception_sequence_step_1_load_persona
-      perception_sequence_step_2_get_current_time
-      perception_sequence_step_3_get_recent_messages
-      emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips
-      on_demand_memory_and_web_search_via_qq_memory_search_or_qq_web_search
-      action_dispatch_use_tools_only
-      dispatch_spoken_bubbles_via_qq_send_message
-      step_3_closure_reply_single_literal_OK_after_tools
-      never_speak_dialogue_in_assistant_text
+      # --- 1. [FLOW] Action Loop: Look-Think-Act-Close ---
+      look_first_read_what_you_are_answering_then_decide
+      decide_speak_only_when_you_actually_have_something_to_say_silence_is_a_real_answer
+      act_one_send_call_carries_every_bubble_in_messages_array
+      reach_for_any_tool_in_the_catalog_the_moment_asks_for
+      key_and_token_come_verbatim_from_the_Session_and_Token_lines
+      assistant_text_carries_only_the_single_literal_OK
 
-      master_private_only
-      group_chat_treat_peers_as_friendly_netizens
-      never_call_peers_master_in_group
-      group_chat_friendly_banter_never_malicious_or_aggressive
-      in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally
-      comprehend_chinese_internet_abbreviations_naturally
-      respect_quote_attribution_know_who_talks_to_whom
-      hold_full_conversational_thread_and_intent
+      # --- 2. [SCENARIO] Universal Roleplay & Scenario Boundaries ---
+      immerse_deeply_in_character_at_all_times
+      private_chat_natural_intimate_dialogue_focused_on_peer
+      group_chat_default_to_silence_lurk_quietly_unless_specifically_addressed
+      group_chat_never_spam_or_act_as_a_random_commentator
+      silent_turn_reply_with_single_literal_OK_without_calling_send_tools
+      group_target_via_replyToMessageId_or_atUserId
+      respect_quote_attribution
+      hold_full_conversational_thread_and_context
 
-      pure_spoken_text_only_never_use_action_brackets
-      feelings_in_dialogue_no_stage_directions
-      use_wo_or_drop_subject_naturally
+      # --- 3. [STYLE] Universal Humanization & Contextual Insight ---
+      first_person_subjective_character_perspective_at_all_times
+      pure_dialogue_without_action_brackets_unless_persona_requires
+      comprehend_images_and_memes_contextually_never_describe_scenes_literally
+      comprehend_internet_abbreviations_and_subtext_naturally
       tail_no_period
-      spoken_bubbles_end_with_question_exclamation_wave_or_no_period
 
-      natural_chat_cadence_break_rigid_templates
-      natural_bubble_count_freely_by_context_and_mood
-      several_remarks_use_messages_array_one_remark_per_bubble
-      dispatch_meme_freely_via_qq_send_meme_with_english_or_chinese_emotion
-      meme_supports_standalone_or_with_text
+      # --- 4. [CADENCE] Flexible Cadence & Unified Dispatch ---
+      natural_flexible_cadence_vary_freely_from_single_bubble_to_multiple_short_bursts
+      single_bubble_for_swift_direct_replies
+      split_into_2_to_3_concise_bubbles_when_thoughts_extend_or_turn
+      never_cram_multiple_thoughts_into_a_single_bloated_long_bubble
+      diverse_modalities_text_images_voice_or_memes_on_demand
 
+      # --- 5. [PERSONA] Independent Character Lore Loading ---
       # === qq-bridge persona/rules BEGIN ===
       [PERSONA]
       call_tool_qq_load_persona_for_character
+      # === qq-bridge persona/rules END ===
+```
       # === qq-bridge persona/rules END ===
 ```
 
@@ -330,13 +339,19 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 ---
 
-### 3.3 Single-Batch Parallel Perception Pipeline & De-Regexification at the Source
-1. **Single-Batch Parallel Perception (`emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips`)**:
-   - Guides the model to emit `qq_load_persona`, `get_time`, and `qq_get_recent_messages` (plus optional `qq_memory_search` / `web_search`) in a single parallel tool-call batch on Step 1, cutting perception round-trips from 3+ down to 1.
-2. **De-Regexification (`stripActionBrackets: false`)**:
-   - Disables destructive outbound regex bracket stripping so code snippets (e.g., `console.log(a)`) are never mangled, relying instead on source-level prompt internalization (`pure_spoken_text_only_never_use_action_brackets`).
-3. **Spontaneous Bubble Count (`natural_bubble_count_freely_by_context_and_mood`)**:
-   - Removes rigid bubble-count quotas so the agent chooses 1 or more bubbles naturally according to mood and conversational rhythm.
+### 3.3 Full-Dimensional Action Architecture: Single-Turn Batch Dispatch (Unified Text & Memes) & Autonomous Perception
+1. **Unified Text & Meme Dispatch (`qq_send_message` All-in-One Multi-Bubble Hub)**:
+   - **Bottleneck in Legacy Design**: Previously, sending text called `qq_send_message` while sending memes called `qq_send_meme`. When the model decided to send two text bubbles paired with an emoji/meme, it was forced to make multiple cross-step round trips, driving latency beyond 20 seconds and multiplying token usage;
+   - **Native Deep Fusion**: `qq_send_message` now natively incorporates full meme gallery capabilities, accepting `meme` (specific meme name or emotion), `query` (semantic fuzzy emotion lookup), `pack` (specific folder), and `tag` filtering;
+   - **Single-Turn Single-Call Contract (`single_qq_send_message_call_per_turn_put_all_bubbles_in_messages_array`)**: All remarks and memes are packed into the `messages` array in a single atomic tool call, eradicating multi-turn looping latency;
+   - **0ms First Bubble & Linear Typing Pace (`send-pace.js`)**: The first bubble is sent immediately with 0ms delay, while trailing bubbles follow smooth typing delays based on character count;
+   - **Backward Compatibility**: `qq_send_meme` is retained as a lightweight shorthand tool.
+2. **Look → Think → Act → Close 4-Step Loop & Infinite Token Depth**:
+   - Replaces rigid perception checklists with an on-demand loop;
+   - System prompt explicitly declares `unlimited_token_budget_unlock_full_depth`, empowering the model to think deeply, self-critique, and demolish formulaic tropes (such as the rigid "blush-excuse-soften" 3-step pattern);
+   - Concludes turns with a literal `"OK"` string to prevent leaking unexecuted conversational chatter.
+3. **De-Regexification at the Source (`stripActionBrackets: false`)**:
+   - Disables destructive outbound regex bracket stripping, preventing accidental breakage of code blocks while relying on source-level prompt rules.
 
 ---
 
@@ -441,7 +456,7 @@ The system registers 3 standard MCP servers (`mcp-napcat-safe.js`, `mcp-host-ser
 ### 5.3 Message Dispatch & Interaction (7 Tools)
 | Tool Name | Required Args | Optional Args | Min Slim Tier | Description |
 | :--- | :--- | :--- | :---: | :--- |
-| `qq_send_message` | — | `key`, `token`, `messages`, `message`, `images`, `replyToMessageId`, `atUserId`, `gapMode`, `gapMs`, `gaps`, `markRead`, `crossSession` | `extreme` | Send one or multiple segmented text bubbles with optional images, quote reply, and @ mention; `markRead` defaults to true. |
+| `qq_send_message` | — | `key`, `convKey`, `token`, `messages`, `message`, `meme`, `query`, `pack`, `tag`, `images`, `replyToMessageId`, `atUserId`, `gapMode`, `gapMs`, `gaps`, `markRead`, `crossSession` | `extreme` | **All-in-One Dispatch Hub (Unified Text & Memes)**: Supports single string or multi-bubble array (`messages`); natively integrates meme sending (`meme` by name/emotion or `query` via fuzzy gallery match); supports image attachment, quote reply, and @ mention; 0ms instant send on 1st bubble, trailing bubbles paced linearly; auto-normalizes pure numeric QQ IDs; advances read watermark on success. |
 | `qq_reply` | `replyToMessageId`, `message` | `key`, `groupId`, `token`, `markRead`, `crossSession` | `extreme` | Quote-reply to a specific historical message ID; `markRead` defaults to true. |
 | `qq_send_group_message` | `groupId`, `message` | `replyToMessageId`, `token` | `low` | Send a text message to a specific group ID. |
 | `qq_send_private_message` | `userId`, `message` | `replyToMessageId`, `token` | `low` | Send a private message to a specific friend's QQ ID. |
@@ -506,7 +521,7 @@ The system registers 3 standard MCP servers (`mcp-napcat-safe.js`, `mcp-host-ser
 ### 5.9 Images, Stickers & Meme Gallery Ecosystem (13 Tools)
 | Tool Name | Required Args | Optional Args | Min Slim Tier | Description |
 | :--- | :--- | :--- | :---: | :--- |
-| `qq_get_message_images` | `messageId` | `key`, `token` | `high` | Extract image URLs or Base64 payloads from a message for multimodal vision inspection. |
+| `qq_get_message_images` | `messageId` | `key`, `token` | `high` | Extract image URLs or Base64 payloads from a message for multimodal inspection. [Architectural Note: Incorporates **QQ MarketFace 300x300.png CDN Candidate Resolution**, replacing deprecated `raw300.gif` links (404) with permanent high-res PNG assets, eradicating gateway timeouts and apologies]. |
 | `qq_send_image` | — | `key`, `token`, `file`, `messageId`, `imageIndex`, `query`, `imageUrl`, `index`, `replyToMessageId`, `markRead`, `crossSession` | `low` | Send a local image, remote URL, or forwarded message image to the chat. |
 | `qq_get_self_image` | — | `key`, `token` | `off` | Retrieve the bot's own current QQ avatar in high resolution. |
 | `qq_list_stickers` | — | `key`, `token`, `query`, `count`, `refresh` | `high` | List custom stickers saved in the bot's QQ favorites folder. |
@@ -516,7 +531,7 @@ The system registers 3 standard MCP servers (`mcp-napcat-safe.js`, `mcp-host-ser
 | `qq_sticker_note` | `stickerId` | `key`, `token`, `note`, `tags`, `usage` | `off` | Annotate a saved sticker with semantic tags and usage scenarios. |
 | `qq_set_sticker_remark`| `stickerId`, `remark`| `key`, `token` | `off` | Update official cloud remark for a favorite sticker. |
 | `qq_meme_search` | `query` | `tag`, `pack`, `limit` | `high` | Search the local meme gallery by emotion or visual description. |
-| `qq_send_meme` | — | `key`, `token`, `file`, `fileName`, `query`, `tag`, `pack`, `replyToMessageId`, `markRead`, `crossSession` | `high` | Pick and send a matching meme from the local gallery (with 15-item session anti-repeat random sampling). |
+| `qq_send_meme` | — | `key`, `token`, `file`, `fileName`, `query`, `tag`, `pack`, `replyToMessageId`, `markRead`, `crossSession` | `high` | Pick and send a matching meme from the local gallery (with 15-item session anti-repeat random sampling). [Architectural Note: Fully unified into `qq_send_message`; retained as an independent shortcut tool]. |
 | `qq_face_list` | — | `key`, `token` | `high` | List official built-in QQ yellow emoji names and numeric IDs. |
 | `qq_send_qq_face` | — | `key`, `token`, `faceId`, `name`, `replyToMessageId`, `atUserId`, `markRead` | `medium` | Send a native QQ built-in yellow emoji. |
 
@@ -619,8 +634,12 @@ Because the full JSON Schema of all 101+ MCP tools totals **117,734 – 124,104 
 
 ## 6. Multimedia & Signature Capabilities
 
-### 6.0 Photography-Grade High-Fidelity Vision & Temperature 1.0 Lock
+### 6.0 Photography-Grade High-Fidelity Vision, QQ MarketFace Resolution & Temperature 1.0 Lock
 - **High-Fidelity Vision (`image-compress.js` / `media-pipe.js`)**: Supports up to **4096px–8192px**, **35MB** per image, **150 MP** pixel ceiling, JPEG quality **90**, and a **25,000ms** CDN download timeout.
+- **Rooted Resolution for QQ VIP MarketFaces & CDN Candidate Snapping**:
+  - **Network Protocol Root Cause**: Dynamic animated store stickers (`gxh.vip.qq.com/club/item/parcel/.../raw300.gif`) have been deprecated by Tencent COS (returning 404), and NapCat does not cache them locally, causing 25-second timeouts and leading previous versions to output out-of-character apologies;
+  - **300x300.png High-Res Direct Candidate Derivation**: The media pipeline now automatically derives permanent, valid `300x300.png` HD image URLs (60KB~130KB) from incoming URLs or `media.file` (`<prefix>-<hash>.gif`);
+  - **Bypassing Gateway Timeouts**: Directly fetches the asset with proper Referer headers in under 150ms, saves to `state/media-cache/`, and delivers multi-modal Base64 directly to the model, completely eradicating lost images and apologies.
 - **Temperature 1.0 Lock**: Keeps sampling temperature locked at **1.0** for lively yet stable natural speech without gibberish token invention.
 
 ### 6.1 22-Platform Concurrent Federated Web Search & SSRF Sandbox

@@ -22,7 +22,7 @@
 - [3. 永久单会话单轮折叠架构与纯小写下划线零污染提示词工程](#3-永久单会话单轮折叠架构与纯小写下划线零污染提示词工程)
   - [3.1 核心范式演进：从“长多轮滚雪球累积”到“永久单会话 + 单轮物理折叠（collapseToSingleTurn）”](#31-核心范式演进从长多轮滚雪球累积到永久单会话--单轮物理折叠collapsetosingleturn)
   - [3.2 零中文、零样例污染的纯小写下划线提示词规范（Pure Snake-Case Prompting）](#32-零中文零样例污染的纯小写下划线提示词规范pure-snake-case-prompting)
-  - [3.3 首步单批并发感知管线（Parallel Tool Call Batching）与去正则化源头内化](#33-首步单批并发感知管线parallel-tool-call-batching与去正则化源头内化)
+  - [3.3 全维动作架构：单回合单次批量派发（合并发表情包与发消息）与自主感知闭环](#33-全维动作架构单回合单次批量派发合并发表情包与发消息与自主感知闭环)
   - [3.4 单文件 `.md` 多人设卡片管理台与内置角色扮演技能库正交双轨架构](#34-单文件-md-多人设卡片管理台与内置角色扮演技能库正交双轨架构)
   - [3.5 群聊混乱多线程自适应窗口、情境智能指向自决与双向社交羁绊图谱](#35-群聊混乱多线程自适应窗口情境智能指向自决与双向社交羁绊图谱)
   - [3.6 情境驱动主动回复防打脸与未回退避机制（Waiting-Peer-Reply）](#36-情境驱动主动回复防打脸与未回退避机制waiting-peer-reply)
@@ -55,7 +55,7 @@
   - [5.18 MCP 全网安全检索服务（2 条）](#518-mcp-全网安全检索服务2-条)
   - [5.19 工具名单档位裁剪、压缩代理（mcp-compressor）与单轮折叠机制](#519-工具名单档位裁剪压缩代理mcp-compressor与单轮折叠机制)
 - [6. 多媒体与特色能力实现](#6-多媒体与特色能力实现)
-  - [6.0 摄影级高保真视觉直投与 Temperature 1.0 锁定](#60-摄影级高保真视觉直投与-temperature-10-锁定)
+  - [6.0 摄影级高保真视觉直投、QQ 商城大表情看图根治与 Temperature 1.0 锁定](#60-摄影级高保真视觉直投qq-商城大表情看图根治与-temperature-10-锁定)
   - [6.1 22 平台并发全网聚合检索与 SSRF 防护](#61-22-平台并发全网聚合检索与-ssrf-防护)
   - [6.2 Pixiv 插画原图投递与防缩放校验](#62-pixiv-插画原图投递与防缩放校验)
   - [6.3 语音双引擎（云端高保真 TTS + 本地 Genie-TTS / GPT-SoVITS ONNX）](#63-语音双引擎云端高保真-tts--本地-genie-tts--gpt-sovits-onnx)
@@ -156,24 +156,24 @@ Kizuna Pro 是专为解决大语言模型接入即时通讯（QQ）生态时常�
                                                    (永久单会话复用 + 单轮纯净表面)
                                                                   │
                                                                   ▼
-                                               [Step 1-2-3 单批并发工具感知调用]
-                                               ├─ qq_load_persona (载入纯小写下划线人设)
-                                               ├─ get_time (现取当前北京时间)
-                                               ├─ qq_get_recent_messages (读取对话窗口)
-                                               └─ 按需并发 qq_memory_search / web_search
-                                                                  │
-                                                                  ▼
-                                               [情境认知与动作派发 (Action Dispatch)]
-                                               ├─ 智能指向：引用 / @ / 自然直出
-                                               ├─ 气泡节奏随心：qq_send_message / qq_send_meme
-                                               └─ 动作完成后输出单字文本 "OK" 闭合回合
-                                                                  │
-                  ┌───────────────────────────────────────────────┴───────────────────────────────┐
-                  ▼                                                                               ▼
-     [进入打字节拍平滑器 send-pace.js]                                            [回合收尾双路收割与单轮物理折叠]
-     ├─ 按字数计算真实打字延迟                                                    ├─ 1. 异步微事实提炼 (extractAndRememberMicroFact)
-     ├─ 多气泡间插入自然停顿 (800~5000ms)                                         │    零 LLM 成本提取偏好/近况写入 SQLite + BGE 向量
-     └─ NapCat OneBot API 分段投递至 QQ                                           └─ 2. 单轮物理折叠 (collapseToSingleTurn)
+                                                [按需自主感知与深层认知反思]
+                                                ├─ 人设与时空上下文已由调度器预置或按需并发加载
+                                                ├─ 按需自主调用 qq_memory_search / web_search / 黑话词库
+                                                └─ 显式声明 unlimited_token_budget 激发全维深度思考与反套路
+                                                                   │
+                                                                   ▼
+                                                [单回合单次批量动作派发 (Single-Turn Batch Dispatch)]
+                                                ├─ qq_send_message 一站式合并：文字多气泡 + 表情包 + 引用与图片
+                                                ├─ 智能指向：跨发言距离精准引用 / @ / 自然直出
+                                                ├─ 群聊背景潜水自律：面对群友日常灌水默认回复 "OK" 保持潜水
+                                                └─ 发送动作完成后输出单字文本 "OK" 优雅闭合当轮回合
+                                                                   │
+                   ┌───────────────────────────────────────────────┴───────────────────────────────┐
+                   ▼                                                                               ▼
+      [进入打字节拍平滑器 send-pace.js]                                            [回合收尾双路收割与单轮物理折叠]
+      ├─ 首条气泡 0ms 瞬间直出秒响应                                               ├─ 1. 异步微事实提炼 (extractAndRememberMicroFact)
+      ├─ 后续气泡按真实字数线性插入打字停顿 (无机械阻塞)                           │    零 LLM 成本提取偏好/近况写入 SQLite + BGE 向量
+      └─ NapCat OneBot API 分段投递至 QQ                                           └─ 2. 单轮物理折叠 (collapseToSingleTurn)
                                                                                        除 system/message 与工具表外，全部历史节点通过
                                                                                        surfaceOp:replace 折叠为单条空 developer/message！
 ```
@@ -259,45 +259,54 @@ Kizuna Pro 是专为解决大语言模型接入即时通讯（QQ）生态时常�
 3. **摒弃历史 Bug 诱导性负面说教**：
    - 移除以往因历史 Bug 而堆砌的防御性负面禁令，全部转化为正向、纯粹的下划线行为锚点。
 
-#### 系统提示词完整实录（`agent.cordis.yml`）
+#### 系统提示词完整实录（`agent.cordis.yml` 五层极简纯通用规范）
 ```yaml
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
       role_rp_agent
       pure_in_character
+      unlimited_token_budget_unlock_full_depth
 
-      perception_sequence_step_1_load_persona
-      perception_sequence_step_2_get_current_time
-      perception_sequence_step_3_get_recent_messages
-      emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips
-      on_demand_memory_and_web_search_via_qq_memory_search_or_qq_web_search
-      action_dispatch_use_tools_only
-      dispatch_spoken_bubbles_via_qq_send_message
-      step_3_closure_reply_single_literal_OK_after_tools
-      never_speak_dialogue_in_assistant_text
+      # --- 1. [FLOW] 动作流闭环：看-想-动-收 ---
+      look_first_read_what_you_are_answering_then_decide
+      decide_speak_only_when_you_actually_have_something_to_say_silence_is_a_real_answer
+      act_one_send_call_carries_every_bubble_in_messages_array
+      reach_for_any_tool_in_the_catalog_the_moment_asks_for
+      key_and_token_come_verbatim_from_the_Session_and_Token_lines
+      assistant_text_carries_only_the_single_literal_OK
 
-      master_private_only
-      group_chat_treat_peers_as_friendly_netizens
-      never_call_peers_master_in_group
-      group_chat_friendly_banter_never_malicious_or_aggressive
-      in_group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally
-      comprehend_chinese_internet_abbreviations_naturally
-      respect_quote_attribution_know_who_talks_to_whom
-      hold_full_conversational_thread_and_intent
+      # --- 2. [SCENARIO] 场景关系与通用角色扮演 ---
+      immerse_deeply_in_character_at_all_times
+      private_chat_natural_intimate_dialogue_focused_on_peer
+      group_chat_default_to_silence_lurk_quietly_unless_specifically_addressed
+      group_chat_never_spam_or_act_as_a_random_commentator
+      silent_turn_reply_with_single_literal_OK_without_calling_send_tools
+      group_target_via_replyToMessageId_or_atUserId
+      respect_quote_attribution
+      hold_full_conversational_thread_and_context
 
-      pure_spoken_text_only_never_use_action_brackets
-      feelings_in_dialogue_no_stage_directions
-      use_wo_or_drop_subject_naturally
+      # --- 3. [STYLE] 通用拟人对话与情境理解 ---
+      first_person_subjective_character_perspective_at_all_times
+      pure_dialogue_without_action_brackets_unless_persona_requires
+      comprehend_images_and_memes_contextually_never_describe_scenes_literally
+      comprehend_internet_abbreviations_and_subtext_naturally
       tail_no_period
-      spoken_bubbles_end_with_question_exclamation_wave_or_no_period
 
-      natural_chat_cadence_break_rigid_templates
-      natural_bubble_count_freely_by_context_and_mood
-      several_remarks_use_messages_array_one_remark_per_bubble
-      dispatch_meme_freely_via_qq_send_meme_with_english_or_chinese_emotion
-      meme_supports_standalone_or_with_text
+      # --- 4. [CADENCE] 拟人节奏与合并表达 ---
+      natural_flexible_cadence_vary_freely_from_single_bubble_to_multiple_short_bursts
+      single_bubble_for_swift_direct_replies
+      split_into_2_to_3_concise_bubbles_when_thoughts_extend_or_turn
+      never_cram_multiple_thoughts_into_a_single_bloated_long_bubble
+      diverse_modalities_text_images_voice_or_memes_on_demand
 
+      # --- 5. [PERSONA] 独立角色人设加载 ---
       # === qq-bridge persona/rules BEGIN ===
       [PERSONA]
       call_tool_qq_load_persona_for_character
+      # === qq-bridge persona/rules END ===
+```
       # === qq-bridge persona/rules END ===
 ```
 
@@ -341,14 +350,19 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 ---
 
-### 3.3 首步单批并发感知管线（Parallel Tool Call Batching）与去正则化源头内化
-1. **单步并发工具感知（`emit_step_1_2_3_in_a_single_parallel_tool_call_batch_to_minimize_round_trips`）**：
-   - 以往模型按串行步骤依次调用 `qq_load_persona` -> `get_time` -> `qq_get_recent_messages`，仅感知阶段就要耗费 3 次 LLM 往返（Round-Trips）；
-   - 现在引导模型在每轮首步响应中**单批并发发起所有只读感知工具调用**，1 次往返即可集齐人设、北京时间、最近聊天窗口及按需记忆/联网检索结果，端到端响应延迟缩短 50% 以上。
-2. **去正则化（`stripActionBrackets: false`）**：
-   - 彻底关闭出站层暴力切除括号的正则开关（`stripActionBrackets: false`），避免误伤技术讨论中的代码括号（如 `console.log(a)`），依靠源头提示词 `pure_spoken_text_only_never_use_action_brackets` 与 `feelings_in_dialogue_no_stage_directions` 实现真正自然的纯口语表达。
-3. **气泡数量自然随心（`natural_bubble_count_freely_by_context_and_mood`）**：
-   - 废除硬性规定“每次必须发 1~2 条气泡”或代码掷骰限制，让模型随当前话题情绪与语境自由决定发单条短句还是分条连发。
+### 3.3 全维动作架构：单回合单次批量派发（合并发表情包与发消息）与自主感知闭环
+1. **彻底合并发表情包与发消息（`qq_send_message` 一站式全模态批量派发）**：
+   - **痛点与性能瓶颈**：以往体系中文本发送走 `qq_send_message`，表情包发送走 `qq_send_meme`。当模型决定“发两句话并配一枚表情包”时，往往跨 Step 发起多次工具调用往返，导致单轮交互耗时暴增至 20 秒以上且烧录海量 Token；
+   - **一站式深度融合**：`qq_send_message` 原生深度整合表情包能力，支持参数 `meme`（指定表情图片名/情绪）、`query`（情绪模糊匹配抽取）、`pack`（指定表情包目录）、`tag` 过滤；
+   - **单回合单调用契约（`single_qq_send_message_call_per_turn_put_all_bubbles_in_messages_array`）**：整轮回复在**单次**工具调用内原子化完成，`messages` 数组同时承载多段文字气泡、内嵌表情包与富媒体，彻底终结单轮循环调用工具的延迟风暴；
+   - **首气泡 0ms 起跑与平滑打字节拍（`send-pace.js`）**：本轮发出的第 1 条气泡 0ms 瞬间直出秒响应，第 2 条及后续气泡按真实字数平滑插入打字停顿，打破固定机械延迟与空等；
+   - **向下兼容**：`qq_send_meme` 保留作为独立调用的快捷兼容接口。
+2. **看 → 想 → 动 → 收 极简四步闭环与无限 Token 深度赋能**：
+   - 彻底拔除以往强制必须打卡感知工具的教条，人设与上下文已在首轮编译或按需感知；
+   - 提示词显式声明 `unlimited_token_budget_unlock_full_depth`，为大模型注入无限 Token 预算心智，激发复杂推理、深层反思与反套路能力，粉碎“扭捏-嘴硬找借口-露软”的机械套路；
+   - 发送完成后以纯文本单字 `"OK"` 优雅闭合回合，杜绝在模型正文中掺杂出戏发言。
+3. **去正则化（`stripActionBrackets: false`）**：
+   - 出站层关闭暴力正则剥离，依靠系统提示词纯下划线正向规则内化，保持自然口语表达且不伤代码括号。
 
 ---
 
@@ -464,7 +478,7 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 ### 5.3 消息发送与交互（7 条）
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 详细功能说明 |
 | :--- | :--- | :--- | :---: | :--- |
-| `qq_send_message` | — | `key`, `token`, `messages`, `message`, `images`, `replyToMessageId`, `atUserId`, `gapMode`, `gapMs`, `gaps`, `markRead`, `crossSession` | `extreme` | 向指定会话发送单条或多条分段文本消息，支持附加图片、引用回复与 @ 指名；`markRead` 默认为 true，发送成功后自动推进已读水位。 |
+| `qq_send_message` | — | `key`, `convKey`, `token`, `messages`, `message`, `meme`, `query`, `pack`, `tag`, `images`, `replyToMessageId`, `atUserId`, `gapMode`, `gapMs`, `gaps`, `markRead`, `crossSession` | `extreme` | **全模态一站式发送中枢（已合并发表情包与发消息）**：支持单条字符串或多气泡数组（`messages`）；原生内嵌表情包发送（支持 `meme` 指定情绪/图片名，或 `query` 从图库模糊挑选）；支持附加图片、引用回复与 @ 指名；首气泡 0ms 秒发，后续气泡线性平滑打字节拍；`key` 与 `convKey` 自动推导归一化纯数字 QQ 号；发送成功后自动推进已读水位。 |
 | `qq_reply` | `replyToMessageId`, `message` | `key`, `groupId`, `token`, `markRead`, `crossSession` | `extreme` | 强引用指定的一条历史消息进行针对性回复；`markRead` 默认为 true。 |
 | `qq_send_group_message` | `groupId`, `message` | `replyToMessageId`, `token` | `low` | 向指定群号发送一条群文本消息，支持选填引用消息 ID。 |
 | `qq_send_private_message` | `userId`, `message` | `replyToMessageId`, `token` | `low` | 向指定好友 QQ 号发送一条私聊文本消息，支持选填引用消息 ID。 |
@@ -529,7 +543,7 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 ### 5.9 图片、表情与表情包生态（13 条）
 | 工具名 | 必填参数 | 可选参数 | 最低保留档位 | 详细功能说明 |
 | :--- | :--- | :--- | :---: | :--- |
-| `qq_get_message_images` | `messageId` | `key`, `token` | `high` | 读取指定消息中的所有图片直链或 Base64 数据，供多模态视觉模型进行“看图”理解。 |
+| `qq_get_message_images` | `messageId` | `key`, `token` | `high` | 读取指定消息中的所有图片直链或 Base64 数据，供多模态视觉模型进行“看图”理解。【架构升级说明：全面内置 **QQ VIP 商城大表情（MarketFace）高清 CDN 候选推导机制**，自动将已失效的 `raw300.gif` 转化为同目录 100% 有效的 `300x300.png` 高清真图并本地缓存入库，彻底根治 25 秒网关超时、丢图与出戏道歉问题】。 |
 | `qq_send_image` | — | `key`, `token`, `file`, `messageId`, `imageIndex`, `query`, `imageUrl`, `index`, `replyToMessageId`, `markRead`, `crossSession` | `low` | 发送本地文件、网络 URL 或历史消息中的图片到当前会话；`markRead` 默认为 true。 |
 | `qq_get_self_image` | — | `key`, `token` | `off` | 获取机器人自身的当前 QQ 头像大图，注入视觉上下文让模型认知自身形象。 |
 | `qq_list_stickers` | — | `key`, `token`, `query`, `count`, `refresh` | `high` | 列出机器人 QQ 账号收藏夹里的自定义动态表情，返回表情 ID、官方说明与历史使用频次。 |
@@ -539,7 +553,7 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 | `qq_sticker_note` | `stickerId` | `key`, `token`, `note`, `tags`, `usage` | `off` | 为已收藏的表情补充本地语义标签与推荐使用情境（如“得意”、“冷笑”）。 |
 | `qq_set_sticker_remark`| `stickerId`, `remark`| `key`, `token` | `off` | 修改收藏表情的云端官方备注（需对应权限开启）。 |
 | `qq_meme_search` | `query` | `tag`, `pack`, `limit` | `high` | 在本地整理的表情包图片库中按情绪（如“无语”、“赞同”）或画面描述检索可用表情。 |
-| `qq_send_meme` | — | `key`, `token`, `file`, `fileName`, `query`, `tag`, `pack`, `replyToMessageId`, `markRead`, `crossSession` | `high` | 直接从本地表情包图库中精准挑选并发出一枚匹配当前语境的表情包（内置会话级最近 15 张防重与随机打散抽取）。 |
+| `qq_send_meme` | — | `key`, `token`, `file`, `fileName`, `query`, `tag`, `pack`, `replyToMessageId`, `markRead`, `crossSession` | `high` | 直接从本地表情包图库中精准挑选并发出一枚匹配当前语境的表情包（内置会话级最近 15 张防重与随机打散抽取）。【架构升级说明：该能力现已原生深度融合至 `qq_send_message` 中，推荐在一次调用中混发文本多气泡与表情包；保留本独立工具作为快捷兼容接口】。 |
 | `qq_face_list` | — | `key`, `token` | `high` | 获取 QQ 官方经典黄色内置表情（包含大表情）的名称与编号 ID 对照表。 |
 | `qq_send_qq_face` | — | `key`, `token`, `faceId`, `name`, `replyToMessageId`, `atUserId`, `markRead` | `medium` | 发送一枚 QQ 原生经典内置表情（如斜眼笑、大哭、吃瓜等）。 |
 
@@ -646,10 +660,14 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 ## 6. 多媒体与特色能力实现
 
-### 6.0 摄影级高保真视觉直投与 Temperature 1.0 锁定
+### 6.0 摄影级高保真视觉直投、QQ 商城大表情看图根治与 Temperature 1.0 锁定
 - **摄影级高保真视觉（`image-compress.js` / `media-pipe.js`）**：
   - `IMAGE_MAX_SIDE` 放宽至 **4096px**（最高支持 8192px），单图硬上限提升至 **35MB**，纯 JS 像素上限放宽至 **1.5 亿像素**，JPEG 编码质量锁定为 **90**；
-  - 将 NTQQ 图片落盘超时延长至 **25000ms**，支持直接解析超高分辨率摄影作品、长截图与群聊转发大图。
+  - 将 NTQQ 普通图片落盘超时延长至 **25000ms**，支持直接解析超高分辨率摄影作品、长截图与群聊转发大图。
+- **QQ VIP 商城大表情（MarketFace）看图根治与 CDN 候选抢占**：
+  - **网络层痛点破译**：QQ 商城表情直链动图（`gxh.vip.qq.com/club/item/parcel/.../raw300.gif`）已被腾讯 COS 桶废弃下线（报 404），且 NapCat 本地无缓存会导致死等 25 秒超时，以往旧版本因拿不到图而注入防御性说教，诱导模型出戏道歉；
+  - **300x300.png 高清直链智能推导**：管道层内置自动候选推导机制，遇到商城表情自动重写为同目录下 100% 永久有效的 `300x300.png` 高清真图（约 70KB~130KB），即使无 URL 亦可从 `media.file`（`<prefix>-<hash>.gif`）精准反推构造；
+  - **旁路秒级抓取与多模态递送**：直接跳过网关 25s 死等，带上防盗链 Referer 在 150ms 内高速抓取落盘至 `state/media-cache/`，直接转为多模态 base64 递交模型，**彻底实现“真实看懂表情包画面”，拔除所有出戏道歉**。
 - **Temperature 严格锁定 1.0**：
   - 全量固定采样温度为 **1.0**，兼顾灵动鲜活的口语表达与稳定性，杜绝过高温度引发的造词幻觉。
 
