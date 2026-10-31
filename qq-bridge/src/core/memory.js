@@ -868,8 +868,11 @@ export function memoryDigest(o = {}) {
       const key = `${e.category}|${e.content}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const tag = e.pinned || e.tier === 'permanent' ? '★' : e.category;
-      const line = `- [${tag}] ${e.content.replace(/\s+/g, ' ').slice(0, 140)}`;
+      /* 2026-10-31 主人：「也不要有 - [★]」。
+       * 原来每条前面挂 `- [★]`（置顶/永久）或 `- [分类]`，一屏下来一半是标签。
+       * 记忆正文自己已经说清了是什么事，标签只是噪音，还白占 maxChars 的额度。
+       * 现在只留一个短横线。 */
+      const line = `- ${e.content.replace(/\s+/g, ' ').slice(0, 140)}`;
       if (used + line.length > maxChars) break;
       used += line.length + 1;
       lines.push(line);

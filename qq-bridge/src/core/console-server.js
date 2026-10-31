@@ -1896,8 +1896,20 @@ export function startConsoleServer() {
         const mem = Array.isArray(st.recentMessages) ? st.recentMessages : [];
         const memStart = Math.max(0, mem.length - offset - limit);
         const memEnd = Math.max(0, mem.length - offset);
-        const msgs = memEnd > memStart ? mem.slice(memStart, memEnd) : [];
-        sendJson({ ok: true, key, limit, offset, count: msgs.length, windowSize: mem.length, messages: msgs.map(withTimeText) });
+        let msgs = memEnd > memStart ? mem.slice(memStart, memEnd) : [];
+        /* 2026-10-31 主人：「好像现在他的跨会话有问题」。实测：情宝（1852240154）在群里，
+         * 模型用群 token 去读他的 private:1852240154 → ok:true 但 count=0、windowSize=0，
+         * 而 chat.db 里那个会话有 218 条。原因：这个端点只读内存滚动窗口，
+         * 而窗口是「当前回合」的滚动缓冲 —— 三天没说话的会话，窗口是空的。
+         * 跨会话读的恰恰多半是这种老会话，于是看起来像「跨会话坏了」。
+         * 现在窗口为空（且 offset=0）时回落到 chat.db 的最近 N 条，并在回执里标 source=chatdb，
+         * 让模型知道这批是历史库来的（不是刚发生的事）。 */
+        let source = 'window';
+        if (!msgs.length && offset === 0) {
+          const hist = recentChatMessages(key, limit);
+          if (Array.isArray(hist) && hist.length) { msgs = hist; source = 'chatdb'; }
+        }
+        sendJson({ ok: true, key, limit, offset, count: msgs.length, windowSize: mem.length, source, messages: msgs.map(withTimeText) });
         return;
       }
       // ── turn-hold（回合保持）───────────────────────────────────────────────
