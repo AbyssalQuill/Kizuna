@@ -75,6 +75,21 @@ model before sending a message` → `学习会话 turn 未正常完成：blocked
 桥每次唤醒还照打两遍日志（7 天 1264 条），人格学习因此空转一整天。
 P0 应该加的是：`selectModel` 失败后指数退避 + 一次性告警，而不是每次唤醒重试两次。
 
+**根因（07:34 UTC 定位并修复，55daeec）**：`dsh-session.js` 用 `??` 取模型名，而
+`dsh.visionModel` 是空字符串（"留空"这种常见写法），于是 `rawModel` 得到 `''`，
+再掉进硬编码兜底 `deepseek-v4-flash-vision-exp` —— 那个实验模型已经在服务商目录里下架。
+现场两条命令就能证明：同一会话同一档位，`model=deepseek-v4-flash-vision-exp` → unavailable，
+`model=deepseek-flash` → ok。
+
+改成 `||` 链（空字符串视同没配，回落到主模型 `dsh.model`）后：`已设置会话视觉模型 … -> deepseek-official/deepseek-flash (off)`。
+
+还有第二层：那个学习会话本身已经卡死（旧会话 `session-6b563529` 每次都秒 blocked），
+删掉 `state/persona-agent.json` 重建后，人格学习正常跑完：
+`人格学习结果经工具落库 2709998617 …` / `自动间隔学习完成：1 个目标（成功 1）`。
+
+**这条写进 P0 的运维步骤**：模型配置类故障修复后，必须重建对应的学习会话，
+否则会话级的 blocked 状态会一直粘着。
+
 ### 2.3 记忆自动写入等于没写
 
 - 回放最近 600 条真实入站消息跑 `extractAndRememberMicroFact`：命中 1 条（0.17%），
