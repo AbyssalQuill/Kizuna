@@ -78,7 +78,7 @@ export async function ensureVisionModel(sessionId, customOpts = {}) {
         return;
       } catch (error) {
         const message = String(error?.message ?? error);
-        if (/session.not.found/i.test(message)) throw error;
+        if (/session.not.found|is corrupt|SessionFormatError|SessionQueryError/i.test(message)) throw error;
         log(`设置会话视觉模型失败 ${sessionId}（${effort ? `档位 ${effort}` : '服务商默认档位'}，第 ${attempt}/2 次）: ${message}`);
         if (effort && /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort/i.test(message)) break;  // 该档位不被支持 → 换默认档位
         if (attempt < 2) await sleep(1000);
@@ -111,8 +111,8 @@ export async function ensureSession(key) {
           return existing;
         }
       } catch (vErr) {
-        if (/session.not.found/i.test(String(vErr?.message ?? vErr))) {
-          log(`会话 ${existing} 不存在（DSH 可能已重启），清除映射并重建`);
+        if (/session.not.found|is corrupt|SessionFormatError|SessionQueryError/i.test(String(vErr?.message ?? vErr))) {
+          log(`会话 ${existing} 不存在或已损坏（DSH 可能已重启），清除映射并重建`);
           delete state.sessions[key];
           if (reverse.get(existing) === key) reverse.delete(existing);
         } else {

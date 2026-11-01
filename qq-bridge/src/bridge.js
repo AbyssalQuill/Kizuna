@@ -168,7 +168,7 @@ import {
 import { initVisionCore, visionSplitEnabled } from './core/vision.js';
 import {
   tunableListItems, findTunable, applyTunable, rearmProactiveTimersAfterChange,
-  tokenBelongsToOwner, TUNABLE_SPECS, setTunableCfg, resolveIsolatedDshHome,
+  tokenBelongsToOwner, TUNABLE_SPECS, setTunableCfg, resolveIsolatedDshHome, syncDshAgentDefaultModel,
 } from './core/tunables.js';
 // 上下文治理：把压缩策略写进 DSH home 的 cordis.patch.yml（见该文件顶部为什么不能在桥侧改历史）
 import { syncDshCompactionPatch } from './lib/dsh-compaction.js';
@@ -328,6 +328,7 @@ async function main() {
   /* 2026-09-21：把配置注给 dsh-side：napcat MCP 要不要走 mcp-compressor 压缩代理由它决定。
    * 代理开关变了要重写 cordis.patch.yml（幂等）并重启隔离 DSH 才生效，与工具档位同一条路径。 */
   setDshSideConfig(cfg);
+  try { syncDshAgentDefaultModel(); } catch (e) { log(`[tunable] 启动同步 DSH 模型设置失败：${e?.message ?? e}`); }
   try { patchProfileCordis(resolveDshTarget()); } catch (e) { log(`[dsh-side] 重写 MCP 块失败（不影响启动）：${e?.message ?? e}`); }
   // 用量对账：DSH 自己的 projcache 里有按会话累计的权威 token 数（tokenUsage.totals）。
   // 单帧漏记（帧里没有 sessionId / 会话刚好结束）会让面板偏低，这里定期把差额补成
@@ -799,8 +800,9 @@ async function main() {
     watchConfigFile(cfg, {
       onChange: (changed) => {
         if (changed.some((k) => k.startsWith('dsh'))) {
+          try { syncDshAgentDefaultModel(); } catch (e) { log('[config] 同步 DSH 默认模型设置失败:', e?.message ?? e); }
           resetVisionModelApplications();
-          log('[config] 模型配置已变化，已清空会话模型缓存（下一轮起用新模型）');
+          log('[config] 模型配置已变化，已同步 DSH 设置并清空会话模型缓存（下一轮起用新模型/推理档位）');
         }
         /* 2026-09-19：插话概率等所有概率都要改好落地 —— 一改唤醒概率/活跃概率，
          * 正在跑的会话必须立刻跟着变 —— 否则界面上改了数字，已经聊过的会话照旧用旧值

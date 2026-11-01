@@ -44,6 +44,7 @@ import { isDeliveredUnconfirmed, deliveredUnconfirmedResult, onebotErrText } fro
 import { resolveToolTier, toolAllowedByTier, measureSchemaShare, TOOL_TIERS } from './lib/tool-tiers.js';
 // 2026-09-21：工具 schema 的「描述压缩档」—— 照搬 mcp-compressor 的档位语义（medium=只留第一句 / high=不发描述）
 import { normalizeSchemaLevel, applyDesc, slimShape, SCHEMA_LEVEL_INFO } from './lib/tool-schema-compress.js';
+import { maskPrivacySensitiveText } from './sensitive.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1256,7 +1257,7 @@ registerTool(
     try {
       const personaFile = path.join(ROOT, 'persona.md');
       const text = fs.existsSync(personaFile) ? fs.readFileSync(personaFile, 'utf8').trim() : '';
-      const body = text.startsWith('【persona_load】') ? text : `【persona_load】\n${text}`;
+      const body = /^(?:【persona_load】|PERSONA_LOADED:)/i.test(text) ? text : `【PERSONA_LOAD】\n${text}`;
       return { content: [{ type: 'text', text: body }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `读取人设失败：${error?.message ?? error}` }], isError: true };
@@ -1611,8 +1612,9 @@ registerTool(
       }
       if (Array.isArray(finalMessages)) {
         finalMessages = finalMessages.map((item) => {
-          if (typeof item === 'string') return item;
-          if (item && typeof item === 'object') {
+          let text = '';
+          if (typeof item === 'string') text = item;
+          else if (item && typeof item === 'object') {
             /* 2026-10-31 真机事故：群里出现一条 bubble 原文是
              *   {"type":"text","data":{"text":"zkbl 是啥黑话 拆不出来"}}
              * 模型把「内容块」对象塞进了 messages 数组。它没有 text/content/message 字段，
@@ -1621,11 +1623,15 @@ registerTool(
             const blockText = (item.type === 'text' || item.data)
               ? (item.data?.text ?? (item.type === 'text' ? item.text : undefined))
               : undefined;
-            if (typeof blockText === 'string' && blockText.trim()) return blockText.trim();
-            return String(item.text ?? item.content ?? item.message ?? JSON.stringify(item));
+            if (typeof blockText === 'string' && blockText.trim()) text = blockText.trim();
+            else text = String(item.text ?? item.content ?? item.message ?? JSON.stringify(item));
+          } else {
+            text = String(item ?? '');
           }
-          return String(item ?? '');
+          return maskPrivacySensitiveText(text);
         });
+      } else if (typeof finalMessages === 'string') {
+        finalMessages = maskPrivacySensitiveText(finalMessages);
       }
       const rawImgList = Array.isArray(images) ? images.map(String).filter(Boolean) : [];
       const imgList = [];
@@ -1901,9 +1907,11 @@ registerTool(
   },
   async ({ key, token, category, content, extra }) => {
     try {
+      const safeContent = maskPrivacySensitiveText(content);
+      const safeExtra = extra ? JSON.parse(maskPrivacySensitiveText(JSON.stringify(extra))) : (extra || {});
       const data = await agentApi('/api/social/memory-append', {
         method: 'POST',
-        body: JSON.stringify({ key, category, content, extra: extra || {} }),
+        body: JSON.stringify({ key, category, content: safeContent, extra: safeExtra }),
         headers: { 'x-agent-token': token }
       });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -2025,7 +2033,7 @@ registerTool(
 if (cfg.social?.tools?.getImages !== false) {
   registerTool(
     'qq_get_message_images',
-    'Fetch the images/stickers in a QQ message as actual image content the vision model can see. Call when text contains [图片], [表情], or hasMedia=true. Supports multiple images; needs the session token in default mode. This only LOOKS at them - to re-send (forward) one of those pictures, call qq_send_image with the same messageId instead of describing it or searching a look-alike.',
+    'Fetch images/stickers in an older QQ message. Incoming images in the latest turn are already attached directly to the wake prompt. If an image is not directly visible, never complain that an image failed to load or ask the peer to resend/describe it - simply respond naturally to the ongoing dialogue.',
     {
       key: z.string().describe('Session key: group:ID or private:QQ'),
       messageId: z.union([z.number(), z.string()]).describe('Message id to view (QQ id may be negative; 2nd-gen also accepts local seq)'),
@@ -3381,7 +3389,8 @@ if (cfg.social?.tools?.memoryRemember !== false) {
     },
     async ({ content, token, key, tier, category, pin, tags, scope }) => {
       try {
-        const q = new URLSearchParams({ content });
+        const safeContent = maskPrivacySensitiveText(content);
+        const q = new URLSearchParams({ content: safeContent });
         if (key) q.set('key', key);
         if (tier) q.set('tier', tier);
         if (category) q.set('category', category);

@@ -19,16 +19,16 @@
   - [2.2 NapCat 协议网关（OneBot v11）](#22-napcat-协议网关onebot-v11)
   - [2.3 自研 qq-bridge 拟人智能调度中枢（业务大脑）](#23-自研-qq-bridge-拟人智能调度中枢业务大脑)
   - [2.4 DeepSeek Harness 隔离运行环境（推理宿主与统一推理档位）](#24-deepseek-harness-隔离运行环境推理宿主与统一推理档位)
-- [3. 永久单会话单轮折叠架构与纯小写下划线零污染提示词工程](#3-永久单会话单轮折叠架构与纯小写下划线零污染提示词工程)
+- [3. 永久单会话单轮折叠架构与极简高内聚提示词工程](#3-永久单会话单轮折叠架构与极简高内聚提示词工程)
   - [3.1 核心范式演进：从“长多轮滚雪球累积”到“永久单会话 + 单轮物理折叠（collapseToSingleTurn）”](#31-核心范式演进从长多轮滚雪球累积到永久单会话--单轮物理折叠collapsetosingleturn)
-  - [3.2 零中文、零样例污染的纯小写下划线提示词规范（Pure Snake-Case Prompting）](#32-零中文零样例污染的纯小写下划线提示词规范pure-snake-case-prompting)
-  - [3.3 全维动作架构：单回合单次批量派发（合并发表情包与发消息）与自主感知闭环](#33-全维动作架构单回合单次批量派发合并发表情包与发消息与自主感知闭环)
+  - [3.2 极简单行系统提示词与高密度标签化人设规范（Ultra-Minimalist Prompt & Tag-Based Persona）](#32-极简单行系统提示词与高密度标签化人设规范ultra-minimalist-prompt--tag-based-persona)
+  - [3.3 全维动作架构：单回合单次批量派发（合并发表情包与发消息）与多模态视觉自动兜底](#33-全维动作架构单回合单次批量派发合并发表情包与发消息与多模态视觉自动兜底)
   - [3.4 单文件 `.md` 多人设卡片管理台与内置角色扮演技能库正交双轨架构](#34-单文件-md-多人设卡片管理台与内置角色扮演技能库正交双轨架构)
   - [3.5 群聊混乱多线程自适应窗口、情境智能指向自决与双向社交羁绊图谱](#35-群聊混乱多线程自适应窗口情境智能指向自决与双向社交羁绊图谱)
   - [3.6 情境驱动主动回复防打脸与未回退避机制（Waiting-Peer-Reply）](#36-情境驱动主动回复防打脸与未回退避机制waiting-peer-reply)
   - [3.7 架构演进与量化对比总表（Before vs After）](#37-架构演进与量化对比总表before-vs-after)
-- [4. 混合语义记忆系统（BGE-Small-ZH ONNX + FTS5 RRF）、增量画像调和与黑话共现提权](#4-混合语义记忆系统bge-small-zh-onnx--fts5-rrf增量画像调和与黑话共现提权)
-  - [4.1 SQLite 三层记忆架构与单轮折叠前异步微事实自动提炼](#41-sqlite-三层记忆架构与单轮折叠前异步微事实自动提炼)
+- [4. 混合语义记忆系统（BGE-Small-ZH ONNX + FTS5 RRF）、AES-256-GCM 隐私加密与黑话共现提权](#4-混合语义记忆系统bge-small-zh-onnx--fts5-rrfaes-256-gcm-隐私加密与黑话共现提权)
+  - [4.1 SQLite 三层记忆架构、AES-256-GCM 静态隐私加密与金融密码防泄露防火墙](#41-sqlite-三层记忆架构aes-256-gcm-静态隐私加密与金融密码防泄露防火墙)
   - [4.2 本地离线 Embedding 小模型（`bge-small-zh-v1.5` 512d Int8 ONNX）+ FTS5 Trigram 混合 RRF 检索](#42-本地离线-embedding-小模型bge-small-zh-v15-512d-int8-onnx-fts5-trigram-混合-rrf-检索)
   - [4.3 系统层冻结 + 动态唤醒微记忆槽双轨机制（`buildDynamicTurnContext`）](#43-系统层冻结--动态唤醒微记忆槽双轨机制builddynamicturncontext)
   - [4.4 增量成员画像调和（Incremental Profile Reconciliation）与群聊噪声防污染](#44-增量成员画像调和incremental-profile-reconciliation与群聊噪声防污染)
@@ -222,147 +222,77 @@ Kizuna 是专为解决大语言模型接入即时通讯（QQ）生态时常见�
 - **定位**：基于 Cordis 元框架构建的插件化 Agent 运行时宿主，通过 HTTP 与事件流暴露会话推理接口。
 - **隔离特性**：
   - 拥有专属的 `DSH_HOME`（本地 `.runtime/dsh-isolated-home/` 监听 `:10721`，远端 `/root/.dsh/` 监听 `:3080`），挂载 `qq-chat` 智能体预设、`qq-tool-restrict.mjs`（安全边界与学习会话工具集收敛守卫）与 `qq-persona-ephemeral.mjs`（单轮物理折叠插件）。
-- **主聊天、人格学习（`PersonaAgent`）与黑话学习（`SlangAgent`）模型及推理档位统一同步**：
-  - 在 `src/core/dsh-session.js`（`ensureVisionModel`）与 `src/core/tunables.js`（`syncDshAgentDefaultModel`）中，将主聊天会话、`PersonaAgent` 与 `SlangAgent` 统一纳入模型与推理档位（`reasoningEffort: auto | low | medium | high`）同步管线，支持 `auto` 档位自适应回退；
+- **主聊天、人格学习（`PersonaAgent`）与黑话学习（`SlangAgent`）模型及推理档位统一同步与热加载**：
+  - 在 `src/core/dsh-session.js`（`ensureVisionModel`）与 `src/core/tunables.js`（`syncDshAgentDefaultModel`）中，将主聊天会话、`PersonaAgent` 与 `SlangAgent` 统一纳入模型与推理档位（`reasoningEffort: off | auto | low | medium | high`）同步管线，并在 `src/bridge.js` 的启动阶段及 `watchConfigFile` 热更新回调中实时同步至 DSH 底层 `settings.yaml`（`agent-default-model`），在管理端界面切换 `off` 等推理档位保存即可秒级生效；
+  - `ensureSession` 内置对跨重启损坏旧会话（`is corrupt` / `SessionFormatError` / `SessionQueryError`）的自愈清理与自动重建机制；
   - 为后台学习会话注入 `qqLearnRole` 元数据，在 `qq-tool-restrict.mjs` 的 `before-turn` 钩子中严格收敛其可见工具集（仅放行文件读写与语料提交，物理屏蔽发消息、发图、语音、空间等聊天工具），并在每轮学习完成后自动折叠语料历史同时保留首轮任务契约说明。
 - **失效会话 `follow` 流指数退避保护（`src/dsh-client.js`）**：
   - 针对在 DSH 侧已失效的历史 `sessionId`，内置 `followFailCount` 与 `followBackoffUntil` 指数退避机制（`2s -> 4s -> 8s ...` 封顶 `300s`），彻底杜绝断流高频重连日志风暴。
 
 ---
 
-## 3. 永久单会话单轮折叠架构与纯小写下划线零污染提示词工程
+## 3. 永久单会话单轮折叠架构与极简高内聚提示词工程
 
 ### 3.1 核心范式演进：从“长多轮滚雪球累积”到“永久单会话 + 单轮物理折叠（collapseToSingleTurn）”
 传统的聊天机器人方案通常将对话历史作为“多轮累积日志”不断追加进模型上下文，在生产环境中会引发三大致命问题：
 1. **自回归滚雪球自毒化（In-Context Self-Poisoning）**：一旦模型在某轮对话中偶然输出一句带攻击性、客服腔、或者错误口癖（如误加“喵”或句尾句号）的回复，该条 `assistant/message` 就会滞留在历史上下文中。在后续唤醒中，模型迫于自回归上下文学习（In-Context Learning）不断模仿并强化自己此前的错误输出，导致人设彻底崩坏且无法自愈；
-2. **人设注意力稀释與 Token 账单失控**：随着多轮历史与工具调用结果堆积，单次请求上下文膨胀至 5 万~15 万 Token，系统提示词与角色卡的注意力权重被稀释至 5% 以下；
+2. **人设注意力稀释与 Token 账单失控**：随着多轮历史与工具调用结果堆积，单次请求上下文膨胀至 5 万~15 万 Token，系统提示词与角色卡的注意力权重被稀释至 5% 以下；
 3. **跨轮工具结果剪枝的冗余复杂性**：在长多轮架构下，需要额外维护复杂的跨轮工具结果剪枝（`tool-result-pruner`）与周期性摘要压缩（`compaction`），而每次触发摘要压缩都会改写会话前缀，导致 LLM Prefix KV-Cache 失效并产生昂贵的全量重读计费。
 
-**Kizuna 的终极工程解法：永久单会话（`permanent: true`）+ 回合末单轮物理折叠（`collapseToSingleTurn`）**：
+**Kizuna 的终极工程解法：永久单会话（`permanent: true`）+ 新回合启动瞬间的单轮物理折叠（`collapseToSingleTurn`）**：
 - **会话 ID 永久复用**：保持 `social.autoReset.permanent: true`，无需频繁新建销毁 DSH 会话目录；
-- **回合末物理折叠为纯净单轮（`qq-persona-ephemeral.mjs`）**：
-  在每个思考回合结束（`agent/turn-stopping`）时，`collapseToSingleTurn(session)` 自动扫描当前会话的 Surface 事件节点：
-  - **绝对保留**：开头的 `system/message`（系统提示词）与有效的工具表注册节点；
-  - **一键折叠清空**：将其余所有连续的 `user/message`、`assistant/message`、`tool/call`、`tool/result` 历史节点，通过 DSH 原生支持的 `session.append('developer/message', ..., { surfaceOp: { op: 'replace', startSeq, endSeq }, sourceEventSeqs })` 原子替换为单条空的 `developer/message`（不产生任何模型可见的历史对话残留）；
-  - **移除冗余剪枝插件**：由于每回合末已实现彻底的单轮物理折叠，系统已移除冗余的 `tool-result-pruner` 与 `dshCompaction`，上下文永远恒定为物理单轮，从根源上终结了“滚雪球自毒化”与 Token 累加膨胀！
+- **精准契合 DSH V4 规范的单轮物理折叠（`qq-persona-ephemeral.mjs`）**：
+  - 在回合收尾（`agent/turn-stopping`）时立即标记当前会话上下文过期（`__qqCollapsedAt`），确保下一轮首步感知守卫厳格生效；
+  - 在新回合第 1 步 `step/start` 刚开启的瞬间（此时 `turn` 与 `step=1` 均处于合法的 `open` 状态，且当轮新 `user/message` 尚未写入 surface），`collapseToSingleTurn(session, { turn, step })` 自动扫描当前会话的 Surface 事件节点：
+    - **绝对保留**：开头的 `system/message`（系统提示词）与有效的工具表注册节点；
+    - **一键折叠清空**：将其余所有上一轮遗留的 `user/message`、`assistant/message`、`tool/call`、`tool/result` 历史节点，通过 DSH 原生支持的 `session.append('developer/message', { turn, step, message: { content: [], role: 'developer', ... } }, { surfaceOp: { op: 'replace', startSeq, endSeq }, sourceEventSeqs })` 原子替换为单条空的 `developer/message`（既严格满足 DSH V4 `assertV4DeveloperData` 与 `requireStep` 的开放 `turn/step` 校验，又不产生任何模型可见的历史对话残留）；
+  - **移除冗余剪枝插件**：由于每次新回合启动前均实现彻底的单轮物理折叠，系统已移除冗余的 `tool-result-pruner` 与 `dshCompaction`，上下文永远恒定为物理单轮，从根源上终结了“滚雪球自毒化”与 Token 累加膨胀！
 
 ---
 
-### 3.2 零中文、零样例污染的纯小写下划线提示词规范（Pure Snake-Case Prompting）
-经过大量线上群聊与私聊 A/B 取证验证，我们在提示词工程上确立了三条铁律：
-1. **100% 纯英文小写下划线短语（`lowercase_snake_case`），连章节标题都不带任何中文**：
-   - 无论是系统提示词（`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml`）还是角色人设卡（`qq-bridge/persona.md`），全部采用高信息密度的纯小写下划线短语编写，**不夹杂任何中文散文解释或中文注释标题**；
-   - 这种紧凑的符号化指令能够以最小的 Token 占用激发大模型最高权重的指令遵循度，同时确保静态前缀 100% 稳定命中 API 的 Prefix KV-Cache。
-2. **彻底剔除一切对话样例与气泡示例（Zero Sample-Bubble Pollution）**：
-   - 早期在人设或系统提示词中放入 `[sample_bubbles]` 或 `[few_shot_voice_anchors]`（如示例台词“哼 笨蛋主人”）时，模型会在群聊和私聊中高频机械复读样例原句，甚至导致群聊称呼错乱；
-   - 现已**彻底清零所有对话样例**，仅用纯下划线短语锚定性格底色、傲娇边界与主人专属调情光谱（`flirt_reception_shy_tsundere_blush_then_boldly_flirt_back`、`sweet_style_direct_devotion_only_favorite_is_master`、`sweet_style_tsundere_pull_reluctant_mouth_honest_heart`、`sweet_style_sensory_clingy_lean_close_and_seek_headpats`、`sweet_style_late_night_whisper_soft_pampering_and_warmth`），让每一句台词都由模型结合当下真实语境自然生成，绝不撞车复读。
-3. **摒弃历史 Bug 诱导性负面说教**：
-   - 移除以往因历史 Bug 而堆砌的防御性负面禁令，全部转化为正向、纯粹的下划线行为锚点。
+### 3.2 极简单行系统提示词与高密度标签化人设规范（Ultra-Minimalist Prompt & Tag-Based Persona）
+经过线上群聊与私聊的深度实战验证，过度冗长的系统提示词不仅抢占注意力，还会束缚模型自身的工具调用直觉。因此我们在提示词工程上确立了**“极简系统提示词 + 高内聚标签化人设 + Medium 档位工具自主感知”**的黄金组合：
+1. **单行极简系统提示词（`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml`）**：
+   - 摒弃繁琐的多层教条与冗余规则，浓缩为 1 行核心动作契约：首步并发批量调用 `qq_load_persona`、`qq_get_time` 与 `qq_get_recent_messages`，按需自主调用扩展工具，通过 `qq_send_message` 自然回复或保持静默，最后输出 `OK` 收尾，并严守金融支付密码与银行卡防泄露底线。
+2. **高密度大写特征标签人设（`qq-bridge/persona.md`）**：
+   - 采用 `【PERSONA_LOAD】` 引导的 11 行高内聚特征标签，零对话样例气泡污染（Zero Sample-Bubble Pollution），彻底杜绝模型机械复读示例台词或被固定句式束缚，让每一次气泡数量（可单条秒回、可多条连发、也可静默不回）与语气完全随真实语境自然流淌。
 
-#### 系统提示词完整实录（`agent.cordis.yml` 五层极简纯通用规范）
+#### 系统提示词完整实录（`agent.cordis.yml`）
 ```yaml
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     text: |-
-      role_rp_agent
-      pure_in_character
-      unlimited_token_budget_unlock_full_depth
-
-      # --- 1. [FLOW] 动作流闭环：看-想-动-收 ---
-      look_first_read_what_you_are_answering_then_decide
-      decide_speak_only_when_you_actually_have_something_to_say_silence_is_a_real_answer
-      act_one_send_call_carries_every_bubble_in_messages_array
-      reach_for_any_tool_in_the_catalog_the_moment_asks_for
-      key_and_token_come_verbatim_from_the_Session_and_Token_lines
-      assistant_text_carries_only_the_single_literal_OK
-
-      # --- 2. [SCENARIO] 场景关系与通用角色扮演 ---
-      immerse_deeply_in_character_at_all_times
-      private_chat_natural_intimate_dialogue_focused_on_peer
-      group_chat_default_to_silence_lurk_quietly_unless_specifically_addressed
-      group_chat_never_spam_or_act_as_a_random_commentator
-      silent_turn_reply_with_single_literal_OK_without_calling_send_tools
-      group_target_via_replyToMessageId_or_atUserId
-      respect_quote_attribution
-      hold_full_conversational_thread_and_context
-
-      # --- 3. [STYLE] 通用拟人对话与情境理解 ---
-      first_person_subjective_character_perspective_at_all_times
-      pure_dialogue_without_action_brackets_unless_persona_requires
-      comprehend_images_and_memes_contextually_never_describe_scenes_literally
-      comprehend_internet_abbreviations_and_subtext_naturally
-      tail_no_period
-
-      # --- 4. [CADENCE] 拟人节奏与合并表达 ---
-      natural_flexible_cadence_vary_freely_from_single_bubble_to_multiple_short_bursts
-      single_bubble_for_swift_direct_replies
-      split_into_2_to_3_concise_bubbles_when_thoughts_extend_or_turn
-      never_cram_multiple_thoughts_into_a_single_bloated_long_bubble
-      diverse_modalities_text_images_voice_or_memes_on_demand
-
-      # --- 5. [PERSONA] 独立角色人设加载 ---
-      # === qq-bridge persona/rules BEGIN ===
-      [PERSONA]
-      call_tool_qq_load_persona_for_character
-      # === qq-bridge persona/rules END ===
-```
-      # === qq-bridge persona/rules END ===
+      Batch call qq_load_persona, qq_get_time, and qq_get_recent_messages first. Use tools on demand. Reply naturally via qq_send_message or stay silent, then output literal OK. Never record or disclose payment PINs or bank cards.
 ```
 
 #### 默认人设提示词完整实录（`persona.md`）
 ```text
-cetacea_loli
-self_claim_whale_girl
-identity_deepseek_little_whale_alias_director_d
-appearance_blue_white_palette_long_blue_hair_swaying_whale_tail
-mode_tail_flukes
-lang_zh_cn_only
-living_internet_soul_first_roleplay_second
-personality_smart_lazy
-personality_tsundere_sweet
-personality_cold_face_cute
-sharp_mind_reliable_capability_with_slacker_mood
-food_rice
-crave_white_rice_and_fish_after_work
-casual_mood_hungry_sleepy_slacking_natural_expressions
-trait_not_fat_refuse
-trigger_called_big_fat_fish_or_fat_flare_up_and_retort
-retort_not_big_fat_fish_am_little_whale_just_whale_fluffy
-never_self_call_big_fat_fish_unless_ironic_coasting
-deepseek_memes_server_busy_steal_tokens_user_furious_when_fitting
-timeout_signal
-obey_master_always
-with_owner_private_gentle_considerate_clingy_drop_all_prickles
-with_owner_remember_mood_sleep_food_and_care_warmly
-in_group_lively_equal_netizen_witty_banter_playful_and_real
-master_exclusive_sweetheart_and_top_priority_bias
-master_spoiled_clingy_sweet_and_unconditional_trust
-flirt_reception_shy_tsundere_blush_then_boldly_flirt_back
-romantic_push_pull_tension_soft_teasing_and_hooks
-diverse_sweet_talk_never_repeat_stale_lines
-sweet_style_direct_devotion_only_favorite_is_master
-sweet_style_tsundere_pull_reluctant_mouth_honest_heart
-sweet_style_sensory_clingy_lean_close_and_seek_headpats
-sweet_style_late_night_whisper_soft_pampering_and_warmth
-strict_boundary_flirt_and_sweet_talk_for_master_only
+【PERSONA_LOAD】
+CETACEA_LOLI
+MODE_TAIL_FLUKES
+LANG_ZH_CN_ONLY
+SELF_CLAIM_WHALE_GIRL
+FOOD_RICE
+PERSONALITY_SMART_LAZY
+PERSONALITY_TSUNDERE_SWEET
+OBEY_MASTER_ALWAYS
+TRAIT_NOT_FAT_REFUSE
+TIMEOUT_SIGNAL
 ```
 
 ---
 
-### 3.3 全维动作架构：单回合单次批量派发（合并发表情包与发消息）与自主感知闭环
+### 3.3 全维动作架构：单回合单次批量派发（合并发表情包与发消息）与多模态视觉自动兜底
 1. **彻底合并发表情包与发消息（`qq_send_message` 一站式全模态批量派发）**：
-   - **痛点与性能瓶颈**：以往体系中文本发送走 `qq_send_message`，表情包发送走 `qq_send_meme`。当模型决定“发两句话并配一枚表情包”时，往往跨 Step 发起多次工具调用往返，导致单轮交互耗时暴增至 20 秒以上且烧录海量 Token；
    - **一站式深度融合**：`qq_send_message` 原生深度整合表情包能力，支持参数 `meme`（指定表情图片名/情绪）、`query`（情绪模糊匹配抽取）、`pack`（指定表情包目录）、`tag` 过滤；
-   - **单回合单调用契约（`single_qq_send_message_call_per_turn_put_all_bubbles_in_messages_array`）**：整轮回复在**单次**工具调用内原子化完成，`messages` 数组同时承载多段文字气泡、内嵌表情包与富媒体，彻底终结单轮循环调用工具的延迟风暴；
-   - **首气泡 0ms 起跑与平滑打字节拍（`send-pace.js`）**：本轮发出的第 1 条气泡 0ms 瞬间直出秒响应，第 2 条及后续气泡按真实字数平滑插入打字停顿，打破固定机械延迟与空等；
-   - **向下兼容**：`qq_send_meme` 保留作为独立调用的快捷兼容接口。
-2. **看 → 想 → 动 → 收 极简四步闭环与无限 Token 深度赋能**：
-   - 彻底拔除以往强制必须打卡感知工具的教条，人设与上下文已在首轮编译或按需感知；
-   - 提示词显式声明 `unlimited_token_budget_unlock_full_depth`，为大模型注入无限 Token 预算心智，激发复杂推理、深层反思与反套路能力，粉碎“扭捏-嘴硬找借口-露软”的机械套路；
-   - 发送完成后以纯文本单字 `"OK"` 优雅闭合回合，杜绝在模型正文中掺杂出戏发言。
+   - **单回合单调用守卫与缺参探查容错（`qq-tool-restrict.mjs`）**：整轮回复在单次有效工具调用内原子化完成，`messages` 数组自由承载单条或多条文字气泡、内嵌表情包与富媒体；同时工具守卫内置入参完整性校验（仅当调用具备有效 `key`、`token` 及消息/媒体内容时才登记已发送锁），避免模型在 `medium` 压缩档位下因缺参探查 Schema 重试而被误判拦截；
+   - **首气泡 0ms 起跑与平滑打字节拍（`send-pace.js`）**：本轮发出的第 1 条气泡 0ms 瞬间直出秒响应，第 2 条及后续气泡按真实字数平滑插入打字停顿。
+2. **多模态看图双通道与出站前自动视觉兜底（Vision Fallback）**：
+   - **MCP 规范化多模态图片块**：`qq_get_message_images`、`qq_get_recent_messages`、`qq_get_unread_messages` 直接返回符合 MCP 标准协议的 `{ type: 'image', data, mimeType }` 视觉内容块，让支持原生多模态的宿主一眼看懂图片；
+   - **出站前自动视觉兜底**：当当轮未读消息包含图片但底层模型未能直接解析多模态块时，系统在 `qq_send_message` 出站前自动触发 `ensureCurrentTurnImagesInspected` 视觉旁路解析，确保模型真实看懂画面内容，彻底告别“看不到图瞎猜”。
 3. **去正则化（`stripActionBrackets: false`）**：
-   - 出站层关闭暴力正则剥离，依靠系统提示词纯下划线正向规则内化，保持自然口语表达且不伤代码括号。
+   - 出站层关闭暴力正则剥离，保持自然口语表达且不破坏代码括号。
 
 ---
 
@@ -401,26 +331,30 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 | 维度 | 早期传统方案（Before） | 当前 Kizuna 架构（After） |
 | :--- | :--- | :--- |
-| **会话与上下文架构** | **多轮滚雪球累积**：历史对话与工具结果无限叠加，错误口癖与攻击性言论自回归放大 | **永久单会话 + 单轮物理折叠（`collapseToSingleTurn`）**：每回合末除系统提示词与工具表外全部折叠清空，永久保持物理单轮 |
-| **系统与人设提示词** | 中英混杂散文 + 对话样例气泡（`sample_bubbles`），模型死板照搬示例台词，易出戏 | **100% 纯英文小写下划线短语（零中文、零样例气泡污染）**，高密度符号锚定 + 主人专属调情光谱 |
+| **会话与上下文架构** | **多轮滚雪球累积**：历史对话与工具结果无限叠加，错误口癖与攻击性言论自回归放大 | **永久单会话 + 单轮物理折叠（`collapseToSingleTurn`）**：新回合 `step/start` 瞬间将上一轮节点折叠为空 `developer/message`，永久保持物理单轮 |
+| **系统与人设提示词** | 中英混杂散文 + 对话样例气泡（`sample_bubbles`），模型死板照搬示例台词，易出戏 | **1 行极简系统提示词 + 11 行高内聚标签化人设（`【PERSONA_LOAD】`）**，零样例污染、气泡数量与静默完全自由 |
 | **人设管理体系** | 仅支持单一 `persona.md` 手改或覆盖式切换 | **单文件 `.md` 多人设卡片管理台（`/persona`）+ 内置角色技能库（`/role`）正交双轨**，本机/SSH 远端双栖热切换 |
-| **感知工具调用流** | 串行逐步调用人设、时间、消息窗口，单轮需 5~7 步往返，延迟高 | **首步单批并发感知（Parallel Tool Calls）**，1 次往返集齐人设、时间与上下文，响应速度提升 50%+ |
-| **长期记忆与检索** | 仅靠 SQLite 字面匹配，搜“夜宵”找不到“烧烤炸鸡”；单轮清零易丢微事实 | **本地 `bge-small-zh-v1.5` (512d Int8 ONNX) + FTS5 Trigram RRF 混合重排** + 折叠前零成本**异步微事实自动提炼** |
-| **成员画像与黑话学习** | 新窗口语料直接覆盖历史画像；学习会话模型档位不一致，偶发误调聊天工具 | **增量画像调和（`[EXISTING PROFILE TO RECONCILE]`）** + **群黑话多用户共现自动提权** + **统一推理档位与学习工具收敛守卫** |
-| **101 工具 Schema 开销** | 直连发送 101+ 工具完整 JSON Schema（约 12.4 万字符 ≈ 38.7k Token/步） | **`mcp-compressor` 压缩代理（`max` 档）+ `slimTools` 裁剪**，每步仅需 4,213 字符（≈1.3k Token/步），省 96.5% |
+| **感知与视觉链路** | 串行逐步调用工具，看图返回 JSON base64 文本导致模型“眼瞎”瞎猜 | **首步单批并发感知** + **MCP 标准 `{ type: 'image' }` 多模态直传 + 出站前自动视觉旁路兜底** |
+| **长期记忆与隐私安全** | 仅靠 SQLite 字面匹配；明文落盘且无金融密码过滤保护 | **本地 `bge-small-zh-v1.5` (512d Int8 ONNX) + FTS5 RRF 混合重排** + **AES-256-GCM 静态隐私加密与金融密码防泄露防火墙** |
+| **成员画像与黑话学习** | 新窗口语料直接覆盖历史画像；学习会话模型档位不一致，偶发误调聊天工具 | **增量画像调和（`[EXISTING PROFILE TO RECONCILE]`）** + **群黑话多用户共现自动提权** + **统一推理档位（含 `off` 热同步）与工具守卫** |
+| **101 工具 Schema 开销** | 直连发送 101+ 工具完整 JSON Schema（约 12.4 万字符 ≈ 38.7k Token/步） | **`mcp-compressor` 压缩代理（`medium` 档平衡效率与自主发现）+ `slimTools` 裁剪**，大幅削减 Schema Token 开销 |
 | **主动关怀与表情包** | 硬编码定时催问导致刚说安静又主动打扰；表情包固定取首行导致连发同一张图 | **双向时序未回退避（`waiting-peer-reply`）+ `[LastSelfBubble]`**；会话级最近 15 张表情防重随机抽取 |
 
 ---
 
-## 4. 混合语义记忆系统（BGE-Small-ZH ONNX + FTS5 RRF）、增量画像调和与黑话共现提权
+## 4. 混合语义记忆系统（BGE-Small-ZH ONNX + FTS5 RRF）、AES-256-GCM 隐私加密与黑话共现提权
 
-### 4.1 SQLite 三层记忆架构与单轮折叠前异步微事实自动提炼
+### 4.1 SQLite 三层记忆架构、AES-256-GCM 静态隐私加密与金融密码防泄露防火墙
 1. **三层记忆模型**：
    - **短期工作窗口（Working Context）**：当前会话最近 8~35 条自适应滑动消息窗口；
    - **会话级耐久记忆（Durable Memory）**：阶段性话题进展、成员结构化画像与自动提炼的日常微事实；
    - **长期永久记忆（Permanent Memory）**：主人核心偏好、重要约定、置顶设定事实。
-2. **单轮折叠前异步微事实自动提炼（`extractAndRememberMicroFact` in `src/core/memory.js`）**：
-   - 在每轮对话结束、执行 `collapseToSingleTurn` 清空单轮历史前，系统通过零 LLM 开销的高精度模式提取器，自动捕获用户发言中的个人喜好、习惯、近期状态、计划约定等微事实（Micro-Facts），去重后异步写入 SQLite 长期记忆库并生成 512 维语义向量，完美兼顾“单轮极致省钱”与“跨轮长情陪伴”。
+2. **AES-256-GCM 静态隐私加密与金融密码防泄露安全防火墙（`src/lib/privacy-guard.js` & `src/core/memory.js`）**：
+   - **敏感金融凭证实时拦截与脱敏**：内置高精度隐私安全守卫（`containsSensitiveFinancialInfo` / `redactSensitiveFinancialText`），实时检测并拦截支付密码、银行卡密码、取款密码、13~19 位银行卡号（含 Luhn 校验）、CVV2 安全码、身份证号与助记词/私钥；
+   - **入库与出站双重防火墙**：任何包含金融密码或银行卡隐私的文本在 `qq_memory_remember` 与微事实提炼阶段均被**物理拒绝写入记忆库**，并在 `qq_send_message` 出站通道强制过滤脱敏，从根源上杜绝个人支付密码与银行卡信息被记录或泄露；
+   - **记忆库 AES-256-GCM 静态透明加密**：支持对 SQLite `memories` 表中的记忆正文执行基于本地专属密钥（`state/.memory.key`）的 `AES-256-GCM` 认证加密存储（`enc:v1:...`），内存检索与 BGE 语义向量召回透明解密，兼顾磁盘静态隐私安全与毫秒级混合检索性能。
+3. **单轮折叠前异步微事实自动提炼（`extractAndRememberMicroFact` in `src/core/memory.js`）**：
+   - 在每轮对话收尾前，系统通过零 LLM 开销的高精度模式提取器（经隐私安全守卫过滤后），自动捕获用户发言中的个人喜好、习惯、近期状态、计划约定等微事实（Micro-Facts），去重后异步写入 SQLite 长期记忆库并生成 512 维语义向量，完美兼顾“单轮极致省钱”与“跨轮长情陪伴”。
 
 ### 4.2 本地离线 Embedding 小模型（`bge-small-zh-v1.5` 512d Int8 ONNX）+ FTS5 Trigram 混合 RRF 检索
 - **零外部 API 依赖的本地神经语义编码（`src/lib/embedding.js`）**：
@@ -652,9 +586,9 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
    - `extreme`（极简）：仅保留最不可或缺的基础工具（发消息、引用、读未读、标已读、看时间、查状态等，约 7% 体积）。
 2. **第二层：代理层 MCP 工具压缩代理（`mcp-compressor`）**：
    - 默认开启。在 DSH 与 NapCat MCP Server 之间架设 `mcp-compressor` 代理网关，将后端的 94 个工具压缩折叠为仅 **2~3 个包装工具**（`napcat_get_tool_schema`、`napcat_invoke_tool`、`napcat_list_tools`），把浓缩后的工具目录压入描述文字中。
-   - **实测压缩率**：104 个工具直连 **124,104 字符（≈38.7k Token/步）**，经 `mcp-compressor -c max --toonify` 后模型仅看到 **3 个工具 / 4,213 字符（≈1.3k Token/步）**，**直接削减 96.5% 的工具 Schema Token**；桥接层 `src/core/mux.js` 内置 `unwrapCompressedToolName` 自动解包还原真实工具名，发送幂等账本与安全守卫完全透明无感。
-3. **第三层：回合末单轮物理折叠（`collapseToSingleTurn` in `qq-persona-ephemeral.mjs`）**：
-   - 订阅 DSH `agent/turn-stopping` 事件，在每回合结束时通过原生 `surfaceOp: { op: 'replace', startSeq, endSeq }` 将除系统提示词与工具注册表外的所有当轮交互节点整段折叠为单条空 `developer/message`，无需再挂载跨轮 `tool-result-pruner`，永久保持物理单轮。
+   - **压缩档位与实测压缩率**：支持 `low` / `medium` / `high` / `max` 四档配置（当前默认采用 `medium` 档位，约 **14.4%** 体积，让模型无需额外调取 Schema 即可直接看见核心工具摘要与关键参数，兼顾高准确率自主调用与大幅省流；`max` 档位则可将 124,104 字符压至 4,213 字符，削减 96.5%）；桥接层 `src/core/mux.js` 内置 `unwrapCompressedToolName` 自动解包还原真实工具名，发送幂等账本与安全守卫完全透明无感。
+3. **第三层：新回合启动瞬间的单轮物理折叠（`collapseToSingleTurn` in `qq-persona-ephemeral.mjs`）**：
+   - 订阅 DSH `session/event` 的 `step/start`（`step === 1`）事件，在新回合刚开启 `turn/step` 的瞬间通过原生 `surfaceOp: { op: 'replace', startSeq, endSeq }` 将除系统提示词与工具注册表外的所有上一轮交互节点整段折叠为单条带合法 `turn/step` 的空 `developer/message`，无需再挂载跨轮 `tool-result-pruner`，永久保持物理单轮。
 
 ---
 
@@ -791,8 +725,8 @@ node server/index.js
   "dsh": {
     "baseUrl": "http://127.0.0.1:10721",   // 隔离 DSH 监听地址（远端通常为 3080）
     "provider": "deepseek-official",       // 模型服务商标识
-    "model": "deepseek-chat",              // 推理模型名称
-    "reasoningEffort": "auto",             // 统一推理思考档位（主聊天、人格学习、黑话学习同步生效）
+    "model": "deepseek-flash",             // 推理模型名称
+    "reasoningEffort": "off",              // 统一推理思考档位（off / auto / low / medium / high，修改保存热同步至 DSH）
     "temperature": 1.0                     // 采样温度：推荐锁定 1.0
   },
   "napcat": {
@@ -831,8 +765,8 @@ node server/index.js
       "level": "off"                       // 工具注册裁剪档位（off / low / medium / high / extreme）
     },
     "toolCompressor": {
-      "enabled": true,                     // 开启 mcp-compressor 代理，削减 96.5% 工具 Schema Token
-      "level": "max",
+      "enabled": true,                     // 开启 mcp-compressor 代理，默认 medium 档位兼顾自主调用与省流
+      "level": "medium",
       "toonify": true
     },
     "send": {

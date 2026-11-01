@@ -104,15 +104,12 @@ t('⑤ 唤醒正文里没有引用标记时保持原样（不带多余的引用�
   assert.doesNotMatch(prompt, /\[引用/, '没有引用就不该出现引用标记');
 });
 
-t('⑥ 系统提示词里有缩略语与引用归属的规则', () => {
-  // 2026-09-24：preset 目录名随 default → qq-chat 的合并改名。
+t('⑥ 系统提示词极简流程守卫（放开聊天约束）', () => {
+  // 2026-11-01（用户要求）：系统提示词写规范和通用，散文式结构，放开约束达到最拟人；人设写进 persona.md。
   const preset = fs.readFileSync(path.join(process.cwd(), 'dsh', 'agent-presets', 'qq-chat', 'agent.cordis.yml'), 'utf8');
-  /* 2026-10-31（用户要求）：系统提示词不要有示例（no few-shot / no sample words），
-   * 提炼为最通用最智能的高维规则，杜绝写死 yyds/xdm 等局部样本导致模型注意力定式化。
-   * 断言守住高维通用规则：网络缩略语理解、引用归属、完整对话线程。 */
-  assert.match(preset, /abbreviation/i, '缩略语与黑话通用理解规则不见了');
-  assert.match(preset, /quote_attribution/i, '引用归属判据（引用别人=在跟别人说话）不见了');
-  assert.match(preset, /conversational_thread/i, '抓住整条线（而不只最后一句）的规则不见了');
+  assert.match(preset, /qq_load_persona.*qq_get_time.*qq_get_recent_messages/is, '感知流水线三件套缺失');
+  assert.match(preset, /qq_send_message/i, '发消息协议缺失');
+  assert.match(preset, /call_tool_qq_load_persona_for_character/i, '人设加载工具指引缺失');
 });
 
 try { fs.rmSync(sandbox, { recursive: true, force: true }); } catch { /* Windows 上 sqlite 句柄未释放 */ }

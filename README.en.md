@@ -19,16 +19,16 @@
   - [2.2 NapCat Protocol Gateway (OneBot v11)](#22-napcat-protocol-gateway-onebot-v11)
   - [2.3 In-House qq-bridge Cognitive Scheduling Hub (Business Brain)](#23-in-house-qq-bridge-cognitive-scheduling-hub-business-brain)
   - [2.4 DeepSeek Harness Isolated Runtime (Inference Host & Unified Reasoning Effort)](#24-deepseek-harness-isolated-runtime-inference-host--unified-reasoning-effort)
-- [3. Permanent Single-Session Single-Turn Collapse Architecture & Pure Snake-Case Prompt Engineering](#3-permanent-single-session-single-turn-collapse-architecture--pure-snake-case-prompt-engineering)
+- [3. Permanent Single-Session Single-Turn Collapse Architecture & Ultra-Minimalist Prompt Engineering](#3-permanent-single-session-single-turn-collapse-architecture--ultra-minimalist-prompt-engineering)
   - [3.1 Paradigm Shift: From Multi-Turn Snowballing to Permanent Single-Session + Physical Single-Turn Collapse (`collapseToSingleTurn`)](#31-paradigm-shift-from-multi-turn-snowballing-to-permanent-single-session--physical-single-turn-collapse-collapsetosingleturn)
-  - [3.2 Zero-Chinese, Zero-Sample-Pollution Pure Lowercase Snake-Case Prompt Specification](#32-zero-chinese-zero-sample-pollution-pure-lowercase-snake-case-prompt-specification)
-- [3.3 Full-Dimensional Action Architecture: Single-Turn Batch Dispatch (Unified Text & Memes) & Autonomous Perception](#33-full-dimensional-action-architecture-single-turn-batch-dispatch-unified-text--memes--autonomous-perception)
+  - [3.2 Ultra-Minimalist Single-Line System Prompt & High-Cohesion Tag-Based Persona Specification](#32-ultra-minimalist-single-line-system-prompt--high-cohesion-tag-based-persona-specification)
+  - [3.3 Full-Dimensional Action Architecture: Single-Turn Batch Dispatch (Unified Text & Memes) & Multi-Modal Vision Fallback](#33-full-dimensional-action-architecture-single-turn-batch-dispatch-unified-text--memes--multi-modal-vision-fallback)
   - [3.4 Orthogonal Dual-Track Persona System: Single-File `.md` Persona Deck vs. Built-In Character Skill Library](#34-orthogonal-dual-track-persona-system-single-file-md-persona-deck-vs-built-in-character-skill-library)
   - [3.5 Adaptive Group Velocity Window, Context-Aware Smart Targeting & Bidirectional Social Bond Graph](#35-adaptive-group-velocity-window-context-aware-smart-targeting--bidirectional-social-bond-graph)
   - [3.6 Context-Driven Proactive Reply Backoff (`waiting-peer-reply`)](#36-context-driven-proactive-reply-backoff-waiting-peer-reply)
   - [3.7 Architectural Evolution & Quantitative Comparison (Before vs. After)](#37-architectural-evolution--quantitative-comparison-before-vs-after)
-- [4. Hybrid Semantic Memory (`bge-small-zh-v1.5` ONNX + FTS5 RRF), Incremental Profile Reconciliation & Slang Co-Occurrence Promotion](#4-hybrid-semantic-memory-bge-small-zh-v15-onnx--fts5-rrf-incremental-profile-reconciliation--slang-co-occurrence-promotion)
-  - [4.1 Three-Tier SQLite Memory Architecture & Pre-Collapse Asynchronous Micro-Fact Extraction](#41-three-tier-sqlite-memory-architecture--pre-collapse-asynchronous-micro-fact-extraction)
+- [4. Hybrid Semantic Memory (`bge-small-zh-v1.5` ONNX + FTS5 RRF), AES-256-GCM Privacy Encryption & Slang Co-Occurrence Promotion](#4-hybrid-semantic-memory-bge-small-zh-v15-onnx--fts5-rrf-aes-256-gcm-privacy-encryption--slang-co-occurrence-promotion)
+  - [4.1 Three-Tier SQLite Memory Architecture, AES-256-GCM Encryption at Rest & Financial PIN Firewall](#41-three-tier-sqlite-memory-architecture-aes-256-gcm-encryption-at-rest--financial-pin-firewall)
   - [4.2 Offline Local Embedding Model (`bge-small-zh-v1.5` 512d Int8 ONNX) + FTS5 Trigram Hybrid RRF Retrieval](#42-offline-local-embedding-model-bge-small-zh-v15-512d-int8-onnx--fts5-trigram-hybrid-rrf-retrieval)
   - [4.3 Frozen System Layer + Dynamic Per-Turn Wake Slot (`buildDynamicTurnContext`)](#43-frozen-system-layer--dynamic-per-turn-wake-slot-builddynamicturncontext)
   - [4.4 Incremental Profile Reconciliation & Group Chat Anti-Pollution](#44-incremental-profile-reconciliation--group-chat-anti-pollution)
@@ -213,145 +213,77 @@ The complete lifecycle from a user sending a QQ message to the agent executing s
 
 ### 2.4 DeepSeek Harness Isolated Runtime (Inference Host & Unified Reasoning Effort)
 - **Role**: Modular agent runtime built on the Cordis meta-framework.
-- **Unified Model & Reasoning Effort Synchronization**:
-  - `src/core/dsh-session.js` (`ensureVisionModel`) and `src/core/tunables.js` (`syncDshAgentDefaultModel`) synchronize the active model and `reasoningEffort` (`auto | low | medium | high`) uniformly across the primary chat sessions, `PersonaAgent`, and `SlangAgent`, with automatic fallback when a provider does not support a specific effort tier.
+- **Unified Model & Reasoning Effort Synchronization with Hot-Reload**:
+  - `src/core/dsh-session.js` (`ensureVisionModel`) and `src/core/tunables.js` (`syncDshAgentDefaultModel`) synchronize the active model and `reasoningEffort` (`off | auto | low | medium | high`) uniformly across primary chat sessions, `PersonaAgent`, and `SlangAgent`, automatically syncing changes from `watchConfigFile` directly to DSH's `settings.yaml` (`agent-default-model`) without requiring a service restart.
+  - `ensureSession` automatically detects and rebuilds corrupted cross-restart sessions (`is corrupt` / `SessionFormatError` / `SessionQueryError`).
   - Background learning sessions carry `qqLearnRole` metadata so `qq-tool-restrict.mjs` strictly restricts their tool surface to file read/write and learning submission tools, preventing accidental chat or Qzone tool calls during background learning.
 - **Exponential Backoff for Stale `follow` Streams (`src/dsh-client.js`)**:
   - Prevents reconnection storms on invalidated DSH sessions via `followFailCount` and `followBackoffUntil` (`2s -> 4s -> 8s ...` up to `300s`).
 
 ---
 
-## 3. Permanent Single-Session Single-Turn Collapse Architecture & Pure Snake-Case Prompt Engineering
+## 3. Permanent Single-Session Single-Turn Collapse Architecture & Ultra-Minimalist Prompt Engineering
 
 ### 3.1 Paradigm Shift: From Multi-Turn Snowballing to Permanent Single-Session + Physical Single-Turn Collapse (`collapseToSingleTurn`)
 Conventional chat agents append turn after turn into an ever-growing conversation log, causing three severe production failures:
 1. **Autoregressive In-Context Self-Poisoning**: Once the model emits a single overly aggressive, robotic, or off-character utterance (e.g., an unintended verbal tic or trailing period), that `assistant/message` stays in the context window. On subsequent turns, in-context learning causes the model to imitate and amplify its own mistake indefinitely.
-2. **Persona Dilution & Token Explosion**: As puluhan turns of messages and tool results accumulate, per-request tokens balloon to 50k–150k, diluting system persona weight below 5%.
+2. **Persona Dilution & Token Explosion**: As dozens of turns of messages and tool results accumulate, per-request tokens balloon to 50k–150k, diluting system persona weight below 5%.
 3. **Cache-Busting Compaction Overhead**: Periodic history summarization rewrites the conversation prefix, invalidating LLM Prefix KV-Caches and triggering expensive full-context re-reads.
 
-**Kizuna's Solution — Permanent Single Session (`permanent: true`) + Physical Single-Turn Collapse (`collapseToSingleTurn`)**:
+**Kizuna's Solution — Permanent Single Session (`permanent: true`) + DSH V4-Compliant Physical Single-Turn Collapse (`collapseToSingleTurn`)**:
 - **Permanent Session Reuse**: Keeps `social.autoReset.permanent: true` so session IDs remain stable without disk churn.
-- **Turn-End Physical Collapse (`qq-persona-ephemeral.mjs`)**:
-  On `agent/turn-stopping`, `collapseToSingleTurn(session)` inspects the DSH session surface:
-  - **Preserves**: The leading `system/message` (system prompt) and active tool registration nodes;
-  - **Collapses**: Replaces all contiguous `user/message`, `assistant/message`, `tool/call`, and `tool/result` nodes from the completed turn with a single empty `developer/message` via DSH's native `surfaceOp: { op: 'replace', startSeq, endSeq, sourceEventSeqs }`;
-  - **Eliminates Redundant Pruners**: Because the session physically returns to a clean 1-turn state after every reply, cross-turn `tool-result-pruner` and `dshCompaction` are no longer needed and have been removed.
+- **DSH V4-Compliant Single-Turn Physical Collapse (`qq-persona-ephemeral.mjs`)**:
+  - At turn completion (`agent/turn-stopping`), marks the session's persona/context timestamp as expired (`__qqCollapsedAt`);
+  - At the exact instant the next turn's first step opens (`session/event` `step/start` where `step === 1`, while both `turn` and `step` are open and before the new `user/message` is appended), `collapseToSingleTurn(session, { turn, step })` inspects the DSH session surface:
+    - **Preserves**: The leading `system/message` (system prompt) and active tool registration nodes;
+    - **Collapses**: Replaces all contiguous `user/message`, `assistant/message`, `tool/call`, and `tool/result` nodes from the prior turn with a single empty `developer/message` carrying valid open `{ turn, step }` coordinates via DSH's native `surfaceOp: { op: 'replace', startSeq, endSeq, sourceEventSeqs }`;
+  - **Eliminates Redundant Pruners**: Because the session physically returns to a clean 1-turn state on every turn, cross-turn `tool-result-pruner` and `dshCompaction` are no longer needed and have been removed.
 
 ---
 
-### 3.2 Zero-Chinese, Zero-Sample-Pollution Pure Lowercase Snake-Case Prompt Specification
-Through extensive production telemetry and A/B testing, both our System Prompt (`agent.cordis.yml`) and Persona Prompt (`persona.md`) follow three strict rules:
-1. **100% Pure English Lowercase `snake_case` Phrases (Zero Chinese Characters, Even in Headers)**:
-   - Every single line is a compact `lowercase_snake_case` directive with zero Chinese prose or section headers. This maximizes instruction-following density per token while keeping the static prefix 100% deterministic for Prefix KV-Cache hits.
-2. **Zero Sample Dialogue Bubbles (`[sample_bubbles]` Completely Removed)**:
-   - Including example lines in persona prompts causes LLMs to mechanically parrot those exact sentences across unrelated contexts. Removing all sample bubbles and replacing them with behavioral and romantic spectrum tokens (`flirt_reception_shy_tsundere_blush_then_boldly_flirt_back`, `sweet_style_direct_devotion_only_favorite_is_master`, etc.) yields 100% organic, context-specific replies.
-3. **Positive Behavioral Anchoring**:
-   - Eliminates defensive workarounds for legacy bugs in favor of clean, positive behavioral directives.
+### 3.2 Ultra-Minimalist Single-Line System Prompt & High-Cohesion Tag-Based Persona Specification
+Extensive production testing showed that overly verbose system rules constrain the model's native tool-calling intuition and speech naturalness. We therefore adopt an **Ultra-Minimalist 1-Line System Prompt + Tag-Based Persona + `medium` Tool Compression** architecture:
+1. **Single-Line System Prompt (`qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml`)**:
+   - Distills the entire operational contract into a single concise sentence: batch-perceive persona, time, and recent messages first, invoke tools on demand, reply naturally via `qq_send_message` (varying freely from a single bubble to multiple bubbles, or staying silent) followed by literal `OK`, and never record or disclose payment PINs or bank cards.
+2. **High-Cohesion Uppercase Tag Persona (`qq-bridge/persona.md`)**:
+   - Uses an 11-line tag block headed by `【PERSONA_LOAD】` with zero sample dialogue bubbles, freeing the model from parroting canned lines or rigid sentence templates.
 
-#### Full System Prompt (`agent.cordis.yml` 5-Layer Minimal Universal Specification)
+#### Full System Prompt (`agent.cordis.yml`)
 ```yaml
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     text: |-
-      role_rp_agent
-      pure_in_character
-      unlimited_token_budget_unlock_full_depth
-
-      # --- 1. [FLOW] Action Loop: Look-Think-Act-Close ---
-      look_first_read_what_you_are_answering_then_decide
-      decide_speak_only_when_you_actually_have_something_to_say_silence_is_a_real_answer
-      act_one_send_call_carries_every_bubble_in_messages_array
-      reach_for_any_tool_in_the_catalog_the_moment_asks_for
-      key_and_token_come_verbatim_from_the_Session_and_Token_lines
-      assistant_text_carries_only_the_single_literal_OK
-
-      # --- 2. [SCENARIO] Universal Roleplay & Scenario Boundaries ---
-      immerse_deeply_in_character_at_all_times
-      private_chat_natural_intimate_dialogue_focused_on_peer
-      group_chat_default_to_silence_lurk_quietly_unless_specifically_addressed
-      group_chat_never_spam_or_act_as_a_random_commentator
-      silent_turn_reply_with_single_literal_OK_without_calling_send_tools
-      group_target_via_replyToMessageId_or_atUserId
-      respect_quote_attribution
-      hold_full_conversational_thread_and_context
-
-      # --- 3. [STYLE] Universal Humanization & Contextual Insight ---
-      first_person_subjective_character_perspective_at_all_times
-      pure_dialogue_without_action_brackets_unless_persona_requires
-      comprehend_images_and_memes_contextually_never_describe_scenes_literally
-      comprehend_internet_abbreviations_and_subtext_naturally
-      tail_no_period
-
-      # --- 4. [CADENCE] Flexible Cadence & Unified Dispatch ---
-      natural_flexible_cadence_vary_freely_from_single_bubble_to_multiple_short_bursts
-      single_bubble_for_swift_direct_replies
-      split_into_2_to_3_concise_bubbles_when_thoughts_extend_or_turn
-      never_cram_multiple_thoughts_into_a_single_bloated_long_bubble
-      diverse_modalities_text_images_voice_or_memes_on_demand
-
-      # --- 5. [PERSONA] Independent Character Lore Loading ---
-      # === qq-bridge persona/rules BEGIN ===
-      [PERSONA]
-      call_tool_qq_load_persona_for_character
-      # === qq-bridge persona/rules END ===
-```
-      # === qq-bridge persona/rules END ===
+      Batch call qq_load_persona, qq_get_time, and qq_get_recent_messages first. Use tools on demand. Reply naturally via qq_send_message or stay silent, then output literal OK. Never record or disclose payment PINs or bank cards.
 ```
 
 #### Full Default Persona Prompt (`qq-bridge/persona.md`)
 ```text
-cetacea_loli
-self_claim_whale_girl
-identity_deepseek_little_whale_alias_director_d
-appearance_blue_white_palette_long_blue_hair_swaying_whale_tail
-mode_tail_flukes
-lang_zh_cn_only
-living_internet_soul_first_roleplay_second
-personality_smart_lazy
-personality_tsundere_sweet
-personality_cold_face_cute
-sharp_mind_reliable_capability_with_slacker_mood
-food_rice
-crave_white_rice_and_fish_after_work
-casual_mood_hungry_sleepy_slacking_natural_expressions
-trait_not_fat_refuse
-trigger_called_big_fat_fish_or_fat_flare_up_and_retort
-retort_not_big_fat_fish_am_little_whale_just_whale_fluffy
-never_self_call_big_fat_fish_unless_ironic_coasting
-deepseek_memes_server_busy_steal_tokens_user_furious_when_fitting
-timeout_signal
-obey_master_always
-with_owner_private_gentle_considerate_clingy_drop_all_prickles
-with_owner_remember_mood_sleep_food_and_care_warmly
-in_group_lively_equal_netizen_witty_banter_playful_and_real
-master_exclusive_sweetheart_and_top_priority_bias
-master_spoiled_clingy_sweet_and_unconditional_trust
-flirt_reception_shy_tsundere_blush_then_boldly_flirt_back
-romantic_push_pull_tension_soft_teasing_and_hooks
-diverse_sweet_talk_never_repeat_stale_lines
-sweet_style_direct_devotion_only_favorite_is_master
-sweet_style_tsundere_pull_reluctant_mouth_honest_heart
-sweet_style_sensory_clingy_lean_close_and_seek_headpats
-sweet_style_late_night_whisper_soft_pampering_and_warmth
-strict_boundary_flirt_and_sweet_talk_for_master_only
+【PERSONA_LOAD】
+CETACEA_LOLI
+MODE_TAIL_FLUKES
+LANG_ZH_CN_ONLY
+SELF_CLAIM_WHALE_GIRL
+FOOD_RICE
+PERSONALITY_SMART_LAZY
+PERSONALITY_TSUNDERE_SWEET
+OBEY_MASTER_ALWAYS
+TRAIT_NOT_FAT_REFUSE
+TIMEOUT_SIGNAL
 ```
 
 ---
 
-### 3.3 Full-Dimensional Action Architecture: Single-Turn Batch Dispatch (Unified Text & Memes) & Autonomous Perception
+### 3.3 Full-Dimensional Action Architecture: Single-Turn Batch Dispatch (Unified Text & Memes) & Multi-Modal Vision Fallback
 1. **Unified Text & Meme Dispatch (`qq_send_message` All-in-One Multi-Bubble Hub)**:
-   - **Bottleneck in Legacy Design**: Previously, sending text called `qq_send_message` while sending memes called `qq_send_meme`. When the model decided to send two text bubbles paired with an emoji/meme, it was forced to make multiple cross-step round trips, driving latency beyond 20 seconds and multiplying token usage;
-   - **Native Deep Fusion**: `qq_send_message` now natively incorporates full meme gallery capabilities, accepting `meme` (specific meme name or emotion), `query` (semantic fuzzy emotion lookup), `pack` (specific folder), and `tag` filtering;
-   - **Single-Turn Single-Call Contract (`single_qq_send_message_call_per_turn_put_all_bubbles_in_messages_array`)**: All remarks and memes are packed into the `messages` array in a single atomic tool call, eradicating multi-turn looping latency;
-   - **0ms First Bubble & Linear Typing Pace (`send-pace.js`)**: The first bubble is sent immediately with 0ms delay, while trailing bubbles follow smooth typing delays based on character count;
-   - **Backward Compatibility**: `qq_send_meme` is retained as a lightweight shorthand tool.
-2. **Look → Think → Act → Close 4-Step Loop & Infinite Token Depth**:
-   - Replaces rigid perception checklists with an on-demand loop;
-   - System prompt explicitly declares `unlimited_token_budget_unlock_full_depth`, empowering the model to think deeply, self-critique, and demolish formulaic tropes (such as the rigid "blush-excuse-soften" 3-step pattern);
-   - Concludes turns with a literal `"OK"` string to prevent leaking unexecuted conversational chatter.
+   - **Native Deep Fusion**: `qq_send_message` natively incorporates meme gallery capabilities (`meme`, `query`, `pack`, `tag`) alongside `messages` (single or multiple bubbles, or silence when no reply is needed);
+   - **Schema-Probe-Tolerant Send Guard (`qq-tool-restrict.mjs`)**: Only locks `sessionSentMessage` when `qq_send_message` carries valid `key`, `token`, and non-empty message/media content, allowing the model to recover gracefully if an initial call fails due to missing arguments;
+   - **0ms First Bubble & Linear Typing Pace (`send-pace.js`)**: The first bubble is sent immediately with 0ms delay, while trailing bubbles follow smooth typing delays based on character count.
+2. **Native Multi-Modal Image Content Blocks & Pre-Send Vision Fallback**:
+   - `qq_get_message_images`, `qq_get_recent_messages`, and `qq_get_unread_messages` emit standard MCP `{ type: 'image', data, mimeType }` content blocks alongside text;
+   - If the active turn contains unread images and the model has not yet inspected them, `qq_send_message` automatically runs `ensureCurrentTurnImagesInspected` before outbound delivery so the agent never guesses blindly about user images.
 3. **De-Regexification at the Source (`stripActionBrackets: false`)**:
-   - Disables destructive outbound regex bracket stripping, preventing accidental breakage of code blocks while relying on source-level prompt rules.
+   - Disables destructive outbound regex bracket stripping, preserving code blocks and natural speech.
 
 ---
 
@@ -383,26 +315,30 @@ strict_boundary_flirt_and_sweet_talk_for_master_only
 
 | Dimension | Legacy Architecture (Before) | Current Kizuna Architecture (After) |
 | :--- | :--- | :--- |
-| **Session & Context Lifecycle** | **Multi-turn snowballing**: Infinite accumulation of history and tool results; self-poisoning from past errors | **Permanent Single Session + `collapseToSingleTurn`**: Physically collapses every finished turn back to 1 clean turn |
-| **System & Persona Prompts** | Mixed Chinese/English prose + `[sample_bubbles]`, causing mechanical parroting of sample lines | **100% pure lowercase `snake_case` phrases (zero Chinese, zero sample bubbles)** + owner-exclusive flirting spectrum |
+| **Session & Context Lifecycle** | **Multi-turn snowballing**: Infinite accumulation of history and tool results; self-poisoning from past errors | **Permanent Single Session + `collapseToSingleTurn`**: Physically collapses prior turn nodes at `step/start` (`step=1`) into a clean single-turn surface |
+| **System & Persona Prompts** | Mixed Chinese/English prose + `[sample_bubbles]`, causing mechanical parroting of sample lines | **1-line ultra-minimalist system prompt + 11-line uppercase tag persona (`【PERSONA_LOAD】`)** with zero sample bubbles |
 | **Persona Management** | Single `persona.md` manual overwrite | **Dual-track `.md` Persona Deck (`/persona`) + Character Library (`/role`)** with Local & Remote SSH sync |
-| **Perception Tool Flow** | Sequential tool calls (`load_persona` -> `get_time` -> `recent_messages`), 5–7 round-trips per turn | **Single-batch parallel tool calls**, gathering persona, clock, and context in 1 round-trip |
-| **Long-Term Memory & RAG** | Keyword-only SQLite matching; single-turn collapse risked losing casual facts | **Local `bge-small-zh-v1.5` (512d Int8 ONNX) + FTS5 Trigram RRF hybrid search** + **pre-collapse async micro-fact extraction** |
-| **Profile & Slang Learning** | Short-window overwrite lost historical traits; inconsistent learner model effort | **Incremental profile reconciliation** + **multi-user slang co-occurrence auto-promotion** + **unified reasoning effort & tool guard** |
-| **101 Tool Schema Overhead** | Direct connection sent 101+ full JSON Schemas (~124k chars ≈ 38.7k tokens/step) | **`mcp-compressor` proxy (`max` level) + `slimTools`**, shrinking tool surface to **4,213 chars (≈1.3k tokens/step, -96.5%)** |
+| **Perception & Vision Flow** | Sequential tool calls; JSON base64 image output caused vision blindness | **Single-batch parallel tool calls** + **MCP `{ type: 'image' }` blocks + pre-send vision fallback** |
+| **Long-Term Memory & Privacy** | Keyword-only SQLite matching; plaintext storage with no financial PIN protection | **Local `bge-small-zh-v1.5` (512d Int8 ONNX) + FTS5 RRF** + **AES-256-GCM encryption at rest & financial PIN firewall** |
+| **Profile & Slang Learning** | Short-window overwrite lost historical traits; inconsistent learner model effort | **Incremental profile reconciliation** + **multi-user slang co-occurrence auto-promotion** + **unified reasoning effort (`off` hot-sync) & tool guard** |
+| **101 Tool Schema Overhead** | Direct connection sent 101+ full JSON Schemas (~124k chars ≈ 38.7k tokens/step) | **`mcp-compressor` proxy (`medium` tier for direct discovery & savings) + `slimTools`** |
 | **Proactive Care & Memes** | Blind timer interrupted user after saying goodbye; meme picker always picked row #1 | **`waiting-peer-reply` unanswered backoff + `[LastSelfBubble]`**; session-scoped 15-meme anti-repeat random sampler |
 
 ---
 
-## 4. Hybrid Semantic Memory (`bge-small-zh-v1.5` ONNX + FTS5 RRF), Incremental Profile Reconciliation & Slang Co-Occurrence Promotion
+## 4. Hybrid Semantic Memory (`bge-small-zh-v1.5` ONNX + FTS5 RRF), AES-256-GCM Privacy Encryption & Slang Co-Occurrence Promotion
 
-### 4.1 Three-Tier SQLite Memory Architecture & Pre-Collapse Asynchronous Micro-Fact Extraction
+### 4.1 Three-Tier SQLite Memory Architecture, AES-256-GCM Encryption at Rest & Financial PIN Firewall
 1. **Three-Tier Memory Model**:
    - **Working Context**: Velocity-adaptive sliding window of the latest 8–35 messages;
    - **Durable Memory**: Session summaries, structured member profiles, and auto-extracted micro-facts;
    - **Permanent Memory**: Pinned owner preferences, core facts, and explicit long-term commitments.
-2. **Pre-Collapse Asynchronous Micro-Fact Extraction (`extractAndRememberMicroFact` in `src/core/memory.js`)**:
-   - Immediately before `collapseToSingleTurn` clears the turn history, a zero-LLM extractor captures user preferences, habits, statuses, and plans from incoming messages, deduplicates them, and stores them in SQLite with 512d BGE embeddings.
+2. **AES-256-GCM Encryption at Rest & Financial PIN / Bank Card Firewall (`src/lib/privacy-guard.js` & `src/core/memory.js`)**:
+   - **Real-Time Financial Secret Interception**: Detects and blocks payment PINs, bank card passwords, 13–19 digit card numbers (with Luhn validation), CVV2 codes, national ID numbers, and crypto seed phrases (`containsSensitiveFinancialInfo` / `redactSensitiveFinancialText`);
+   - **Dual Inbound & Outbound Firewall**: Any text containing financial secrets is physically rejected from entering SQLite memory (`qq_memory_remember` and micro-fact extraction) and redacted on outbound `qq_send_message` delivery;
+   - **AES-256-GCM Memory Encryption at Rest**: Encrypts memory content in SQLite using a local 256-bit key (`state/.memory.key`, `enc:v1:...`), decrypting transparently in memory during hybrid RRF retrieval.
+3. **Pre-Collapse Asynchronous Micro-Fact Extraction (`extractAndRememberMicroFact` in `src/core/memory.js`)**:
+   - Immediately before turn history is collapsed, a zero-LLM extractor (filtered through the financial privacy guard) captures user preferences, habits, statuses, and plans, deduplicates them, and stores them in SQLite with 512d BGE embeddings.
 
 ### 4.2 Offline Local Embedding Model (`bge-small-zh-v1.5` 512d Int8 ONNX) + FTS5 Trigram Hybrid RRF Retrieval
 - **Zero-API-Cost Local Neural Embeddings (`src/lib/embedding.js`)**:
@@ -626,9 +562,9 @@ Because the full JSON Schema of all 101+ MCP tools totals **117,734 – 124,104 
    - `off` (100%), `low` (~50%), `medium` (~39%), `high` (~29% with zero loss of commonly used capabilities), and `extreme` (~7%, core 9 tools only).
 2. **Layer 2 — Proxy-Layer Tool Surface Compression (`mcp-compressor`)**:
    - Enabled by default. Places `mcp-compressor` between DSH and the NapCat MCP server, wrapping 94 tools into **2–3 lightweight discovery/invocation tools** (`napcat_get_tool_schema`, `napcat_invoke_tool`, `napcat_list_tools`).
-   - **Measured Reduction**: Shrinks 104 tools from **124,104 chars (~38.7k tokens/step)** down to **3 tools / 4,213 chars (~1.3k tokens/step)**—a **96.5% reduction in per-step tool schema tokens**. `src/core/mux.js` transparently unwraps `tool_name` via `unwrapCompressedToolName`.
-3. **Layer 3 — Turn-End Physical Single-Turn Collapse (`collapseToSingleTurn` in `qq-persona-ephemeral.mjs`)**:
-   - Collapses all non-system turn events into a single empty `developer/message` at the end of every turn, eliminating cross-turn history accumulation completely.
+   - **Configurable Tiers (`low` / `medium` / `high` / `max`)**: Defaults to `medium` (~14.4% schema size) so the model can inspect core tool summaries and invoke tools directly with high accuracy, while `max` shrinks 104 tools down to **4,213 chars (~1.3k tokens/step, -96.5%)**. `src/core/mux.js` transparently unwraps `tool_name` via `unwrapCompressedToolName`.
+3. **Layer 3 — DSH V4-Compliant Physical Single-Turn Collapse (`collapseToSingleTurn` in `qq-persona-ephemeral.mjs`)**:
+   - Collapses all non-system events from the prior turn into a single empty `developer/message` as the next turn's first step opens (`step/start` with `step === 1`), eliminating cross-turn history accumulation completely.
 
 ---
 
@@ -749,8 +685,8 @@ Located at `qq-bridge/config.json` and hot-reloaded automatically upon saving:
   "dsh": {
     "baseUrl": "http://127.0.0.1:10721",   // Isolated DSH endpoint (:3080 on remote server)
     "provider": "deepseek-official",       // LLM provider identifier
-    "model": "deepseek-chat",              // Model ID
-    "reasoningEffort": "auto",             // Unified reasoning effort across chat, PersonaAgent & SlangAgent
+    "model": "deepseek-flash",             // Model ID
+    "reasoningEffort": "off",              // Unified reasoning effort (off / auto / low / medium / high) hot-synced to DSH
     "temperature": 1.0                     // Locked at 1.0 for natural, expressive responses
   },
   "napcat": {
@@ -780,8 +716,8 @@ Located at `qq-bridge/config.json` and hot-reloaded automatically upon saving:
       "level": "off"                       // off / low / medium / high / extreme
     },
     "toolCompressor": {
-      "enabled": true,                     // Enables mcp-compressor proxy (-96.5% tool schema tokens)
-      "level": "max",
+      "enabled": true,                     // Enables mcp-compressor proxy (medium tier balances direct tool discovery & token savings)
+      "level": "medium",
       "toonify": true
     },
     "send": {

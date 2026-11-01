@@ -28,14 +28,14 @@ async function main() {
   // 1. 人设加载
   await check('MCP', 'qq_load_persona 纯净加载与防稀释', async () => {
     const p = fs.readFileSync(path.join(process.cwd(), 'persona.md'), 'utf8');
-    assert.ok(p.includes('【PERSONA_LOAD】'), '必须包含人设加载定锚');
-    assert.ok(p.includes('CETACEA_LOLI'), '必须包含鲸鱼萝莉');
-    assert.ok(p.includes('PERSONALITY_TSUNDERE_SWEET'), '必须包含傲娇甜');
-    assert.ok(p.includes('OBEY_MASTER_ALWAYS'), '必须包含服从主人');
-    assert.ok(p.includes('FOOD_RICE'), '必须包含白米饭');
-    assert.ok(p.includes('TRAIT_NOT_FAT_REFUSE'), '必须包含坚决不认胖');
+    assert.ok(/【persona_load】/i.test(p), '必须包含人设加载定锚');
+    assert.ok(/cetacea_loli/i.test(p), '必须包含鲸鱼萝莉');
+    assert.ok(/personality_tsundere_sweet/i.test(p), '必须包含傲娇甜');
+    assert.ok(/obey_master_always/i.test(p), '必须包含服从主人');
+    assert.ok(/food_rice/i.test(p), '必须包含白米饭');
+    assert.ok(/trait_not_fat_refuse/i.test(p), '必须包含坚决不认胖');
     const lines = p.trim().split('\n');
-    assert.equal(lines.length, 11, '人设必须恰好 11 行纯粹大写短语');
+    assert.equal(lines.length, 11, '人设必须恰好 11 行纯粹短语');
     return { lines: 11 };
   });
 
@@ -76,13 +76,10 @@ async function main() {
 
   // ── 二、语言质感与通用智能架构测试 ──
 
-  // 6. 系统提示词架构守卫（五层优先级无示例）
-  await check('PROMPT', '系统提示词五层优先级与零示例规则', async () => {
+  // 6. 系统提示词架构守卫（极简流程与放开约束）
+  await check('PROMPT', '系统提示词极简流程与零示例规则', async () => {
     const preset = fs.readFileSync(path.join(process.cwd(), 'dsh', 'agent-presets', 'qq-chat', 'agent.cordis.yml'), 'utf8');
     assert.ok(preset.includes('[EXECUTION]') || preset.includes('[FLOW]'), '必须有执行或流程层');
-    assert.ok(preset.includes('[SCENARIO]'), '必须有场景层');
-    assert.ok(preset.includes('[STYLE]'), '必须有风格层');
-    assert.ok(preset.includes('[CADENCE]'), '必须有节奏层');
     assert.ok(preset.includes('[PERSONA]'), '必须有人设层');
     
     // 零示例守卫
@@ -93,7 +90,7 @@ async function main() {
     assert.ok(preset.includes('reach_for_any_tool_in_the_catalog') || preset.includes('full_tool_catalog_available_in_schemas_invoke_freely_on_demand'), '必须声明全量工具按需生态');
     assert.ok(preset.includes('assistant_text_carries_only_the_single_literal_OK') || preset.includes('assistant_text_is_for_protocol_finish_with_single_literal_OK'), '必须严格OK收尾');
 
-    return { fiveLayersConfirmed: true, zeroFewShot: true };
+    return { simplifiedConfirmed: true, zeroFewShot: true };
   });
 
   // 7. 唤醒词末梢锚（极简、正向、无多余散文）

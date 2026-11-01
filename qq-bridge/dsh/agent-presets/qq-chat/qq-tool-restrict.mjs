@@ -175,6 +175,26 @@ export function apply(ctx) {
       if (!ctxAt || ctxAt <= collapsedAt || (Date.now() - ctxAt) > CONTEXT_FRESH_MS) {
         return 'Protocol violation: step_3 is mandatory. The wake body carries no transcript and tool results are pruned at turn end, so call qq_get_recent_messages (or qq_get_unread_messages) before sending, then retry.';
       }
+      if (effectiveName === 'qq_send_message' || name.endsWith('__qq_send_message')) {
+        const rawInput = exec.arguments?.tool_input && typeof exec.arguments.tool_input === 'object'
+          ? exec.arguments.tool_input
+          : (exec.arguments || {});
+        const hasKey = Boolean(String(rawInput.key || rawInput.convKey || '').trim());
+        const hasTok = Boolean(String(rawInput.token || '').trim());
+        const msgVal = rawInput.messages ?? rawInput.message;
+        const hasMsg = (typeof msgVal === 'string' && msgVal.trim().length > 0) ||
+                       (Array.isArray(msgVal) && msgVal.length > 0);
+        const hasMedia = (Array.isArray(rawInput.images) && rawInput.images.length > 0) ||
+                         Boolean(rawInput.meme || rawInput.file || rawInput.fileName || rawInput.query || rawInput.emotion || rawInput.tag);
+        // 如果连 key/token 或消息内容都没传（例如模型先传空参探查 schema），放行让压缩代理返回 schema 报错，不锁死本轮发送机会
+        if (!hasKey || !hasTok || (!hasMsg && !hasMedia)) {
+          return;
+        }
+        const prevSentAt = Number(sessionSentMessage.get(sessId)) || 0;
+        if (prevSentAt > collapsedAt && (Date.now() - prevSentAt) < 12 * 1000) {
+          return 'You already called qq_send_message in this turn. Do not call qq_send_message a second time to append extra chatter; reply literal "OK" now to close the turn.';
+        }
+      }
       sessionSentCount.set(sessId, (sessionSentCount.get(sessId) || 0) + 1);
       sessionSentMessage.set(sessId, Date.now());
       return;

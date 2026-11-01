@@ -20,13 +20,14 @@
 
 export const name = 'qq-persona-ephemeral';
 
-const PERSONA_MARK = '【persona_load】';
+const PERSONA_MARK = 'PERSONA_LOAD';
 const STUB = '[context: ephemeral_turn_pruned] This turn\'s loaded context was removed from history to save tokens. Re-read with the same tool when needed.';
 
 /** 这些工具的结果是「本轮读进来的上下文」，转瞬即逝，回合末一律剪掉 */
 const EPHEMERAL_TOOLS = new Set([
   'qq_load_persona',
   'qq_get_time',
+  'get_time',
   'qq_get_prompt',
   'qq_get_recent_messages',
   'qq_get_my_recent_messages',
@@ -165,9 +166,11 @@ function isCollapsible(ev) {
 
 /**
  * 把会话折叠成「系统提示词 + 空占位」。导出给测试用。
+ * 注意：DSH V4 格式要求 `developer/message` 必须在开放的 `turn` 和 `step` 内写入，
+ * 因此不能在 `agent/turn-stopping`（此时 `step/end` 已关闭）追加，而是在下一轮 `step/start` 刚开启时折叠上一轮历史。
  * @returns {number} 被折叠的节点数（已经是干净状态则为 0）
  */
-export function collapseToSingleTurn(session) {
+export function collapseToSingleTurn(session, coord = {}) {
   if (!session || typeof session.append !== 'function') return 0;
   const nodes = session.surface && Array.isArray(session.surface.nodes) ? [...session.surface.nodes] : [];
   if (!nodes.length) return 0;
@@ -185,6 +188,8 @@ export function collapseToSingleTurn(session) {
   }
   const proto = evs.find((e) => e && e.type === 'developer/message' && !isEmptyDeveloper(e));
   const lastData = [...evs].reverse().find((e) => e && e.data && e.data.turn !== undefined)?.data || {};
+  const turn = Number.isSafeInteger(coord.turn) && coord.turn > 0 ? coord.turn : (lastData.turn || 1);
+  const step = Number.isSafeInteger(coord.step) && coord.step > 0 ? coord.step : (lastData.step || 1);
   let collapsed = 0;
   for (const run of runs) {
     // 这一段本来就只是一条上次留下的空占位 → 不再重复折叠
@@ -194,8 +199,8 @@ export function collapseToSingleTurn(session) {
     const sources = run.map((i) => nodes[i]);
     try {
       session.append('developer/message', {
-        ...(lastData.turn !== undefined ? { turn: lastData.turn } : {}),
-        ...(lastData.step !== undefined ? { step: lastData.step } : {}),
+        turn,
+        step,
         message: {
           source: proto?.data?.message?.source || { kind: 'tool-registry' },
           content: [],
@@ -223,13 +228,26 @@ export function collapseToSingleTurn(session) {
 
 export function apply(ctx) {
   if (!ctx || typeof ctx.on !== 'function') return;
+  // 回合收尾时先标记人设/上下文过期，确保下一轮第一步守卫生效
   ctx.on('agent/turn-stopping', (payload) => {
     try {
-      const session = payload?.agent?.session;
-      const n = collapseToSingleTurn(session);
-      if (n > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 单轮折叠：本轮收尾折叠 ${n} 个历史节点（仅留系统提示词）`);
+      const sid = String(payload?.agent?.session?.id || 'default');
+      if (!(globalThis.__qqCollapsedAt instanceof Map)) globalThis.__qqCollapsedAt = new Map();
+      globalThis.__qqCollapsedAt.set(sid, Date.now());
+    } catch {}
+  });
+  // 在新回合第一步 step/start 刚打开时（此时 turn 与 step 均处于 open 状态，且新 user/message 尚未写入 surface），
+  // 安全折叠上一轮遗留的节点，既满足 DSH V4 的 open turn/step 校验，又保持单轮干净上下文。
+  ctx.on('session/event', (session, event) => {
+    if (!event || event.type !== 'step/start') return;
+    const turn = event.data?.turn;
+    const step = event.data?.step;
+    if (step !== 1) return;
+    try {
+      const n = collapseToSingleTurn(session, { turn, step });
+      if (n > 0 && typeof ctx.logger?.info === 'function') ctx.logger.info(`[qq-persona-ephemeral] 单轮折叠：新回合(${turn}/${step})启动前折叠 ${n} 个旧节点（仅留系统提示词）`);
     } catch (e) {
-      try { console.error(`[qq-persona-ephemeral] skip: ${String(e?.message ?? e).slice(0, 160)}`); } catch { /* 日志都写不出去就算了 */ }
+      try { console.error(`[qq-persona-ephemeral] skip: ${String(e?.message ?? e).slice(0, 160)}`); } catch { /* ignore */ }
     }
   });
 }

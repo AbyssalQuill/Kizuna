@@ -15,11 +15,50 @@ const PATH_RE = /(?<![A-Za-z0-9])[A-Za-z]:[\\/](?!\s)[^\s"'<>|，。；、]{2,}|
 const SECRET_PATH_RE = /(?:\/|\\|^)(?:\.ssh\/|\.aws\/|\.gnupg\/|id_rsa|id_dsa|id_ecdsa|id_ed25519|[\w.-]+\.pem|credentials|\.netrc)(?=[/\\\s"'<>|，。；、]|$)/i;
 const CRED_RE = /(?:token|密码|密钥|口令|password|passwd|secret|api[_-]?key|access[_-]?key|authorization|bearer|credential|私钥)(?:\s*)(?:[:=：])(?:\s*)[A-Za-z0-9_\-./+@]{6,}/i;
 
-export const SENSITIVE_RE = new RegExp(`${PATH_RE.source}|${SECRET_PATH_RE.source}|${CRED_RE.source}`, 'i');
+// 银行卡正则（16~19位数字，支持空格/连字符分隔，包含典型银联/Visa/MasterCard等格式）
+export const BANK_CARD_RE = /(?<!\d)(?:62\d{14,17}|4\d{15}|5[1-5]\d{14}|(?:[4-6]\d{3}[ -]\d{4}[ -]\d{4}[ -]\d{4}))(?!\d)/g;
 
-// 判断命中类别，便于日志定位真伪。返回 null | 'path' | 'secret-path' | 'credential'
+// 支付密码/交易密码（带语义指示的6位纯数字凭据，如微信支付密码、银行卡取款密码等）
+export const PAYMENT_PIN_RE = /((?:支付密码|交易密码|取款密码|提现密码|银行卡密码|付款密码|付款码|支付口令|pay[_-]?pin|pay[_-]?pass(?:word)?)\s*(?:[:=：为是]\s*|\s*))(\d{6})\b/gi;
+
+// 身份证号正则（18位二代身份证）
+export const ID_CARD_RE = /(?<!\d)([1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx])(?!\d)/g;
+
+export const SENSITIVE_RE = new RegExp(`${PATH_RE.source}|${SECRET_PATH_RE.source}|${CRED_RE.source}|${PAYMENT_PIN_RE.source}|${BANK_CARD_RE.source}|${ID_CARD_RE.source}`, 'i');
+
+/**
+ * 隐私敏感信息脱敏：自动打码支付密码、银行卡号、身份证号
+ * @param {string} text
+ * @returns {string}
+ */
+export function maskPrivacySensitiveText(text) {
+  let s = String(text ?? '');
+  if (!s) return s;
+
+  // 1. 支付密码脱敏（保留提示词，6位数字密码打码为 ******）
+  s = s.replace(PAYMENT_PIN_RE, '$1******');
+
+  // 2. 银行卡号掩码脱敏（保留前4后4，中间打码为 ****）
+  s = s.replace(BANK_CARD_RE, (m) => {
+    const clean = m.replace(/[ -]/g, '');
+    if (clean.length < 16 || clean.length > 19) return m;
+    return clean.slice(0, 4) + '****' + clean.slice(-4);
+  });
+
+  // 3. 身份证号掩码脱敏（保留前6后4，中间打码为 ********）
+  s = s.replace(ID_CARD_RE, (m) => {
+    return m.slice(0, 6) + '********' + m.slice(-4);
+  });
+
+  return s;
+}
+
+// 判断命中类别，便于日志定位真伪。返回 null | 'path' | 'secret-path' | 'credential' | 'payment-pin' | 'bank-card' | 'id-card'
 export function sensitiveHitKind(text) {
   const s = String(text ?? '');
+  if (PAYMENT_PIN_RE.test(s)) return 'payment-pin';
+  if (BANK_CARD_RE.test(s)) return 'bank-card';
+  if (ID_CARD_RE.test(s)) return 'id-card';
   if (PATH_RE.test(s)) return 'path';
   if (SECRET_PATH_RE.test(s)) return 'secret-path';
   if (CRED_RE.test(s)) return 'credential';

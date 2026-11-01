@@ -1,6 +1,7 @@
 // 出站文本清洗
 import { KNOWN_AGENT_TOKENS } from './text-safe.js';
 import { stripImeEmoji } from './emoji.js';
+import { maskPrivacySensitiveText } from '../sensitive.js';
 
 // 只替换 KNOWN_AGENT_TOKENS 命中的令牌（不动 SENSITIVE_RE 之外的文本）
 export function redactKnownTokensOnly(text) {
@@ -56,7 +57,7 @@ const ACTION_WORD_RE = /[\u3400-\u9fffA-Za-z]/;
  * 用户原话：「当然我们仍然不希望有动作描写」。
  * 规则精细安全：成对括号内含有汉字/英文单词的（如（甩了甩尾巴）、（蹭蹭）、*笑*）判定为舞台动作，予以干净剥除；
  * 纯符号颜文字（如 ( ˘ω˘ )、(>_<)）不含文字，原样保留。 */
-let actionStripEnabled = false;
+let actionStripEnabled = true;
 /** 颜文字换行守卫（默认开）+ 一行按多少列算（默认 30；线上气泡约 31 列） */
 let kaomojiLineGuard = true;
 let kaomojiMaxCols = 30;
@@ -141,12 +142,13 @@ export function normalizeFirstPersonSelfCall(text) {
   return String(text ?? '');
 }
 
-// 出站文本统一清洗：占位符清扫 → 动作括号剥离 → 输入法 emoji 剥离 → 仅去除末尾句号（问号叹号保留）。
+// 出站文本统一清洗：占位符清扫 → 动作括号剥离 → 输入法 emoji 剥离 → 隐私/财产安全脱敏 → 仅去除末尾句号（问号叹号保留）。
 export function cleanOutboundTextDetailed(text) {
   const swept = sweepMessageArtifacts(text);
   const stripped = stripActionBrackets(swept.text);
   const noEmoji = stripImeEmoji(stripped);
-  const guarded = kaomojiLineGuard ? guardKaomojiLine(noEmoji, kaomojiMaxCols) : noEmoji;
+  const safeText = maskPrivacySensitiveText(noEmoji);
+  const guarded = kaomojiLineGuard ? guardKaomojiLine(safeText, kaomojiMaxCols) : safeText;
   return {
     text: stripTrailingPeriod(guarded),
     removedArtifacts: swept.removed,

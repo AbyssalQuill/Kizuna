@@ -366,7 +366,7 @@ export async function resolveMediaList(mediaList) {
       }
       log(`[vision] 图片${idx} 独立识图失败（${d.error}），退回附件方式发给主模型`);
     }
-    parts.push({ type: 'text', text: `[图片${idx}]` });
+    parts.push({ type: 'text', text: `\n[图片${idx}]\n` });
     parts.push({ type: 'image', mediaType: r.mimeType, data: r.buffer.toString('base64'), name: `qq-image-${idx}.${(r.mimeType || 'jpeg').split('/')[1]}` });
   }
   return parts;

@@ -380,8 +380,10 @@ export async function handleIncoming(kind, id, event, cfgRef) {
   }
 
   // 人格学习等自然语言管理指令（内部自行判定管理员；deepsleep/暂停下也即时响应，不唤醒会话）
+  // 规范化提取指令文本（剥离可能存在的前置 @机器人 以及空白，支持 / 开头指令与裸指令）
+  const cleanCmd = plainContent.replace(/^@\S+\s*/, '').trim();
   try {
-    const pr = await handlePersonaLearnCommand(plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
+    const pr = await handlePersonaLearnCommand(cleanCmd || plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
     if (pr?.handled) {
       const replyText = Array.isArray(pr.reply) ? pr.reply.join('\n') : '';
       if (replyText.trim()) await sendToQQ(key, replyText);
@@ -394,7 +396,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
   // 群友画像学习指令：只认英文 `/portrait learn|stop|status`（2026-09-24：斜杠指令只支持英文，
   // 删掉中文别名与历史简写，中文别名「画像学习」「群友画像学习」已从识别分支里删掉）——同样只认管理员，即时响应
   try {
-    const pc = await handlePortraitLearnCommand(plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
+    const pc = await handlePortraitLearnCommand(cleanCmd || plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
     if (pc?.handled) {
       const replyText = Array.isArray(pc.reply) ? pc.reply.join('\n') : '';
       if (replyText.trim()) await sendToQQ(key, replyText);
@@ -414,11 +416,12 @@ export async function handleIncoming(kind, id, event, cfgRef) {
    * 例外只有三类查数据的指令：/status、/token、/role（不带参数时列角色库）——
    * 它们回的本来就是数据，换成「收到」等于把功能删了。 */
   const CMD_ACK = '收到';
-  if (plainContent.startsWith('/')) {
-    if (/^\/slang(\s|$)/.test(plainContent)) {
+  const isSlashOrBareCmd = cleanCmd.startsWith('/') || /^(?:deepsleep|start)\b/i.test(cleanCmd);
+  if (isSlashOrBareCmd) {
+    if (/^\/slang(\s|$)/.test(cleanCmd)) {
       // /slang learn / /slang stop：立即学习黑话并打标记 / 停止在跑学习任务（handler 内部判定管理员并拦截非 owner）
       try {
-        const sr = await handleSlangSlashCommand(plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
+        const sr = await handleSlangSlashCommand(cleanCmd, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
         if (sr?.handled) {
           const slangReply = Array.isArray(sr.reply) ? sr.reply.join('\n') : '';
           if (slangReply.trim()) await sendToQQ(key, CMD_ACK);
@@ -434,7 +437,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     }
     // 2026-09-13 需求：删掉 /help（原来是发《小鲸鱼能力概览》docx）：
     // 该指令不再拦截，会按"其它 /xxx"的通用规则交给模型，由它正常回应。
-    if (plainContent === '/reset' || plainContent === '/new') {
+    if (cleanCmd === '/reset' || cleanCmd === '/new') {
       bumpSessionEpoch();
       cancelKeyedSends(key); // 取消该会话已入链的旧发送任务，避免重置后旧内容仍发出
       const old = state.sessions[key];
@@ -487,7 +490,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       await sendToQQ(key, CMD_ACK);
       return;
     }
-    if (plainContent === '/status') {
+    if (cleanCmd === '/status') {
       const rs = readRoleState();
       const silentList = listSilentSessions().map((x) => x.key);
       await sendToQQ(key, `会话 ${state.sessions[key] ?? '未创建'}；白名单 ${allowed(kind, id, cfgRef) ? '通过' : '拦截'}；角色 ${rs.role ?? '无'}；本会话静默 ${isSessionSilent(key) ? '开' : '关'}；全局静默 ${rs.mode === 'silent' ? '开（所有会话，管理端开关）' : '关'}；按会话静默中共 ${silentList.length} 个${silentList.length ? '：' + silentList.join('、') : ''}`);
@@ -498,7 +501,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
      * 口径与面板（小鲸鱼挂件记账）同源：价目/峰谷窗口/节假日表/金额公式都取自
      * core/token-pricing.js（见 core/token-report.js 顶部注释与 tests/token-pricing-parity.test.js）；
      * 单价可在 config.json 的 tokenCost 段覆盖。回复是多行短句，sendToQQ 会按行发成多个气泡。 */
-    if (plainContent === '/token' || /^\/token\s+\d{1,2}$/.test(plainContent)) {
+    if (cleanCmd === '/token' || /^\/token\s+\d{1,2}$/.test(cleanCmd)) {
       const daysArg = Number(plainContent.split(/\s+/)[1]) || 1;
       try {
         const r = buildTokenReportText({ days: daysArg });
@@ -511,7 +514,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       return;
     }
     // ── /op [del] <QQ号|昵称>：设置/取消管理员（仅账号所有者）──────────────────
-    if (plainContent === '/op' || plainContent.startsWith('/op ')) {
+    if (cleanCmd === '/op' || cleanCmd.startsWith('/op ')) {
       const rest = plainContent.slice(3).trim();
       if (!rest) {
         const curL = Array.isArray(cfgRef.adminQQ) && cfgRef.adminQQ.length ? cfgRef.adminQQ.map(String).join('、') : '（无）';
@@ -542,7 +545,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       }
       return;
     }
-    if (plainContent === '/role' || plainContent.startsWith('/role ')) {
+    if (cleanCmd === '/role' || cleanCmd.startsWith('/role ')) {
       /* 2026-09-22 修「不能切换人设 / skill」：原来这条命令走的是旧机制：读 <bridge>/roles/<名字>.md
        * 再写 current-role.json —— 而项目里 `roles/` 目录根本不存在，用户说"换成 XX 角色 / /role atri"
        * 永远只听到"角色不存在"，而且即使写成功那套也不再进提示词。
@@ -575,7 +578,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         : CMD_ACK);
       return;
     }
-    if (plainContent === '/persona' || plainContent.startsWith('/persona ')) {
+    if (cleanCmd === '/persona' || cleanCmd.startsWith('/persona ')) {
       /* 2026-10-31：单文件 .md 多人设切换与管理指令（与自带角色扮演技能库 /role 独立互不干扰）：
        *   /persona 或 /persona list      → 查看所有单文件 .md 人设及当前激活项
        *   /persona use <名称或ID>        → 切换并立即激活指定单文件人设（或直接 /persona <名称或ID>）
@@ -642,22 +645,28 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       await sendToQQ(key, `已切换单文件人设为「${res.name}」[${res.id}]，下一条消息立即生效。`);
       return;
     }
-    if (plainContent === '/silent' || plainContent === '/quiet') {
-      /* 2026-09-29 修「/silent 误静默所有会话甚至是私聊」：
-       * 原来写的是 current-role.json 的全局 mode:"silent"，一处为真 → 所有群 + 所有私聊一起闭嘴。
-       * 现在只写**本会话**的静默表（state/silent-sessions.json）；别的群/私聊照常。 */
+    // ── /silent：静默当前单会话 ──────────────────────────────────────────
+    if (/^\/(?:silent|quiet)(?:\s+on)?$/i.test(cleanCmd)) {
       const sr = setSessionSilent(key, true, { by: String(event.user_id ?? '') });
       log(`[command] ${key} /silent：只静默本会话（当前共 ${sr.sessions.length} 个会话被静默）`);
       await sendToQQ(key, CMD_ACK);
       return;
     }
-    if (/^\/(?:silent|quiet)\s+(?:off|close|stop)$/i.test(plainContent)) {
+    if (/^\/(?:silent|quiet)\s+(?:off|close|stop|false)$/i.test(cleanCmd)) {
+      const wasGlobalSilent = roleState.mode === 'silent';
       const sr = setSessionSilent(key, false);
+      if (wasGlobalSilent) writeRoleState(roleState.role, 'active');
       log(`[command] ${key} /silent off：本会话恢复（当前共 ${sr.sessions.length} 个会话被静默）`);
       await sendToQQ(key, CMD_ACK);
       return;
     }
-    if (plainContent === '/active' || plainContent === '/speak') {
+    if (/^\/(?:silent|quiet)\s+status$/i.test(cleanCmd)) {
+      const silentList = listSilentSessions().map((x) => x.key);
+      const isCurSilent = isSessionSilent(key);
+      await sendToQQ(key, `【静默状态】本会话：${isCurSilent ? '已静默' : '正常'} | 全局静默：${roleState.mode === 'silent' ? '开' : '关'} | 当前静默会话共 ${silentList.length} 个${silentList.length ? '（' + silentList.join(', ') + '）' : ''}`);
+      return;
+    }
+    if (/^\/(?:active|speak)$/i.test(cleanCmd)) {
       // 撤销本会话静默；顺手清掉历史遗留的全局静默（旧 /silent 或管理端开关留下的），
       // 否则全局为真时按会话的恢复根本看不出效果。
       const wasGlobalSilent = roleState.mode === 'silent';
@@ -667,7 +676,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       await sendToQQ(key, CMD_ACK);
       return;
     }
-    if (plainContent === '/sleep') {
+    if (/^\/sleep(?:\s+on)?$/i.test(cleanCmd)) {
       // 全程静默：不调用 DSH API，不回复，但不终结进程
       social.paused = true;
       saveSocialState();
@@ -675,21 +684,23 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       log(`[command] ${key} 执行 /sleep，AI 已暂停`);
       return;
     }
-    if (plainContent === '/wake') {
+    if (/^\/wake$/i.test(cleanCmd) || /^\/sleep\s+(?:off|stop|close|false)$/i.test(cleanCmd)) {
       social.paused = false;
       social.pausedUntil = null;
       saveSocialState();
-      // 清除可能存在的定时恢复（原写法 st._sleepTimer 里的 st 只存在于 /set sleep 分支，
-      // 本分支取不到 → ReferenceError: st is not defined，整条 /wake 抛错、既不回话也不清定时器）
       const stWk = getSocialState(key);
       if (stWk._sleepTimer) { clearTimeout(stWk._sleepTimer); stWk._sleepTimer = null; }
       await sendToQQ(key, CMD_ACK);
       log(`[command] ${key} 执行 /wake，AI 已恢复`);
       return;
     }
+    if (/^\/sleep\s+status$/i.test(cleanCmd)) {
+      await sendToQQ(key, `【Sleep 状态】AI 暂停：${social.paused ? '是' : '否'}${social.pausedUntil ? '（直至 ' + new Date(social.pausedUntil).toLocaleString('zh-CN') + '）' : ''}`);
+      return;
+    }
 
     // ── /deepsleep：静默所有群聊（私聊照常）────────────────────────────────
-    if (plainContent === '/deepsleep' || /^deepsleep$/i.test(plainContent)) {
+    if (/^(?:\/deepsleep|deepsleep)(?:\s+on)?$/i.test(cleanCmd)) {
       if (!cfgRef.social) cfgRef.social = {};
       cfgRef.social.deepsleep = true;
       fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(cfgRef, null, 2));
@@ -697,13 +708,20 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       log('[command] ' + key + ' 执行 /deepsleep（静默所有群聊）');
       return;
     }
-    // ── /start：恢复（deepsleep 反命令）
-    if (plainContent === '/start' || /^start$/i.test(plainContent)) {
+    // ── /start /deepsleep off：恢复（解除群静默）───────────────────────────
+    if (/^(?:\/start|start)$/i.test(cleanCmd) || /^(?:\/deepsleep|deepsleep)\s+(?:off|close|stop|false)$/i.test(cleanCmd)) {
       if (!cfgRef.social) cfgRef.social = {};
       cfgRef.social.deepsleep = false;
       fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(cfgRef, null, 2));
       await sendToQQ(key, CMD_ACK);
-      log('[command] ' + key + ' 执行 /start（解除群静默）');
+      log('[command] ' + key + ' 执行解除 deepsleep（恢复群聊）');
+      return;
+    }
+    // ── /deepsleep status：查询状态 ─────────────────────────────────────────
+    if (/^(?:\/deepsleep|deepsleep)\s+status$/i.test(cleanCmd)) {
+      const ds = !!cfgRef.social?.deepsleep;
+      const silentGroups = Array.isArray(cfgRef.social?.deepsleepGroups) ? cfgRef.social.deepsleepGroups : [];
+      await sendToQQ(key, `【DeepSleep 状态】全群静默：${ds ? '开启中' : '已关闭'}${silentGroups.length ? ' | 单独静默群：' + silentGroups.join(', ') : ''}`);
       return;
     }
     /* ── /set active [HH:MM-HH:MM] / /set diving [HH:MM-HH:MM] ─────────────
@@ -711,7 +729,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
      * 2026-09-23：删掉老写法 `/set mode active` / `/set mode diving`
      * （与 /set active、/set diving 完全等价，多写 "mode" 而已）。
      * 中英混写的旧写法（/set mode 活跃、/set mode 潜水）此前已按"去除中英混杂指令"删掉。 */
-    const setMode = parseSetModeCommand(plainContent);
+    const setMode = parseSetModeCommand(cleanCmd);
     if (setMode) {
       if (setMode.invalid) {
         await sendToQQ(key, CMD_ACK);
@@ -749,9 +767,9 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       return;
     }
 
-    if (plainContent.startsWith('/set sleep')) {
+    if (cleanCmd.startsWith('/set sleep')) {
       // 时间段作息：/set sleep 01:00-06:00（北京时间，每天在这个窗口内群聊只响应 @，其余不读、省 token；私聊不限制）
-      const windowMatch = plainContent.match(/^\/set sleep (\d{1,2})[:：](\d{2})\s*[~-]\s*(\d{1,2})[:：](\d{2})$/);
+      const windowMatch = cleanCmd.match(/^\/set sleep (\d{1,2})[:：](\d{2})\s*[~-]\s*(\d{1,2})[:：](\d{2})$/);
       if (windowMatch) {
         const sH = parseInt(windowMatch[1], 10), sM = parseInt(windowMatch[2], 10);
         const eH = parseInt(windowMatch[3], 10), eM = parseInt(windowMatch[4], 10);
@@ -765,7 +783,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
         return;
       }
       // 相对定时休息：/set sleep 30m 或 /set sleep 2h
-      const match = plainContent.match(/^\/set sleep (\d+)([mh])$/);
+      const match = cleanCmd.match(/^\/set sleep (\d+)([mh])$/);
       if (!match) { await sendToQQ(key, CMD_ACK); return; }
       const val = parseInt(match[1]);
       const unit = match[2] === 'h' ? 3600000 : 60000;
@@ -786,7 +804,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       log(`[command] ${key} 执行 /set sleep ${val}${match[2]}`);
       return;
     }
-    if (plainContent === '/set wake' || plainContent === '/set cancel') {
+    if (cleanCmd === '/set wake' || cleanCmd === '/set cancel') {
       social.paused = false;
       social.pausedUntil = null;
       social.sleepWindow = null;
@@ -796,9 +814,9 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       await sendToQQ(key, CMD_ACK);
       return;
     }
-    if (plainContent.startsWith('/like')) {
+    if (cleanCmd.startsWith('/like')) {
       // 手动点赞：/like 123456 或 /like 123456 5
-      const match = plainContent.match(/^\/like (\d+)(?:\s+(\d+))?$/);
+      const match = cleanCmd.match(/^\/like (\d+)(?:\s+(\d+))?$/);
       if (!match) { await sendToQQ(key, CMD_ACK); return; }
       const target = Number(match[1]);
       const times = Math.min(10, Math.max(1, Number(match[2]) || 1));

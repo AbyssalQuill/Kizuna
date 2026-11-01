@@ -349,7 +349,7 @@ export function appendTurnTailPersonaAnchor(promptText) {
    * 等于每轮都要求「先接情绪、再给表态」两步走，再接上建议/反问就成了固定的三段式。
    * 现在只留「人设优先 + 只写口语 + 句形和气泡长度都要变」，不再规定先说什么后说什么。
    * 不往这里加任何示范台词（样例会被照抄，README 也记着这条教训）。 */
-  const anchor = '[anchor] persona_first';
+  const anchor = '[action_flow] step1_batch_call: qq_load_persona + qq_get_time + qq_get_recent_messages(key,token); step2_optional_tools: qq_slang_query/qq_memory_search/web_search; step3_decide: call qq_send_message(key,token,messages) to reply, or stay silent without calling it; step4_close: reply literal OK\n';
   return base ? `${base}\n${anchor}` : anchor;
 }
 
@@ -528,7 +528,7 @@ export function buildWakePrompt(key, reason) {
   const wakeLine = `[Wake ${reason || 'message'}]\n`;
   /* 2026-10-29 主人：唤醒正文刻意不带转录，读工具结果又在回合末被剪掉 —— 不读上下文就等于失忆。
    * 这一行把 step_3 摆在正文里（生成位置附近，最省 token 的强力提示），配合 qq-tool-restrict 的门禁。 */
-  const perceptionLine = '[perception] before_speaking_call_in_one_batch: qq_load_persona + qq_get_recent_messages (or qq_get_unread_messages), then send\n';
+  const perceptionLine = '[action_flow] step1_batch_call: qq_load_persona + qq_get_time + qq_get_recent_messages(key,token); step2_optional_tools: qq_slang_query/qq_memory_search/web_search; step3_decide: call qq_send_message(key,token,messages) to reply, or stay silent without calling it; step4_close: reply literal OK\n';
   /* 2026-10-29：自主动唤醒（追念 / 主动看顾）必须带一条「没有新东西就别说话」。
    * 线上实测这类唤醒占了不小比例，且经常补一句和上一条几乎一样的话 —— 用户体感就是「不聪明」。 */
   const selfInitiated = /^(afterthought|proactiveCheck|timeout|activityStart|timeout|replyCheck)$/.test(String(reason || ''));
@@ -1760,7 +1760,7 @@ export async function sendWakePrompt(key, reason) {
       const burstGuidance = unreadMsgs.length >= 2
         ? (isGroup
           ? '\n[burst] group_smart_target_via_replyToMessageId_or_atUserId_or_direct_naturally'
-          : '\n[burst] many_in_one_reply_any_order_pick_what_matters_no_need_to_answer_each')
+          : '\n[burst] single_concise_reply_picking_what_matters_most')
         : '';
       unreadLine = `\n[Unread ${unreadAll.length}] ${lines.join('\n')}${burstGuidance}${groupActivityLine}`
         + (omitted > 0 ? `\n(${omitted} older unread not shown)` : '');
@@ -1850,7 +1850,8 @@ export async function sendWakePrompt(key, reason) {
         ? `[NOT-OWNER]\n`
       : '';
       const dynContext = buildDynamicTurnContext(key, st, reason).trim();
-      const rawPrompt = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]\n${atLine}\n${clockLine}\n${diceBlock}\n${recallLine}\n${dynContext}\n${unreadLine}`;
+      const perceptionPrompt = '[action_flow] step1_batch_call: qq_load_persona + qq_get_time + qq_get_recent_messages(key,token); step2_optional_tools: qq_slang_query/qq_memory_search/web_search; step3_decide: call qq_send_message(key,token,messages) to reply, or stay silent without calling it; step4_close: reply literal OK\n';
+      const rawPrompt = `[Token] ${st.agentToken}\n${nowSentinel}${ownerTag}${trustedHereTag}${notOwnerTag}[Session] ${key}\n[Wake ${reasonTag}]\n${perceptionPrompt}${atLine}\n${clockLine}\n${diceBlock}\n${recallLine}\n${dynContext}\n${unreadLine}`;
       promptText = rawPrompt.replace(/\n{2,}/g, '\n').trim();
     }
   } else {
@@ -1916,6 +1917,9 @@ export async function sendWakePrompt(key, reason) {
     const fullActive = st?.wakeConfig?.mode === 'active' || st?.wakeConfig?.triggers?.anyMessage === true;
     const actLine = key.startsWith('group:') ? activityStatusLine(key, fullActive) : '';
     if (actLine) promptText = `${promptText}\n${actLine}`;
+    if (wakeMedia && wakeMedia.length > 0) {
+      promptText = `${promptText}\n[Media Note] An image from the chat is attached directly to this turn. Look at the image content and chat about it naturally.`;
+    }
     // 2026-10-27：每轮唤醒在最终投递给模型的末尾全量注入人设与最高优先级说话口吻，
     // 享受 Transformer RoPE 最小衰减距离，赋予人设最高的自注意力权重，彻底解决工具调用稀释人设问题！
     promptText = appendTurnTailPersonaAnchor(promptText);

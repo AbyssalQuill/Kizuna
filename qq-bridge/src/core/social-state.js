@@ -1297,7 +1297,7 @@ export function suggestQuietMs(st) {
  * @param {number} limit 本次最多附几张
  * @returns {{media:Array, floor:number}} floor = 这批里真的采纳了图的最大 seq（调用方在投递成功后落账）
  */
-export function pickAttachableMedia(msgs, floor = 0, limit = MAX_MEDIA_COUNT) {
+export function pickAttachableMedia(msgs, floor = 0, limit = MAX_MEDIA_COUNT, unreadSeqs = null) {
   const out = [];
   const floor0 = Number(floor) || 0;
   const cap = Math.max(0, Number(limit) || 0);
@@ -1307,7 +1307,9 @@ export function pickAttachableMedia(msgs, floor = 0, limit = MAX_MEDIA_COUNT) {
     if (!m || m.isSelf) continue;
     if (!Array.isArray(m.media) || m.media.length === 0) continue;
     const seqN = Number(m.seq) || 0;
-    if (seqN > 0 && seqN <= floor0) continue; // 已经附图过的消息不再重复附
+    const isUnread = unreadSeqs && unreadSeqs.has(seqN);
+    // 已经附图过的已读历史不再重复附；但若该消息仍在未读列表（尚未被AI回复），必须保持图片可见
+    if (seqN > 0 && seqN <= floor0 && !isUnread) continue;
     let added = false;
     for (const md of m.media) {
       if (out.length >= cap) break;
@@ -1339,8 +1341,8 @@ export function collectFreshWakeMedia(key, st) {
     if (!m || m.isSelf) continue;
     const seqN = Number(m.seq) || 0;
     if (!(unreadSeqs.has(seqN) || Number(m.time) > lastAiT)) continue;
-    // 挑选规则走 pickAttachableMedia（在途注入那条路用同一套，见该函数注释）
-    const picked = pickAttachableMedia([m], attachedFloor, MAX_MEDIA_COUNT - out.length);
+    // 挑选规则走 pickAttachableMedia（若在未读列表中，即便上一轮唤醒附送过但未回复，也依然保持图片送达）
+    const picked = pickAttachableMedia([m], attachedFloor, MAX_MEDIA_COUNT - out.length, unreadSeqs);
     if (!picked.media.length) continue;
     out.push(...picked.media);
     if (picked.floor > maxSeqSeen) maxSeqSeen = picked.floor;
