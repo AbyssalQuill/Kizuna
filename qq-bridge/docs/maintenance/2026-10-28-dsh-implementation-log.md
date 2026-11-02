@@ -2540,3 +2540,36 @@ node --check tools/sanitize-full-payload.mjs → OK
 [sticker] 同步收藏表情失败: fetch_custom_face(_detail) 不可用
 ```
 `state/` 在出厂脱敏时整个删掉（含 `stickers.json`），新装机器第一次要从 NapCat 拉收藏表情；这条动作在随包的 NapCat 44498 Shell 里没通，于是收藏表情库永远为空。这是 NapCat 侧的动作支持问题，与表情包本体无关，单独再查。
+
+## 53. 2026-11-03 打包链路收口：表情包政策翻回、出厂配置去硬编码、提示词在线更新、发现并清掉硬编码 key
+
+### 53.1 表情包：09-24 的「出厂不带」政策是本次故障的另一半
+- `build-kizuna-app.mjs:ensureMemePayload()` 从 09-24 起是**反向**的：payload 里残留的表情包就地清掉，`assertBuiltPayloadHasMeme()` 断言「不许有」。
+- 所以哪怕源码仓库里 `meme/` 齐备，走这个构建脚本也一定会产出**没有表情包**的包 —— 与用户反馈「打包后表情包发不出来」直接对应。
+- 现在翻回来：源缺失 → **拒绝构建**；构建后断言 `whale-fanart-001/index.db` 存在且文件数 ≥150；要回到精简出厂包必须显式 `KIZUNA_NO_MEME=1`。
+- 本次 5.0.1 构建时该政策已生效过一次（断言打印「OK 按要求不含表情包」），已手动把 190 个文件的包补回 `win-unpacked`，并用 7z 开包复核。
+
+### 53.2 出厂 config.json：不再抄开发机
+- `sanitize-full-payload.mjs` 原来把 `model: 'deepseek-v4-flash-vision-exp'` **写死**，并把开发机的 `reasoningEffort=low`、`toolCompressor.level=max` 整份抄进出厂配置。
+- 现在 provider/model/effort/compressor 全部取自包内 `config.example.json`；`enum model` 留空 = 交给 DSH 默认模型。
+- 构建新增 `assertBuiltPayloadConfig()`：产物里出现 `*vision-exp` 或 `ownerQQ≠0` 就拒绝出包（空 model 是允许的，它是「不写死」的形态）。
+
+### 53.3 模型名去硬编码（全仓扫过）
+- `src/core/config.js` 默认 `model: ''`；`src/core/tunables.js` 留空就不写 `agent-default-model`；
+- `src/lib/dsh-side.js` 两处写死（temperature 的 `models: deepseek-flash`、memory 的 `model: deepseek-v4-flash`）改为「配置里有才写」；
+- `config.example.json` 的 `dsH.model` 一并留空。
+
+### 53.4 系统提示词在线更新（`src/core/prompt-update.js`）
+- 桥启动、安装 preset **之前**先拉一次远端预设（GitHub Contents API；实测 raw.githubusercontent / jsdelivr 在国内均不可达，api.github.com 200）。
+- 4 个文件白名单 + 结构校验（`agent.cordis.yml` 必须含 `[PERSONA]` 与 `persona` 段）+ 原子写 + 失败回滚；6 小时最小间隔；拉到新版本后 `bumpSessionEpoch()` 让所有会话在下一轮重建。
+- 配置：`social.promptUpdate { enabled, checkOnStart, apiBase, rawBase, ref, minIntervalMs }`，已写进 `config.example.json`。
+
+### 53.5 安全：构建闸门拦下一把硬编码 key
+- 首次 `npm run build` 时 sanitize 报：`scripts/run_direct_deepseek_benchmark.mjs` 含 `sk-c7286deb…`（Gemini 在 3afa548 加的实验脚本）。
+- 该提交 **已推到公开仓库**（`AbyssalQuill/Kizuna` 为 public，pushat 2026-11-02T06:30Z）——这把 key 必须当作已泄露、去控制台吊销轮换。代码侧已改成读 `DEEPSEEK_API_KEY` 环境变量。
+
+### 53.6 验证
+- `npm run check`：ALL PASS（38 项）；
+- `--dir-only` 构建：`DONE OK`（1320s），配置断言 `model=(空) effort=max compressor=medium ownerQQ=0`；
+- 表情包补入后 190 个文件 / `index.db` 106496 字节；
+- 7z 开包断言（见 53.1）。
