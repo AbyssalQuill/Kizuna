@@ -122,7 +122,7 @@ export function watchOverrideFiles({ home, root, log = () => {}, onChange = null
     const one = (name) => {
       try { const s = fs.statSync(path.join(root, name)); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; }
     };
-    return `${one('persona.md')}|${one('speech-rules.md')}`;
+    return `${one('persona.md')}|`;
   };
   let prev = stamp();
   const timer = setInterval(() => {

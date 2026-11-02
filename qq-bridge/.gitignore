@@ -30,3 +30,5 @@ config.json
 /scripts/patch-default-presleep.mjs
 /scripts/patch-default-stickers.mjs
 /scripts/patch-web-mcp-timeout.mjs
+
+.archive/
