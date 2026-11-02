@@ -2500,3 +2500,43 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
 - `bash tools/deploy-and-reset.sh`：重启 + 重置 4 个会话 + 体检；
 - `/root/.dsh/.agent-presets/qq-chat/agent.cordis.yml` 与仓库内文件 sha256 一致（9ca11e63…）；
 - 探针会话 `819802d9` 的 system/message 命中回滚后的提示词标记；探针工作区已删除。
+
+## 52. 2026-11-02 「打包后表情包发不出来」定位：不是表情包没进包，是出厂 config.json 把模型写死成已下架的实验模型
+
+### 52.1 先把「没进包」这个假设排除
+用 7-Zip 直接读成品安装包（不依赖任何中间产物）：
+```
+7z l "Kizuna Setup 5.0.0.exe" | grep -c meme   → 212
+7z l "Kizuna Setup 5.0.0.exe" | grep -c .webp  → 185
+```
+`Kizuna\resources\runtime\meme\whale-fanart-001\` 连 184 张 `.webp` 带 `index.db` 一起在包里（3.5.0 只有 5 条代码里提到 meme 的字符串，没有表情包本体）。所以「打包把表情包弄丢了」不成立。
+
+### 52.2 真正的问题：出厂配置是从开发机整份抄进去的
+把包里的 `resources/runtime/qq-bridge/config.json` 抽出来看：
+```
+dsh.model            = deepseek-v4-flash-vision-exp   ← 2026-09 的实验识图模型，早已从服务商目录下架
+dsh.reasoningEffort  = low
+social.toolCompressor= { enabled: true, level: "max" }  ← 只暴露 3 个包装工具，先 list 再 schema 再 invoke
+```
+而同一个包里发出去的 `config.example.json` 写的是 `deepseek-flash / max / medium` —— 出厂配置和出厂示例自相矛盾。
+后果链：新装用户第一次建会话 → `session.selectModel` 报 `model-unavailable` → 模型一个字都出不来 → 群里看着就是「不理人 / 表情包发不出来」。10-30 那次线上 13 小时全线 `model-unavailable`，根因也是这个 id。
+源头在 `QQ-Bridge-packaging/tools/sanitize-full-payload.mjs`：它读开发机上的 `D:\Kizuna\...\config.json` 做脱敏，然后把 `model: 'deepseek-v4-flash-vision-exp'` **写死**进结果。
+
+### 52.3 改动
+1. `sanitize-full-payload.mjs`：出厂 `provider / model / reasoningEffort` 与 `social.toolCompressor` 一律取自包内 `config.example.json`（唯一权威来源），example 缺失才回退常量；日志打印实际写进去的值。
+2. `build-kizuna-app.mjs`：新增 `assertBuiltPayloadConfig()`，构建后断言产物里 `config.json` 的 `dsh.model` 非空且不是 `*vision-exp`、`ownerQQ === 0`，否则拒绝出包。
+
+### 52.4 验证
+```
+node --check tools/sanitize-full-payload.mjs → OK
+跑一遍 sanitize（构建被中途打断，sanitize 已完成）：
+  runtime-full/qq-bridge/config.json → model=deepseek-flash effort=max compressor=medium ownerQQ=0
+```
+（同一轮构建中途被 120s 工具超时打断；`kizuna-app/package.json` 与 `package.json.bak-build` 逐字节一致，没有残留变体配置。）
+
+### 52.5 另一个独立故障：收藏表情同步失败
+打包实例的 `state/bridge.log` 里有：
+```
+[sticker] 同步收藏表情失败: fetch_custom_face(_detail) 不可用
+```
+`state/` 在出厂脱敏时整个删掉（含 `stickers.json`），新装机器第一次要从 NapCat 拉收藏表情；这条动作在随包的 NapCat 44498 Shell 里没通，于是收藏表情库永远为空。这是 NapCat 侧的动作支持问题，与表情包本体无关，单独再查。
