@@ -6,7 +6,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
-const API_KEY = 'sk-c7286deb2009489d8f8596c3f52355df';
+/* 2026-11-02：这里原来硬编码了一把 DeepSeek API key，还随 commit 3afa548 推到了公开仓库 ——
+ * 构建的凭证闸门因此拒绝出包（它是拦对了）。脚本改用环境变量，缺了就直接退出：
+ *   DEEPSEEK_API_KEY=sk-... node scripts/run_direct_deepseek_benchmark.mjs
+ * 提醒：那把已经泄露的 key 必须去控制台吊销/轮换，删代码不等于删历史。 */
+const API_KEY = String(process.env.DEEPSEEK_API_KEY || '').trim();
+if (!API_KEY) {
+  console.error('[benchmark] 缺 DEEPSEEK_API_KEY 环境变量：DEEPSEEK_API_KEY=sk-... node scripts/run_direct_deepseek_benchmark.mjs');
+  process.exit(2);
+}
 const ANTHROPIC_URL = 'https://api.deepseek.com/anthropic/v1/messages';
 
 // 仅读取单文件 persona.md（绝无 speech-rules.md）
