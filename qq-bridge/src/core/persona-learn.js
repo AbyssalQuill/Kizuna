@@ -123,7 +123,14 @@ async function applyPersonaLearnerModel(sessionId) {
       reasoningEffort: cfgRef?.persona?.reasoningEffort,
     });
   } catch (e) {
-    log('设置人格学习会话模型/推理档位失败（继续使用当前会话）:', e?.message ?? e);
+    const msg = String(e?.message ?? e);
+    /* 2026-11-02：会话日志损坏必须往上抛，不能吞。
+     * 现场：persona 学习会话 a21df33f 的日志末尾「step/end 之后又来一条 developer/message」，
+     * DSH 判 corrupt → 每次 resume 都失败。原来这里把错误吞掉（"继续使用当前会话"），
+     * 于是 ensurePersonaLearnerSession 认为会话可用，紧接着的 prompt 被拒，
+     * 每 31 分钟失败一次、空转一整天，人设学习等于停摆。 */
+    if (/is corrupt|SessionFormatError|SessionQueryError|resume failed|stored log is corrupt/i.test(msg)) throw e;
+    log('设置人格学习会话模型/推理档位失败（继续使用当前会话）:', msg);
   }
 }
 
@@ -138,14 +145,24 @@ export async function ensurePersonaLearnerSession() {
   if (saved?.sessionId) {
     // 同 slang：复用前先确认 DSH 侧还认得这个会话（0.2.1 起会话按 cwd 分目录，旧 id 会失效）
     if (await learnSessionExistsForRestore(saved.sessionId)) {
-      personaLearnerSessionId = String(saved.sessionId);
-      learnerSessions.add(personaLearnerSessionId);
-      markPersistentLearner(personaLearnerSessionId);
-      await applyPersonaLearnerModel(personaLearnerSessionId);
-      return personaLearnerSessionId;
+      /* 2026-11-02：会话"存在"不等于"读得出来"。日志被 DSH 判 corrupt 时，resume/selectModel 全部失败，
+       * 复用它就等于把学习引擎钉死在一个永远读不出来的会话上。这里捕获后丢弃 + 归档，落到下面重建。 */
+      try {
+        personaLearnerSessionId = String(saved.sessionId);
+        learnerSessions.add(personaLearnerSessionId);
+        markPersistentLearner(personaLearnerSessionId);
+        await applyPersonaLearnerModel(personaLearnerSessionId);
+        return personaLearnerSessionId;
+      } catch (e) {
+        log(`人格学习会话已损坏，丢弃并重建：${saved.sessionId}（${String(e?.message ?? e).slice(0, 200)}）`);
+        const deadId = personaLearnerSessionId;
+        invalidatePersonaLearnerSession();
+        if (deadId) { try { await apiRef?.workspace?.archiveSession?.({ sessionId: deadId }); } catch {} }
+      }
+    } else {
+      log(`人格学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
+      try { fs.unlinkSync(PERSONA_SESSION_FILE); } catch {}
     }
-    log(`人格学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
-    try { fs.unlinkSync(PERSONA_SESSION_FILE); } catch {}
   }
   if (!apiRef) throw new Error('人格学习 API 未注入（setPersonaLearnApi 未调用）');
   const dir = path.join(STATE_DIR, 'persona-agent');

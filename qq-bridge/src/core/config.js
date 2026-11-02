@@ -20,7 +20,12 @@ export function loadConfig() {
       // 不写死本机路径；config.json 或环境变量 QQB_DSH_BASE_URL 可覆盖。
       baseUrl: process.env.QQB_DSH_BASE_URL || 'http://127.0.0.1:10721',
       provider: 'deepseek-official',
-      model: 'deepseek-v4-flash-vision-exp',
+      /* 2026-11-02 主人：「修一下识图模型硬编码问题」。
+       * 这里原来写死 deepseek-v4-flash-vision-exp —— 一个早已下架的实验识图模型。
+       * 配置文件里没写 dsh.model 时（全新部署 / 换机 / 手改配置漏字段），主模型就会指向它，
+       * 后果是每个会话 selectModel 全灭：model-unavailable，整条链路哑掉 13 小时（10-30 事故）。
+       * 现在默认取正式主模型；识图模型一律走 dsh.visionModel（留空=跟随主模型），不在这里写死。 */
+      model: 'deepseek-flash',
       temperature: 1.0,
       reasoningEffort: 'max',
       ...(file.dsh ?? {})

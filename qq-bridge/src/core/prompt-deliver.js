@@ -171,6 +171,18 @@ export async function deliverPromptNow(key, promptText, opts = {}) {
   if (!accepted.result.ok) {
     const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
     const safeErrText = shouldAuditKey(key) && SENSITIVE_RE.test(errText) ? '（含敏感信息，已隐藏）' : errText;
+    /* 2026-11-02：会话日志损坏时自动重建并重投一次。
+     * 现场：session-91a22012 / a21df33f 的日志末尾都是「step/end 之后又来一条 developer/message」，
+     * DSH 重放校验判它 corrupt，之后这个会话每次 resume 都失败 —— 桥原来只把错误原样发给用户
+     * （⚠️ 消息未被接受 …），那个会话就永久哑掉，对群友来说等于"机器人掉线"。
+     * 现在：识别到损坏 → 隔离旧会话（归档 + 清映射）→ 立刻用新会话把同一批内容重投。
+     * 只重试一次（_retriedCorrupt），避免坏会话把投递链拖死。 */
+    const corrupt = /is corrupt|SessionFormatError|SessionQueryError|stored log is corrupt|does not match an open turn|resume failed/i.test(errText);
+    if (corrupt && !opts._retriedCorrupt) {
+      log(`[default] ${key} 的会话 ${sessionId} 日志损坏，隔离重建后重投一次：${safeErrText.slice(0, 200)}`);
+      quarantineSession(key, sessionId);
+      return deliverPromptNow(key, promptText, { ...opts, _retriedCorrupt: true });
+    }
     if (!opts.silent) await sendToQQ(key, `⚠️ 消息未被接受：${safeErrText}`);
     return { ok: false, error: safeErrText };
   }

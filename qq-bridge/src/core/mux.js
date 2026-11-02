@@ -292,6 +292,23 @@ function isDuplicateInbound(key, messageId) {
   return false;
 }
 
+/* 2026-11-02 主人：「@机器人加指令也能用」。
+ * 原来清指令用「^@\S+ 后跟空白」那套正则剥前缀：@名字 与指令紧贴（`@小鲸鱼/role list`）时 \S+ 贪婪吃掉 /role，
+ * 群名片里带空格也剥不干净 —— 指令于是永远认不出来，最后被当成普通聊天交给模型。改成按消息段剥，
+ * 只丢开头连续的 at 段与纯空白文本段；@ 与指令紧贴、多个 @、名字带空格都能正确还原。
+ * 返回 null 表示没有可剥的前缀（调用方沿用原来的 plainContent）。 */
+export function stripLeadingMentions(segments) {
+  const list = Array.isArray(segments) ? segments : [];
+  let i = 0;
+  while (i < list.length) {
+    const seg = list[i];
+    if (seg?.type === 'at') { i += 1; continue; }
+    if (seg?.type === 'text' && !String(seg.data?.text ?? '').trim()) { i += 1; continue; }
+    break;
+  }
+  return i === 0 ? null : list.slice(i);
+}
+
 export async function handleIncoming(kind, id, event, cfgRef) {
   const key = convKey(kind, id);
   if (!modeAllowed(key, kind, id, cfgRef, currentMode)) {
@@ -381,7 +398,10 @@ export async function handleIncoming(kind, id, event, cfgRef) {
 
   // 人格学习等自然语言管理指令（内部自行判定管理员；deepsleep/暂停下也即时响应，不唤醒会话）
   // 规范化提取指令文本（剥离可能存在的前置 @机器人 以及空白，支持 / 开头指令与裸指令）
-  const cleanCmd = plainContent.replace(/^@\S+\s*/, '').trim();
+  const cmdSegments = stripLeadingMentions(event.message ?? []);
+  const cleanCmd = (cmdSegments
+    ? await segmentsToText(cmdSegments, { resolveAtName, includeReply: false })
+    : plainContent).trim();
   try {
     const pr = await handlePersonaLearnCommand(cleanCmd || plainContent, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
     if (pr?.handled) {
@@ -412,9 +432,12 @@ export async function handleIncoming(kind, id, event, cfgRef) {
   // 英文规范写法；中文说法(如「画像学习」)与历史简写(如 /slanglearn)都不再拦截。
   // 自然语言说法(转活跃/潜水吧/别理群了…)一律放给模型自然调用——由 AI 自己决定并走
   // qq_set_wake_config / qq_set_activity_hours 等工具完成, 桥不硬性截胡、不回模板话。
-  /* 2026-10-24 主人要求：所有 / 与正则英文指令只用「收到」应答，不再回一长句寒暄。
-   * 例外只有三类查数据的指令：/status、/token、/role（不带参数时列角色库）——
-   * 它们回的本来就是数据，换成「收到」等于把功能删了。 */
+  /* 2026-10-24 主人要求：/ 与正则英文指令只用「收到」应答，不再回一长句寒暄。
+   * 2026-11-02 主人澄清：「之前我说把正则全改为收到是误解，普通指令可以，但是信息类要报」——
+   * 动作类（/active /silent /wake /deepsleep /set …）回「收到」；
+   * 信息类（/status /token /role /persona /slang /like /set sleep status …）必须把真实数据/结果发出来，
+   * 而且整条一次发完，不许分成好几口气泡（现场证据：2026-11-01 00:12 主人发 `/list`，
+   * 桥没认出来交给模型，模型分了 6 条气泡刷 21 个角色包）。 */
   const CMD_ACK = '收到';
   const isSlashOrBareCmd = cleanCmd.startsWith('/') || /^(?:deepsleep|start)\b/i.test(cleanCmd);
   if (isSlashOrBareCmd) {
@@ -423,16 +446,19 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       try {
         const sr = await handleSlangSlashCommand(cleanCmd, { key, kind, isOwner, senderUid: String(event.user_id ?? '') });
         if (sr?.handled) {
-          const slangReply = Array.isArray(sr.reply) ? sr.reply.join('\n') : '';
-          if (slangReply.trim()) await sendToQQ(key, CMD_ACK);
+          /* 2026-11-02：这是信息类（学了多少词、学没学成），把 handler 的原话一次发出去。 */
+          const slangReply = Array.isArray(sr.reply) ? sr.reply.join('\n') : String(sr.reply ?? '');
+          if (slangReply.trim()) await sendToQQ(key, slangReply);
           return;
         }
       } catch (error) {
         log('黑话指令处理出错:', error?.message ?? error);
       }
     }
+    /* 2026-11-02 主人：「只有管理员能使用」。原来非管理员也回一句「收到」——
+     * 既等于告诉群友指令被吃了，又在群里制造一条噪音。现在直接静默忽略，只留一行日志。 */
     if (!isOwner) {
-      await sendToQQ(key, CMD_ACK);
+      log(`[command] 忽略非管理员指令 ${key}（${event.user_id}）：${cleanCmd.slice(0, 60)}`);
       return;
     }
     // 2026-09-13 需求：删掉 /help（原来是发《小鲸鱼能力概览》docx）：
@@ -545,14 +571,17 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       }
       return;
     }
-    if (cleanCmd === '/role' || cleanCmd.startsWith('/role ')) {
+    /* 2026-11-02：`/list` `/ls` `/roles` 等价于 `/role list`（信息类，一次发完，不分段）。 */
+    const isBareListCmd = /^\/(?:list|ls|roles?)$/i.test(cleanCmd);
+    if (cleanCmd === '/role' || cleanCmd.startsWith('/role ') || isBareListCmd) {
       /* 2026-09-22 修「不能切换人设 / skill」：原来这条命令走的是旧机制：读 <bridge>/roles/<名字>.md
        * 再写 current-role.json —— 而项目里 `roles/` 目录根本不存在，用户说"换成 XX 角色 / /role atri"
        * 永远只听到"角色不存在"，而且即使写成功那套也不再进提示词。
        * 现在直接接角色库（characters/，与 qq_character_list 同一套解析）：合成整张卡 → 原子写 persona.md
        * （带备份）→ 下一条唤醒就重注入，不需要重启、不打断在跑回合。斜杠命令本来就不分群/私聊
        * （上面的 isOwner 闸门是唯一权限判据），所以管理端在群里也能切。 */
-      const want = plainContent.slice(5).trim();
+      // 2026-11-02：原来从 plainContent 切，带 @机器人 前缀时会切错位置；改从 cleanCmd 切。
+      const want = isBareListCmd ? 'list' : cleanCmd.slice(5).trim();
       /* 2026-09-24：斜杠指令只支持英文，删掉中文别名与历史简写 ——
        * 原来这条还认 `/role 默认` / `/role 清除` / `/role 关闭` 三个中文子命令别名，已全部删除；
        * 清除角色只认英文 `clear|off|none|default`（`/role clear` 是文档里的规范写法）。 */
@@ -584,7 +613,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
        *   /persona use <名称或ID>        → 切换并立即激活指定单文件人设（或直接 /persona <名称或ID>）
        *   /persona save <名称>           → 将当前生效的 persona.md 另存为一个新的单文件人设
        *   /persona del <名称或ID>        → 删除指定单文件人设 */
-      const rawArg = plainContent.slice(8).trim();
+      const rawArg = cleanCmd.slice(8).trim();
       const subMatch = rawArg.match(/^(list|ls|use|switch|save|del|delete|rm)\b\s*(.*)$/i);
       const action = subMatch ? subMatch[1].toLowerCase() : (rawArg && rawArg !== '?' ? 'use' : 'list');
       const targetArg = subMatch ? subMatch[2].trim() : rawArg;
@@ -732,7 +761,7 @@ export async function handleIncoming(kind, id, event, cfgRef) {
     const setMode = parseSetModeCommand(cleanCmd);
     if (setMode) {
       if (setMode.invalid) {
-        await sendToQQ(key, CMD_ACK);
+        await sendToQQ(key, '用法：/set active [HH:MM-HH:MM] 或 /set diving [HH:MM-HH:MM]（不带时段 = 全天）');
         return;
       }
       const stm = getSocialState(key);
@@ -820,11 +849,13 @@ export async function handleIncoming(kind, id, event, cfgRef) {
       if (!match) { await sendToQQ(key, CMD_ACK); return; }
       const target = Number(match[1]);
       const times = Math.min(10, Math.max(1, Number(match[2]) || 1));
+      /* 2026-11-02：点赞是"做了事"，成功/失败都得说清 —— 原来两条分支都回「收到」，
+       * 失败时主人以为点上了。 */
       try {
         await botRef.raw('send_like', { user_id: target, times });
-        await sendToQQ(key, CMD_ACK);
+        await sendToQQ(key, `已给 ${target} 点赞 ${times} 次`);
       } catch (error) {
-        await sendToQQ(key, CMD_ACK);
+        await sendToQQ(key, `点赞失败：${error?.message ?? error}`);
       }
       return;
     }
@@ -1391,8 +1422,25 @@ export async function pumpMux() {
                 const lw = String(getSocialState(key)?.lastWakeReason ?? '').split(':')[0];
                 const isExplicitWake = key.startsWith('private:') || /^(atMention|poke|question)$/.test(lw);
 
+                /* 2026-11-02 主人：「查一下掉线问题，我这边反正没掉线，是别人那里」。
+                 * 掉线的真身就是这一段：回合出错，聊天框里一个字都没有。10-31 02:41~15:29（北京）
+                 * 每个回合都是 session/model-unavailable，群里只看到"机器人不理人"，只有日志里看得见。
+                 * 所以把「通道级」故障（模型不可用 / 会话日志损坏 / provider 挂了）单独拎出来：
+                 * 群友侧继续静默（不往群里发报错），但给主人发一条私聊，同一类错误每小时最多一条。 */
+                const isChannelDown = /model-unavailable|model_unavailable|no available model|is corrupt|SessionFormatError|SessionQueryError|resume failed|provider.{0,20}unavailable/i.test(msg);
+                if (isChannelDown) {
+                  const nowMs = Date.now();
+                  if (!globalThis._channelDownNoticeAt || nowMs - globalThis._channelDownNoticeAt > 3600000) {
+                    globalThis._channelDownNoticeAt = nowMs;
+                    const ownerQQ = String(cfgRef?.ownerQQ ?? '').trim();
+                    if (ownerQQ) {
+                      void sendToQQ('private:' + ownerQQ, `⚠️ 通道级故障：${safeMsg.slice(0, 200)}\n（这个会话 ${key} 的群友侧保持静默）`).catch(() => {});
+                    }
+                  }
+                  log(`[channel-down] ${key}: ${msg.slice(0, 300)}`);
+                }
                 // 任何错误都只写日志，不向聊天框发送提示语
-                log(`[agent-err] ${key} 错误已静默处理 (contentFiltered=${isContentFiltered}, internalError=${isInternalError}, explicitWake=${isExplicitWake})`);
+                log(`[agent-err] ${key} 错误已静默处理 (contentFiltered=${isContentFiltered}, internalError=${isInternalError}, explicitWake=${isExplicitWake}, channelDown=${isChannelDown})`);
               }
             } else if (ended.reason.kind === 'aborted') {
               // 回合被取消/终止：只在日志记录，不再向聊天框广播「已停止」等确认话

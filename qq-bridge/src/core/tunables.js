@@ -55,7 +55,7 @@ export const TUNABLE_SPECS = [
   { key: 'typingRefreshOnMessage', path: ['social', 'typing', 'refreshOnMessageMs'], type: 'dur', min: 0, max: 30000, label: '收到消息后续多少毫秒', desc: 'QQ 的输入状态事件不可靠：收到对方一条消息就认为"他还在打字"，续这么久（默认 5000ms）。不停发消息时打字状态就一直是连续的' },
   // —— 模型相关（改完会同步给隔离 DSH 的 agent-default-model，见 applyTunable）——
   { key: 'modelProvider', path: ['dsh', 'provider'], type: 'str', modelGroup: true, label: '模型服务商', desc: 'deepseek-official=DeepSeek 官方（默认）；xiaomi-token-plan-cn=小米 MiMo；空=自动探测用 DSH 端默认' },
-  { key: 'model', path: ['dsh', 'model'], type: 'str', modelGroup: true, label: '主模型', desc: '如 deepseek-v4-flash / deepseek-v4-flash-vision-exp / deepseek-v4-pro / mimo-v2.5；留空=DSH 默认' },
+  { key: 'model', path: ['dsh', 'model'], type: 'str', modelGroup: true, label: '主模型', desc: '如 deepseek-flash / deepseek-v4-pro / mimo-v2.5；留空=DSH 默认（识图跟随主模型，不要再填 vision-exp）' },
   { key: 'visionModel', path: ['dsh', 'visionModel'], type: 'str', modelGroup: true, label: '识图模型', desc: '留空=跟随主模型（默认多模态）；配了 visionBaseUrl 时用它指定的模型读图' },
   { key: 'visionBaseUrl', path: ['dsh', 'visionBaseUrl'], type: 'str', label: '识图模型请求地址', desc: 'OpenAI 兼容地址（填到 /v1 为止）。留空=图片当附件发给主模型（老路）' },
   { key: 'visionApiKey', path: ['dsh', 'visionApiKey'], type: 'str', label: '识图模型密钥', desc: '只在配了「识图模型请求地址」时用；本机自建服务可留空' },
@@ -173,7 +173,8 @@ export function syncDshAgentDefaultModel() {
   if (!home || !fs.existsSync(sp)) { log('[tunable] 未找到隔离 DSH settings.yaml，跳过同步:', sp); return { synced: false, reason: 'settings.yaml 不存在: ' + sp }; }
   let s = fs.readFileSync(sp, 'utf8');
   const prov = String(cfgObj.dsh.provider || '').trim() || 'deepseek-official';
-  const model = String(cfgObj.dsh.model || '').trim() || 'deepseek-v4-flash-vision-exp';
+  // 2026-11-02：兜底模型改成正式主模型（原来指向已下架的识图实验模型，见 core/config.js 同处说明）。
+  const model = String(cfgObj.dsh.model || '').trim() || 'deepseek-flash';
   const rawEff = String(cfgObj.dsh.reasoningEffort || '').trim();
   const eff = rawEff.toLowerCase() === 'auto' ? '' : rawEff;
   if (/agent-default-model:/.test(s)) {

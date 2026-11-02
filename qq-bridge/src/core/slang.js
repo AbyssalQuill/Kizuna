@@ -59,7 +59,10 @@ export function isLearnerSessionGone(message) {
   const msg = String(message ?? '').trim();
   if (!msg) return false;
   if (/超时|timeout|timed\s*out/i.test(msg)) return false;
-  return /not[\s._-]*found|no such session|unknown session|invalid session|404|会话(不存在|已失效|无效)/i.test(msg);
+  /* 2026-11-02：会话日志损坏（DSH 判 corrupt）在行为上等于"这个会话没救了"，
+   * 和 not found 一样必须丢弃重建；不认出来就会一直拿它 prompt、一直吃 resume failed。
+   * 现场：黑话学习会话 689a8130、人格学习会话 a21df33f、群会话 91a22012 都是同一个错。 */
+  return /not[\s._-]*found|no such session|unknown session|invalid session|404|会话(不存在|已失效|无效)|is[\s._-]*corrupt|stored log is corrupt|SessionFormatError/i.test(msg);
 }
 
 /**
@@ -121,7 +124,10 @@ async function applySlangLearnerModel(sessionId) {
       reasoningEffort: cfgRef?.slang?.reasoningEffort,
     });
   } catch (e) {
-    log('设置黑话学习会话模型/推理档位失败（继续使用当前会话）:', e?.message ?? e);
+    const msg = String(e?.message ?? e);
+    // 2026-11-02：损坏必须往上抛，让 ensureSlangLearnerSession 丢弃重建（原样吞掉 = 永久空转）。
+    if (/is corrupt|SessionFormatError|SessionQueryError|stored log is corrupt/i.test(msg)) throw e;
+    log('设置黑话学习会话模型/推理档位失败（继续使用当前会话）:', msg);
   }
 }
 
@@ -135,13 +141,22 @@ export async function ensureSlangLearnerSession() {
   if (saved?.sessionId) {
     // 复用前探活：DSH 侧会话没了就丢掉登记、走下面的新建，别让后续 prompt 反复 not found
     if (await learnSessionExistsForRestore(saved.sessionId)) {
-      slangLearnerSessionId = String(saved.sessionId);
-      learnerSessions.add(slangLearnerSessionId);
-      await applySlangLearnerModel(slangLearnerSessionId);
-      return slangLearnerSessionId;
+      // 2026-11-02：存在不等于读得出来 —— 日志损坏时丢弃 + 归档，落到下面重建。
+      try {
+        slangLearnerSessionId = String(saved.sessionId);
+        learnerSessions.add(slangLearnerSessionId);
+        await applySlangLearnerModel(slangLearnerSessionId);
+        return slangLearnerSessionId;
+      } catch (e) {
+        log(`黑话学习会话已损坏，丢弃并重建：${saved.sessionId}（${String(e?.message ?? e).slice(0, 200)}）`);
+        const deadId = slangLearnerSessionId;
+        invalidateSlangLearnerSession();
+        if (deadId) { try { await apiRef?.workspace?.archiveSession?.({ sessionId: deadId }); } catch {} }
+      }
+    } else {
+      log(`黑话学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
+      try { fs.unlinkSync(SLANG_SESSION_FILE); } catch {}
     }
-    log(`黑话学习会话已失效（DSH 侧不存在），重建：${saved.sessionId}`);
-    try { fs.unlinkSync(SLANG_SESSION_FILE); } catch {}
   }
   const dir = path.join(STATE_DIR, 'slang-agent');
   fs.mkdirSync(dir, { recursive: true });

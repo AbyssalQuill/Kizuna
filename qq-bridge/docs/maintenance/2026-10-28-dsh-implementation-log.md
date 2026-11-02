@@ -2455,3 +2455,48 @@ Hausdorff 4 / 3.059 / Lean / 23 次共八个数字，群里当场说「有刷屏
   - 同步部署至 `/root/qq-bridge/src/core/media-pipe.js`（MD5: `b6c4430fa712914a8458a082529ecb1c`）；
   - 远端真机运行 `resolveOneMedia` 实测成功：`ok=true mime=image/png len=76912`，本地缓存命中验证成功；
   - `systemctl restart qq-bridge` 服务处于 active 状态。
+
+## 51. 2026-11-02 指令应答分层 + @机器人指令 + 系统提示词回滚到 10-28 + 识图模型硬编码 + 会话日志损坏自愈
+
+### 51.1 指令：信息类要报、一次发完；操作类才回「收到」
+- **主人口径**：「把指令正则改掉，比如 list，角色就该一次发完而不分段，之前我说把正则全改为收到是误解，普通指令可以，但是信息类要报」。
+- **现场证据**（chat.db `private:1736784911`，2026-11-01 00:12:33）：主人发 `/list`，桥没认出来 → 交给模型 → 模型用 **6 条气泡**（id 45820–45825）刷了 21 个角色包。这就是“分段”的真身，不是桥在拆条。
+- **改动（`src/core/mux.js`）**：
+  1. `/list` `/ls` `/roles` 归一为 `/role list`（信息类，由桥一条发完，不再交给模型）；
+  2. `/slang` 不再拿「收到」盖掉 handler 的真实结果；`/like` 成功/失败分别回「已给 … 点赞 N 次」/「点赞失败：…」；`/set active|diving` 参数非法回用法；
+  3. `/role` `/persona` 的子参数改从 `cleanCmd` 切（原来切 `plainContent`，带 @ 前缀时位置错位）。
+- **@机器人 + 指令**：原来 `cleanCmd` 用「^@ + 非空白 + 空白」剥前缀，`@小鲸鱼/role list` 这种紧贴写法会把 `/role` 一起吃掉。改为按消息段剥（`stripLeadingMentions`）：丢掉开头连续的 `at` 段与纯空白文本段，名字带空格、多个 @、紧贴都能还原。真模块实测：`@小鲸鱼 /role list` / `@小鲸鱼/role list` / `@a @b /silent` 全部还原成正确指令。
+- **仅管理员**：非管理员的斜杠指令原来回一句「收到」（等于告诉群友指令被吃了），现在静默忽略，只留一行日志。
+
+### 51.2 系统提示词回滚到 2026-10-28 23:40（23e42c9）
+- 主人：「恢复以前的系统提示词，大概周三吧」。
+- 取 `23e42c9:qq-bridge/dsh/agent-presets/qq-chat/agent.cordis.yml` 的 `persona.text` 块（五步动作流 + 100+ 工具按需调用 + 四条硬规则），只把 10-31 更名的 `get_time` 换成 `qq_get_time`（桥侧没有别名）。
+- 插件图（tool-web / qq-tool-restrict / qq-persona-ephemeral / compaction）保持线上现状，不动。
+- **验证**：新会话 `session-819802d9` 的 `system/message` 里 `action_flow`、`step_1_load_persona_first_and_unconditionally` 各命中 1 次；11-01 那版极简提示词的标记 `role_rp_agent` 命中 0 次。
+
+### 51.3 识图模型硬编码
+- `src/core/config.js` 的 `dsh.model` 默认值原本写死 `deepseek-v4-flash-vision-exp`（已下架的实验识图模型）；`src/core/tunables.js` 同步 `settings.yaml` 时的兜底也是它。
+- 后果：配置文件漏写 `dsh.model` 时主模型直接指向不存在的模型 → `selectModel` 全灭 → 整条链路 13 小时 `model-unavailable`（10-30 事故的同类根因）。
+- 现在两处默认值都改成 `deepseek-flash`；识图模型只走 `dsh.visionModel`（留空 = 跟随主模型）。
+### 51.4 会话日志损坏 → 自动重建，不再永久哑掉
+- **报错**：`resume failed … stored log is corrupt: SessionFormatError: developer/message does not match an open turn and step`。
+- **根因**（逐字节看日志）：会话日志末尾是 `step/end(seq 69)` → `developer/message(seq 70, source=tool-registry, surfaceOp=replace)` → `turn/end(71)`。DSH 0.2.1-rc.2 的写入端在 step 关闭后才补工具表 surface，而它自己的重放校验（`dsh-session-persistence-jsonl/lib/worker.cjs:9815` 的 `requireOpenStep`）要求该事件落在打开中的 step 里 —— 于是这份日志一旦重放就判 corrupt，之后每次 resume 都失败。四个会话（群 91a22012、人格 a21df33f、黑话 689a8130 等）是同一个死法。
+- **桥侧三处自愈**：
+  1. `src/core/prompt-deliver.js`：`sessions.prompt` 返回 `ok:false` 且命中 corrupt 系措辞时，隔离旧会话（归档 + 清映射）并用新会话**重投同一批内容**（只重试一次），失败才把「⚠️ 消息未被接受」发出去。
+  2. `src/core/persona-learn.js` / `src/core/slang.js`：`applyLearnerModel` 不再吞掉损坏错误；`ensureXLearnerSession` 捕获后 invalidate + 归档 + 重建。`isLearnerSessionGone` 也把 corrupt 当作「没了」。
+- **线上验证**：04:43:13 `人格学习会话已损坏，丢弃并重建：a21df33f` → `已创建 a7edd416`；04:46:07 `黑话学习会话已损坏，丢弃并重建：689a8130` → `已创建 d4bd9878`，首轮说明注入成功，随后一次手动学习 `added: 20`。人格学习 `status` 返回 `learnedAtMs` 就是刚刚，档案正常。
+
+### 51.5 掉线取证（「我这边没掉线，是别人那里」）
+按小时统计 chat.db 的进/出（10-30 ~ 11-02）：
+- **真有「只进不出」的小时**：10-31 的 00/01、07/08、10、12、13 点（进 94 条、出 0 条那种），整段落在 10-30 18:41 UTC ~ 10-31 07:29 UTC 的 `model-unavailable` 窗口里 —— 每个回合都失败，群里只看到机器人不理人。
+- **另一类**：10-31 18:33 起大量「静默模式，忽略群友消息（本会话静默）」—— `/silent` 是按会话的、没有 TTL、也没有任何提示，群友只能自己发现它不说话了。
+- **不是掉线**：11-01 03:00–12:00 北京时没有任何消息进出（凌晨没人说话），桥当场还在正常跑 proactive。
+- 新增可见性：回合以 `error` 结束时，若错误属「通道级」（model-unavailable / 会话损坏 / provider 不可用），群里继续静默，但给主人发一条私聊，每小时最多一条；日志记 `[channel-down]`。
+
+### 51.6 验证
+- `node scripts/check-scope.mjs`：127 个文件无未定义标识符；
+- `node tools/test-slash-commands.mjs`：ALL PASS（39 项）；`node tests/access-control.test.js`：24/24；
+- 6 个改动文件本地/远端 sha256 全部一致；
+- `bash tools/deploy-and-reset.sh`：重启 + 重置 4 个会话 + 体检；
+- `/root/.dsh/.agent-presets/qq-chat/agent.cordis.yml` 与仓库内文件 sha256 一致（9ca11e63…）；
+- 探针会话 `819802d9` 的 system/message 命中回滚后的提示词标记；探针工作区已删除。
