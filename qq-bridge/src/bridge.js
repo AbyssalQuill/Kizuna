@@ -111,6 +111,9 @@ import {
   ensureSession, ensureVisionModel, bumpSessionEpoch,
   initDshSessionCore, setDshSessionApi, dshReady, setDshReady,
 } from './core/dsh-session.js';
+/* 2026-11-02：系统提示词在线更新（主人：「希望以后更新系统提示词内置的更新能拉取上」）。
+ * 启动时先问一次远端，拉到就写回 <bridge>/dsh/agent-presets/qq-chat/，紧接着的 installPresets 装进 DSH。 */
+import { maybeUpdatePrompt } from './core/prompt-update.js';
 import {
   saveSlangStore, queueSlangTask, invalidateSlangLearnerSession, runSlangExtraction,
   runSlangResearch, maybeQueueSlangExtraction, feedSlangWindow, allowSlangSubmit,
@@ -250,6 +253,16 @@ async function main() {
       // 不是用户数据；而原来的逻辑是"装过一次就靠 marker 全跳过"，导致改了 agent.cordis.yml
       // 之后重启桥根本不会把新 preset 装进去（实测活体 preset 一直停在旧哈希）。
       // MCP/插件那些开销大的部分仍由 marker 把关，不受影响。
+      /* 2026-11-02：装 preset 之前先拉一次远端提示词。顺序不能反 —— installPresets 是把
+       * <bridge>/dsh/agent-presets 拷进 DSH home，先更新源、再安装，这一次启动就吃到新版本。
+       * 有更新就 bump 代际：系统提示词是建会话那刻烧进 history 的，不重建会话等于没更新。 */
+      try {
+        const pu = await maybeUpdatePrompt(cfg);
+        if (pu.updated.length) {
+          log(`[prompt-update] 新提示词已就位：${pu.updated.join(', ')}；已标记全部会话在下一轮重建`);
+          bumpSessionEpoch();
+        }
+      } catch (e) { log('[prompt-update] 检查失败（忽略，继续用本地预设）:', e?.message ?? e); }
       try {
         installPresets(target);
         log(`[dsh-side] preset 已刷新到 ${path.join(target.home, '.agent-presets')}`);

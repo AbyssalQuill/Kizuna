@@ -2,7 +2,7 @@
   "dsh": {
     "baseUrl": "http://127.0.0.1:10721",
     "provider": "deepseek-official",
-    "model": "deepseek-flash",
+    "model": "",
     "reasoningEffort": "max",
     "apiKey": "",
     "visionModel": "",
@@ -114,6 +114,13 @@
   },
   "social": {
     "enabled": true,
+    "promptUpdate": {
+      "enabled": true,
+      "checkOnStart": true,
+      "ref": "main",
+      "minIntervalMs": 21600000
+    },
+
     "autoReplyCheckMs": 30000,
     "agentPreset": "qq-chat",
     "provideRecommendations": true,

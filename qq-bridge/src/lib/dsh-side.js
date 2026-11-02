@@ -704,17 +704,23 @@ export function patchProfileCordis(target) {
   const tempBegin = '# === qq-bridge temperature BEGIN ===';
   const tempEnd = '# === qq-bridge temperature END ===';
   const tempVal = Number(sideCfg?.dsh?.temperature ?? 1.0) || 1.0;
-  const tempBlock =
-    `${tempBegin}\n` +
-    `- id: temperature-knob\n` +
-    `  config:\n` +
-    `    withoutThinkingOnly: true\n` +
-    `    temperature: ${tempVal}\n` +
-    `    providers:\n` +
-    `      deepseek-official: ${tempVal}\n` +
-    `    models:\n` +
-    `      deepseek-flash: ${tempVal}\n` +
-    `${tempEnd}\n`;
+  /* 2026-11-02 主人：「模型别再硬编码名字」。
+   * 这一段原来写死 `models: deepseek-flash: <temp>` —— 服务商一改模型 id，温度就悄悄不生效了
+   * （父级 providers 兜底，但按模型覆盖那层永远落空）。现在只写"配置里真有"的模型；
+   * 没配模型就只留 provider 级温度，交给 DSH 自己的模型用。 */
+  const tempProvider = String(sideCfg?.dsh?.provider || '').trim() || 'deepseek-official';
+  const tempModel = String(sideCfg?.dsh?.model || '').trim();
+  const tempBlock = [
+    tempBegin,
+    '- id: temperature-knob',
+    '  config:',
+    '    withoutThinkingOnly: true',
+    `    temperature: ${tempVal}`,
+    '    providers:',
+    `      ${tempProvider}: ${tempVal}`,
+    ...(tempModel ? ['    models:', `      ${tempModel}: ${tempVal}`] : []),
+    tempEnd,
+  ].join('\n') + '\n';
 
   if (text.includes(tempBegin) && text.includes(tempEnd)) {
     text = text.replace(/[^\n]*# === qq-bridge temperature BEGIN ===[\s\S]*?# === qq-bridge temperature END ===[^\n]*/, tempBlock.trimEnd());
@@ -941,11 +947,12 @@ export function ensureMemorySettings(target) {
   if (isDesktopDshHome(target.home)) throw new Error(`refuse: desktop home ${target.home}`);
   const file = path.join(target.home, 'settings.yaml');
   const { provider, model } = readDefaultModel(target.home);
+  /* 2026-11-02：「模型别再硬编码名字」。原来没配模型时写死 deepseek-v4-flash（旧名），
+   * 现在不写 model/reviewModel 两行 —— memory 插件会用 DSH 自己的默认模型。 */
   const lines = [
     'memory:',
     `  provider: ${provider || 'deepseek-official'}`,
-    `  model: ${model || 'deepseek-v4-flash'}`,
-    `  reviewModel: ${model || 'deepseek-v4-flash'}`,
+    ...(model ? [`  model: ${model}`, `  reviewModel: ${model}`] : []),
     '  warmupOnStart: true',
     '  autoExtract: true',
     '  extractMode: event-counter',
