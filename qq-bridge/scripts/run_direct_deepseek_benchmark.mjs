@@ -105,7 +105,7 @@ async function callDeepSeek(messages) {
       messages,
       tools,
       tool_choice: { type: 'function', function: { name: 'qq_send_message' } },
-      temperature: 1.1
+      temperature: 0.85
     })
   });
   if (!resp.ok) {
