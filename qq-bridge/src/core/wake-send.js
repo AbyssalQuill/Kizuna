@@ -222,6 +222,17 @@ export function evaluateWakeTrigger(key, st, event, kind, textContent, plainCont
     }
   }
 
+  /* 2026-11-03 主人：「把那个 QQ 图片自动回复功能删除，它每轮唤醒烧了我好多钱」。
+   * 群成员只发一张图（没有文字、没 @ 我、没引用我）时，原来照样走 probability 触发一次完整唤醒：
+   * 一次唤醒 = 整包系统提示 + 全部工具 schema + 一轮模型调用，只有一张图可看，性价比极低。
+   * 现在默认**不再为纯图片消息唤醒**；要恢复旧行为，把 config 的 social.wakeOnImage 设成 true。
+   * 带文字的消息、@ 我 / 引用我的消息、管理员发言，都照旧触发。 */
+  const hasImageSegment = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'image');
+  if (hasImageSegment) {
+    const textWithoutMediaTags = String(plainContent ?? '').replace(/\[[^\]]*\]/g, '').trim();
+    if (!textWithoutMediaTags && !atSelf && !quoteTargetIsSelf && !isOwner && cfgRef?.social?.wakeOnImage !== true) return null;
+  }
+
   // 提问触发
   if (tr.question && !atSomeoneElse && !repliesToSomeoneElse && isDirectedAtAi(plainContent)) return 'question';
 
