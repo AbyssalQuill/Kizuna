@@ -112,49 +112,95 @@ export function saveStickerStoreSafe() {
   try { saveStickerStore(STICKER_FILE, stickerEntries); } catch (error) { log('保存表情库失败:', error?.message ?? error); }
 }
 
-// 从 NapCat OneBot 拉取 QQ 账号收藏表情（fetch_custom_face_detail），并合并进本地库。
-// force=true 时忽略 TTL 强制刷新；失败时返回 null（调用方决定是否使用缓存）。
+// 从 NapCat OneBot 拉取 QQ 账号收藏表情（fetch_custom_face_detail / fetch_custom_face），并合并进本地库。
+// force=true 时忽略 TTL 强制刷新；失败时优雅降级并返回现有本地库。
 export async function syncStickerLibrary(force = false) {
-  if (stickerCfg.social?.sticker?.enabled === false) return null;
-  const rawTtl = Number(stickerCfg.social?.sticker?.syncTtlMs);
+  if (stickerCfg?.social?.sticker?.enabled === false) return null;
+  const rawTtl = Number(stickerCfg?.social?.sticker?.syncTtlMs);
   const ttl = Number.isFinite(rawTtl) ? Math.max(0, rawTtl) : 60000;
   const now = Date.now();
   if (!force && stickerSyncedAt && now - stickerSyncedAt < ttl) {
     return { entries: stickerEntries, syncedAt: stickerSyncedAt, fromCache: true };
   }
   try {
-    const count = Math.min(500, Math.max(1, Number(stickerCfg.social?.sticker?.maxListCount) || 100));
-    // NapCat 4.18：fetch_custom_face_detail 返回富对象（md5/resId/url/desc），
-    // fetch_custom_face 只返回字符串 URL 数组（2026-09-06 实测 4.18.19）。优先 detail；
-    // detail 不可用再回退 fetch_custom_face 并按 URL 推导 md5（尾段大写 MD5）。
+    const count = Math.min(500, Math.max(1, Number(stickerCfg?.social?.sticker?.maxListCount) || 100));
     let payload = null;
-    try { payload = await botRef.request('fetch_custom_face_detail', { count }); }
-    catch (e0) {
-      if (!String(e0?.message ?? '').includes('fetch_custom_face')) throw e0;
-      payload = null;
+
+    // 通道 1: OneBot WebSocket（botRef.request）
+    if (botRef && typeof botRef.request === 'function') {
+      try {
+        payload = await botRef.request('fetch_custom_face_detail', { count });
+      } catch (e0) {
+        payload = null;
+      }
+      if (payload == null) {
+        try {
+          payload = await botRef.request('fetch_custom_face', { count });
+        } catch (e1) {
+          payload = null;
+        }
+      }
     }
-    if (payload === null || payload === undefined) {
-      try { payload = await botRef.request('fetch_custom_face', { count }); }
-      catch (e1) { payload = null; if (!String(e1?.message ?? '').includes('fetch_custom_face')) throw e1; }
+
+    // 通道 2: OneBot HTTP API 备选降级（若 WS 尚未握手就绪或繁忙超时）
+    if (payload == null && stickerCfg?.napcat?.httpUrl) {
+      const httpBase = String(stickerCfg.napcat.httpUrl).replace(/\/+$/, '');
+      const token = String(stickerCfg.napcat.accessToken || stickerCfg.napcat.wsAccessToken || '').trim();
+      const headers = { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) };
+      try {
+        const res = await fetch(`${httpBase}/fetch_custom_face_detail`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ count }),
+          signal: AbortSignal.timeout(6000)
+        });
+        if (res.ok) {
+          const body = await res.json().catch(() => null);
+          if (body?.status === 'ok' || body?.retcode === 0) payload = body.data ?? body;
+        }
+      } catch {}
+      if (payload == null) {
+        try {
+          const res = await fetch(`${httpBase}/fetch_custom_face`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ count }),
+            signal: AbortSignal.timeout(6000)
+          });
+          if (res.ok) {
+            const body = await res.json().catch(() => null);
+            if (body?.status === 'ok' || body?.retcode === 0) payload = body.data ?? body;
+          }
+        } catch {}
+      }
     }
-    if (payload === null || payload === undefined) throw new Error('fetch_custom_face(_detail) 不可用');
+
+    if (payload == null) {
+      log(`[sticker] NapCat 收藏表情服务暂未就绪（QQ 可能刚启动或未登录）；暂用本地库（${stickerEntries.length} 条）`);
+      return { entries: stickerEntries, syncedAt: stickerSyncedAt, fromCache: true };
+    }
+
     const arr = Array.isArray(payload)
       ? payload
       : (Array.isArray(payload?.data) ? payload.data
         : (Array.isArray(payload?.list) ? payload.list
           : (Array.isArray(payload?.faces) ? payload.faces
             : (Array.isArray(payload?.customFaceList) ? payload.customFaceList : null))));
-    if (!Array.isArray(arr)) throw new Error('fetch_custom_face 返回结构无法识别，已放弃同步');
+    if (!Array.isArray(arr)) {
+      log('[sticker] NapCat 收藏表情返回结构未识别，暂保留本地库');
+      return { entries: stickerEntries, syncedAt: stickerSyncedAt, fromCache: true };
+    }
+
     // 从收藏 URL（…/0 或 …/<md5>_0_0）提取尾段大写 MD5；取不到才保留原值。
     const md5FromUrl = (u) => {
       const s = String(u ?? '');
       const m = /([0-9A-F]{32})(?:_0_0|\/0|\/|$)/i.exec(s);
       return m ? m[1].toUpperCase() : '';
     };
+
     const fetched = arr.map((f) => {
       const o = (f && typeof f === 'object') ? f : null;
       if (typeof f === 'string' && f.trim()) {
-        // fetch_custom_face：纯 URL 字符串项 → url 本身即图片地址，id 取 md5
         const url = f.trim();
         const md5 = md5FromUrl(url);
         const emojiId = md5 || url;
@@ -174,24 +220,29 @@ export async function syncStickerLibrary(force = false) {
         name: String(src.name ?? src.emojiName ?? src.emoji_name ?? '').slice(0, 60)
       };
     }).filter(Boolean);
+
     // 2026-09-12 修「收藏表情库被清空」：NapCat 刚重启/QQ 缓存还没就绪时，`fetch_custom_face` 会
     // **成功地返回空数组**（不是报错）。而下面的 `mergeStickerLibrary` 语义是"以 fetch 到的为准"，
-    // 于是空数组会把本地整库抹掉 —— 实测 2026-09-12 01:29:57 启动时 19 条收藏表情被清成 0 条，
-    // 之后再没有自动恢复（同步有 TTL，且只有在被调用时才会跑）。
-    // 空结果绝不覆盖已有库：那不是"用户清空了收藏"，只是对面还没准备好。
-    if (fetched.length === 0 && stickerEntries.length > 0) {
-      stickerSyncedAt = Date.now();
-      log(`[sticker] NapCat 本次返回 0 个收藏表情（多为 QQ 刚重启、缓存未就绪）—— 保留本地 ${stickerEntries.length} 条，不覆盖`);
+    // 于是空数组会把本地整库抹掉。
+    // 空结果绝不覆盖已有库；若新机初始本身为 0，不锁定 TTL，留待后续有会话时快速自动重试。
+    if (fetched.length === 0) {
+      if (stickerEntries.length > 0) {
+        stickerSyncedAt = Date.now();
+        log(`[sticker] NapCat 本次返回 0 个收藏表情（多为 QQ 刚重启、缓存未就绪）—— 保留本地 ${stickerEntries.length} 条，不覆盖`);
+      } else {
+        log(`[sticker] NapCat 本次返回 0 个收藏表情（QQ 刚启动/未登录/或该账号无收藏表情）—— 本地库暂保持空，待后续就绪后重试`);
+      }
       return { entries: stickerEntries, syncedAt: stickerSyncedAt, fromCache: false };
     }
+
     stickerEntries = mergeStickerLibrary(stickerEntries, fetched);
     stickerSyncedAt = Date.now();
     saveStickerStoreSafe();
     log(`[sticker] 已同步 QQ 收藏表情 ${fetched.length} 个（本地库 ${stickerEntries.length} 条）`);
     return { entries: stickerEntries, syncedAt: stickerSyncedAt, fromCache: false };
   } catch (error) {
-    log(`[sticker] 同步收藏表情失败: ${error?.message ?? error}`);
-    return null;
+    log(`[sticker] 同步收藏表情异常: ${error?.message ?? error}`);
+    return { entries: stickerEntries, syncedAt: stickerSyncedAt, fromCache: true };
   }
 }
 

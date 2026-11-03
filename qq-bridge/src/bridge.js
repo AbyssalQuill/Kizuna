@@ -579,12 +579,23 @@ async function main() {
   setMuxBot(bot);
   setConsoleBot(bot);
   setDshWatchBot(bot);
+  let lastEmptyStickerSyncAttempt = 0;
+  const maybeSyncEmptyStickers = () => {
+    if (cfg.social?.sticker?.enabled === false) return;
+    if (Array.isArray(stickerEntries) && stickerEntries.length > 0) return;
+    const now = Date.now();
+    if (now - lastEmptyStickerSyncAttempt < 15000) return;
+    lastEmptyStickerSyncAttempt = now;
+    syncStickerLibrary(false).catch(() => {});
+  };
   bot.onPrivateMessage(async (event) => {
     if (event.user_id === event.self_id) return;
+    maybeSyncEmptyStickers();
     try { await handleIncoming('private', event.user_id, event, cfg); } catch (error) { log('处理私聊消息出错:', error?.message ?? error); }
   });
   bot.onGroupMessage(async (event) => {
     if (event.sender?.user_id === event.self_id || event.user_id === event.self_id) return;
+    maybeSyncEmptyStickers();
     try { await handleIncoming('group', event.group_id, event, cfg); } catch (error) { log('处理群消息出错:', error?.stack ?? error?.message ?? error); }
   });
   bot.onNotice('notify', async (event) => {
@@ -684,6 +695,12 @@ async function main() {
     napcatUp = true;
     log(`NapCat 已连接：${cfg.napcat.wsUrl}`);
     void probeNapcatLogin({ force: true }).catch(() => {});
+    // 刚建立连接时 QQ 可能仍在就绪，延迟 3 秒静默尝试预热一次表情库
+    if (cfg.social?.sticker?.enabled !== false) {
+      setTimeout(() => {
+        syncStickerLibrary(true).catch(() => {});
+      }, 3000);
+    }
   });
   bot.on('close', (info) => {
     napcatUp = false;

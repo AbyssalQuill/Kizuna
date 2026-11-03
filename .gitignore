@@ -104,4 +104,5 @@ pnpm-workspace.yaml
 /QQ-Bridge-packaging/
 **/.syncbak-*/
 /tools/_*.ps1
+/qq-bridge/scripts/sync_to_vps.mjs
 

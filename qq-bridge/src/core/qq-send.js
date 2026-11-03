@@ -257,7 +257,7 @@ export async function onebotSend(kind, id, message, replyToMessageId, atUserId =
         break;
       }
       // 2. 内置同人表情包 (whale-fanart-001) - 排除最近发过的表情
-      const memeHit = resolveArtifactMeme(token, '/root/whale-fanart-001', recentMemes);
+      const memeHit = resolveArtifactMeme(token, undefined, recentMemes);
       if (memeHit?.file) {
         try {
           const buf = fs.readFileSync(memeHit.file);
