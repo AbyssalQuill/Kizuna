@@ -892,144 +892,6 @@ export function ensurePluginBundles(target) {
   }
 }
 
-/* ── 内置长期记忆插件（@meomeo-dev/dsh-memory）────────────────────────────────────────
- * 2026-09-20：把桌面端 DSH 的记忆插件（remember）集成到项目内置 dsh 里，
- * 目的是让 QQ 机器人长久记住用户的要求和教训（跨会话），而不是只靠每次唤醒的上下文。
- *
- * 为什么走"随包 vendored + link"这条路（而不是让目标机 npm install）：
- *   · 装机环境经常没网/没 npm，链式安装会在客户机上失败，而这是出厂能力；
- *   · 与 qq-mode-console / dsh-qq-hold 两个自带插件同一套落点约定，行为可预期；
- *   · 插件只有 peerDependencies（cordis / dsh-tools / dsh-llm / dsh-settings / dsh-system-prompt），
- *     这些由随包 DSH 发行版提供，所以源码直接放进 plugins/ 就能加载，不需要它的 node_modules。
- * 落点（幂等，Windows 用 junction、Linux 用 symlink）：
- *   ① <home>/plugins/dsh-memory                     → <qq-bridge>/plugins/dsh-memory
- *   ② <home>/profiles/node_modules/@meomeo-dev/dsh-memory → 同一份源码（profile 共享安装面）
- *   ③ <profile>/package.json 的 dependencies + dsh.profile.bundles 注册这个 bundle
- *   ④ settings.yaml 的 memory 段：provider/model 跟着本实例的 agent-default-model 走
- *      （否则默认值 deepseek-official 在非官方 provider 的实例上会让 recall/抽取一直失败） */
-export const MEMORY_PLUGIN_PKG = '@meomeo-dev/dsh-memory';
-const MEMORY_PLUGIN_DIRNAME = 'dsh-memory';
-
-/** 读 <home>/settings.yaml 里的 agent-default-model（provider/model）——极简解析，够用且不引依赖。 */
-export function readDefaultModel(home) {
-  try {
-    const text = fs.readFileSync(path.join(home, 'settings.yaml'), 'utf8');
-    const block = /(?:^|\n)agent-default-model:[\s\S]*?(?=\n\S|$)/.exec(text);
-    if (!block) return { provider: '', model: '' };
-    /* 必须**按行首锚定**再取 key：块里第一行是 `agent-default-model:` 本身，
-     * 宽松的 /model:\s*(...)/ 会命中它内部的 "model:" 尾巴，把下一行的 "provider:" 当成模型名
-     * （2026-09-20 实测踩到：settings 里写成了 model: provider:）。 */
-    const provider = /^[ \t]+provider:[ \t]*([^\s#]+)/m.exec(block[0]);
-    const model = /^[ \t]+model:[ \t]*([^\s#]+)/m.exec(block[0]);
-    return { provider: provider?.[1] ?? '', model: model?.[1] ?? '' };
-  } catch { return { provider: '', model: '' }; }
-}
-
-/**
- * 把 memory 段写进 <home>/settings.yaml（幂等：已有 memory 段就整段替换，其余内容一字不动）。
- * `summaryMode: all` 是故意的：这个插件只把 global 层逐条注入系统提示词，user/project 层只给计数，
- * 而 remember 工具只允许写 user/project 两层 —— 用默认的 global 模式，机器人自己写下的要求/教训
- * 每次都得先 recall 一次模型调用才看得见。用 all 模式它们一直都在眼前（代价是每步多几百~几千字符，
- * 见 README 的用量说明；条目写少而精就不明显）。
- *
- * 2026-09-21：成本实测后改 extractInterval：8 → 40（把这类重建减半）。
- * 拿线上 14 天、5,326 次请求复盘账单发现：72% 的钱花在"未命中输入"，而其中 42% 来自单次重读 ≥60k token
- * 的请求（平均一次重读 116,925 token、单次 ¥0.155），成因就是上下文被重建 —— 而这个插件的记忆摘要
- * 写在系统提示词里，每写一条记忆就把整个前缀作废一次（实测 09-20 一天 132 次 prune + 78 次 summary）。
- * `extractMode: event-counter` + `extractInterval` 决定"攒多少个事件提炼一次"：
- *   8  → 平均每 8 个事件就可能写一条 → 一天十几次前缀作废；
- *   40 → 频率降到 1/5，省下的正是那 42% 里的一大块。
- * 代价是"自动学到的规矩/教训"入库变慢（仍然会学，只是没那么勤）；用户显式说"记住…"时走的是
- * qq_memory_remember / remember 工具，不受这个间隔影响。
- * 要恢复更勤的学习：把 extractInterval 改回小值，或把 autoExtract 设为 false 彻底关掉自动提炼。
- */
-export function ensureMemorySettings(target) {
-  if (isDesktopDshHome(target.home)) throw new Error(`refuse: desktop home ${target.home}`);
-  const file = path.join(target.home, 'settings.yaml');
-  const { provider, model } = readDefaultModel(target.home);
-  /* 2026-11-02：「模型别再硬编码名字」。原来没配模型时写死 deepseek-v4-flash（旧名），
-   * 现在不写 model/reviewModel 两行 —— memory 插件会用 DSH 自己的默认模型。 */
-  const lines = [
-    'memory:',
-    `  provider: ${provider || 'deepseek-official'}`,
-    ...(model ? [`  model: ${model}`, `  reviewModel: ${model}`] : []),
-    '  warmupOnStart: true',
-    '  autoExtract: true',
-    '  extractMode: event-counter',
-    '  extractInterval: 40',
-    '  summaryMode: all',
-    '  recallTopK: 10',
-    '  maxNodeKb: 600',
-  ].join('\n');
-  let text = '';
-  try { text = fs.readFileSync(file, 'utf8'); } catch { /* 首次：文件还不存在 */ }
-  const re = /(^|\n)memory:[\s\S]*?(?=\n\S|$)/;
-  const next = re.test(text) ? text.replace(re, `\n${lines}`) : `${text.trimEnd()}${text.trim() ? '\n' : ''}${lines}\n`;
-  try {
-    fs.writeFileSync(file, next.endsWith('\n') ? next : `${next}\n`, 'utf8');
-    log(`settings.yaml memory 段已就位（provider=${provider || '(默认)'} model=${model || '(默认)'}）`);
-    return true;
-  } catch (e) { warn(`写 settings.yaml 失败：${e?.message ?? e}`); return false; }
-}
-
-/** 幂等装配内置记忆插件，返回是否装配成功。
- *
- * 这里必须是真实拷贝，不能像其它插件那样只做 junction —— 2026-09-20 实测踩到：
- *   `Cannot find package '@deepseek-ai/dsh-tools' imported from <repo>/plugins/dsh-memory/lib/src/index.js`
- * 原因：Node 解析裸包名时按真实路径向上找 node_modules。用 junction 指回仓库时，真实路径是
- * `<repo>/qq-bridge/plugins/dsh-memory`，往上只有 `qq-bridge/node_modules`（出厂只带了 schemastery，
- * 因为 qq-mode-console 恰好只用它）；而这个插件 import 了 @deepseek-ai/dsh-tools / dsh-llm / dsh-settings /
- * dsh-system-prompt / dsh-commands —— 仓库里一个都没有，于是整棵插件树加载失败（隔离 DSH 直接起不来）。
- * 真实拷贝到 `<home>/profiles/node_modules/@meomeo-dev/dsh-memory` 后，向上解析会命中
- * `<home>/profiles/node_modules`（= 随包 DSH 的扁平安装面，上面几个包都在），与 npm 装出来的市场插件同一条路。
- * 拷贝用签名（版本 + 文件数 + 字节数 + 最新 mtime）判新旧，变了才重拷，启动开销可忽略。 */
-export function ensureMemoryPlugin(target) {
-  if (isDesktopDshHome(target.home)) throw new Error(`refuse: desktop home ${target.home}`);
-  const repoPlugin = path.join(REPO_ROOT, 'plugins', MEMORY_PLUGIN_DIRNAME);
-  if (!fs.existsSync(path.join(repoPlugin, 'package.json'))) {
-    warn(`记忆插件源码不存在，跳过：${repoPlugin}`);
-    return false;
-  }
-  const destDir = path.join(target.home, 'profiles', 'node_modules', ...MEMORY_PLUGIN_PKG.split('/'));
-  const sigFile = path.join(destDir, '.qqbridge-vendored.json');
-  const sig = sourceSignature(repoPlugin);
-  let needCopy = true;
-  try {
-    const prev = JSON.parse(fs.readFileSync(sigFile, 'utf8'));
-    if (prev && prev.sig === sig && fs.existsSync(path.join(destDir, 'lib', 'src', 'index.js'))) needCopy = false;
-  } catch { /* 没有签名就当需要拷 */ }
-  if (needCopy) {
-    try {
-      fs.mkdirSync(path.dirname(destDir), { recursive: true });
-      fs.rmSync(destDir, { recursive: true, force: true });
-      fs.cpSync(repoPlugin, destDir, { recursive: true });
-      fs.writeFileSync(sigFile, JSON.stringify({ sig, from: repoPlugin, at: new Date().toISOString() }, null, 2), 'utf8');
-      log(`plugins/${MEMORY_PLUGIN_DIRNAME} 已拷贝到 ${destDir}（${sig}）`);
-    } catch (e) {
-      warn(`拷贝记忆插件失败：${e?.message ?? e}`);
-      return false;
-    }
-  }
-  // <home>/plugins/dsh-memory 只作"看得见的落点"（与另两个自带插件一致）；解析仍走上面那份拷贝
-  ensureSymlink(path.join(target.home, 'plugins', MEMORY_PLUGIN_DIRNAME), destDir, `plugins/${MEMORY_PLUGIN_DIRNAME}`);
-  const pkgFile = path.join(target.profileDir, 'package.json');
-  ensureDir(target.profileDir);
-  let pkg = { name: `dsh-profile-${target.profile}`, private: true, dependencies: {}, dsh: { profile: { bundles: [] } } };
-  if (fs.existsSync(pkgFile)) {
-    try { pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8')); } catch (e) { throw new Error(`解析 ${pkgFile} 失败: ${e?.message ?? e}`); }
-  }
-  pkg.dependencies = (pkg.dependencies && typeof pkg.dependencies === 'object' && !Array.isArray(pkg.dependencies)) ? pkg.dependencies : {};
-  pkg.dsh = pkg.dsh || {};
-  pkg.dsh.profile = pkg.dsh.profile || {};
-  if (!Array.isArray(pkg.dsh.profile.bundles)) pkg.dsh.profile.bundles = [];
-  const linkVal = `link:${path.join(target.home, 'plugins', MEMORY_PLUGIN_DIRNAME).replace(/\\/g, '/')}`;
-  if (pkg.dependencies[MEMORY_PLUGIN_PKG] !== linkVal) pkg.dependencies[MEMORY_PLUGIN_PKG] = linkVal;
-  if (!pkg.dsh.profile.bundles.includes(MEMORY_PLUGIN_PKG)) pkg.dsh.profile.bundles.push(MEMORY_PLUGIN_PKG);
-  fs.writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
-  log(`profile package.json 已注册 ${MEMORY_PLUGIN_PKG}（dependencies + bundles）`);
-  ensureMemorySettings(target);
-  return true;
-}
 
 /** 源码签名：版本 + 文件数 + 字节数 + 最新 mtime（够判断"要不要重拷"，不做全量哈希免得每次启动都读 700KB）。 */
 function sourceSignature(dir) {
@@ -1049,11 +911,10 @@ function sourceSignature(dir) {
   } catch { return 'unknown'; }
 }
 
-/** 每次桥启动都跑一遍的内置插件装配（幂等）：qq-mode-console + 记忆插件。
- *  （2026-09-27：ModSearch 已按要求从本项目去掉，这里不再装配任何第三方搜索插件。） */
+/** 每次桥启动都跑一遍的内置插件装配（幂等）：qq-mode-console。
+ *  （2026-09-27：ModSearch 已按要求从本项目去掉；2026-11-04：dsh-memory 插件已废弃并下架，这里不再装配。） */
 export function ensureBuiltinPlugins(target) {
   try { ensurePluginBundles(target); } catch (e) { warn(`qq-mode-console 装配失败：${e?.message ?? e}`); }
-  try { ensureMemoryPlugin(target); } catch (e) { warn(`记忆插件装配失败：${e?.message ?? e}`); }
 }
 
 /** 找 dsh CLI 并跑 `dsh plugin --profile <p> install`（DSH_HOME=target.home，纯读桌面二进制、只写隔离 home） */

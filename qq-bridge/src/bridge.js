@@ -288,9 +288,9 @@ async function main() {
        * 于是升级上来的老安装永远不会有它（与 preset 那次踩的坑同型）。 */
       try {
         ensureBuiltinPlugins(target);
-        log('[dsh-side] 内置插件已装配（qq-mode-console / 长期记忆 dsh-memory）');
+        log('[dsh-side] 内置插件已装配（qq-mode-console）');
       } catch (ePlug) {
-        log(`[dsh-side] 内置插件装配失败（记忆/控制台插件可能不可用）: ${ePlug?.message ?? ePlug}`);
+        log(`[dsh-side] 内置插件装配失败（控制台插件可能不可用）: ${ePlug?.message ?? ePlug}`);
       }
       if (isInstalled(target)) return;
       log(`[dsh-side] 内置隔离 DSH 未安装 qq-bridge 端（${target.home}），自动安装…`);
